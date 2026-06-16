@@ -8,8 +8,8 @@ function isHorizontalWhitespace(char: string): boolean {
   return char === " " || char === "\t";
 }
 
-function isIdentifierChar(char: string): boolean {
-  return /[A-Za-z0-9_$]/.test(char);
+function isWhitespace(char: string): boolean {
+  return /\s/.test(char);
 }
 
 export function isDirectiveComment(comment: Comment): boolean {
@@ -48,8 +48,12 @@ export function stripComments(source: string, options: ScanOptions = {}): string
 
     const before = result.charAt(result.length - 1);
     const after = source.charAt(comment.end);
-    if (isIdentifierChar(before) && isIdentifierChar(after)) {
-      result += comment.text.includes("\n") ? "\n" : " ";
+    if (before !== "" && after !== "") {
+      if (comment.text.includes("\n")) {
+        if (before !== "\n" && after !== "\n") result += "\n";
+      } else if (!isWhitespace(before) && !isWhitespace(after)) {
+        result += " ";
+      }
     }
     cursor = comment.end;
   }

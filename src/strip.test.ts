@@ -42,7 +42,15 @@ describe("stripComments", () => {
   });
 
   it("strips comments from a JSX expression container in tsx mode", () => {
-    expect(stripComments("const e = <div>{/* hi */}</div>;", { jsx: true })).toBe("const e = <div>{}</div>;");
+    expect(stripComments("const e = <div>{/* hi */}</div>;", { jsx: true })).toBe("const e = <div>{ }</div>;");
+  });
+
+  it("separates operator characters so they do not fuse into a different operator", () => {
+    expect(stripComments("i+/*c*/+j")).toBe("i+ +j");
+  });
+
+  it("keeps a line terminator for ASI when a spanned comment sits between spaced tokens", () => {
+    expect(stripComments("return /*\n*/ value")).toBe("return\n value");
   });
 
   it("inserts a space when a comment was the only separator between two words", () => {
