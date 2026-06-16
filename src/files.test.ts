@@ -25,6 +25,15 @@ describe("scanFile", () => {
     expect(result.comments).toHaveLength(1);
     expect(result.comments[0]).toMatchObject({ kind: "line", text: "// hi" });
   });
+
+  it("parses .tsx files as JSX so JSX text is not reported as a comment", async () => {
+    const file = join(dir, "component.tsx");
+    await writeFile(file, "const e = <div>http://example.com</div>;\n");
+
+    const result = await scanFile(file);
+
+    expect(result.comments).toEqual([]);
+  });
 });
 
 describe("collectFiles", () => {

@@ -65,4 +65,20 @@ describe("scanComments", () => {
   it("does not report a shebang line as a comment", () => {
     expect(scanComments("#!/usr/bin/env node\nconst x = 1;")).toEqual([]);
   });
+
+  it("does not treat a regex literal's slashes as comments", () => {
+    expect(scanComments("const r = /[/*]/;\nconst keep = 1;")).toEqual([]);
+    expect(scanComments("const x = /[//]/;\nconst keep = 2;")).toEqual([]);
+  });
+
+  it("does not treat JSX text as a comment in tsx mode", () => {
+    expect(scanComments("const e = <div>http://example.com</div>;", { jsx: true })).toEqual([]);
+  });
+
+  it("detects a real comment inside a JSX expression container", () => {
+    const comments = scanComments("const e = <div>{/* hi */}</div>;", { jsx: true });
+
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toMatchObject({ kind: "block", text: "/* hi */" });
+  });
 });

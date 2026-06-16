@@ -50,7 +50,7 @@ async function walk(dir: string, extensions: string[], ignoreDirs: Set<string>, 
 
 export async function scanFile(file: string): Promise<FileScanResult> {
   const source = await readFile(file, "utf8");
-  return { file, comments: scanComments(source) };
+  return { file, comments: scanComments(source, { jsx: file.endsWith(".tsx") || file.endsWith(".jsx") }) };
 }
 
 export async function scanPaths(inputs: string[], options: CollectOptions = {}): Promise<FileScanResult[]> {
