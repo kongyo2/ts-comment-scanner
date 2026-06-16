@@ -22,6 +22,8 @@ Options:
 Paths default to the current directory. Directories are scanned recursively
 for .ts, .tsx, .mts and .cts files, skipping node_modules and .git.
 
+--strip preserves triple-slash directives (/// <reference />) and @jsx pragmas.
+
 Examples:
   ts-comment-scanner src
   ts-comment-scanner --json src test

@@ -1,7 +1,7 @@
 import { readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { scanComments } from "./scanner.js";
-import { stripComments } from "./strip.js";
+import { isDirectiveComment, stripComments } from "./strip.js";
 import type { FileScanResult, StripResult } from "./types.js";
 
 const DEFAULT_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"];
@@ -70,7 +70,7 @@ export interface StripOptions extends CollectOptions {
 export async function stripFile(file: string, write = false): Promise<StripResult> {
   const source = await readFile(file, "utf8");
   const jsx = isJsx(file);
-  const removed = scanComments(source, { jsx }).length;
+  const removed = scanComments(source, { jsx }).filter((comment) => !isDirectiveComment(comment)).length;
   const output = stripComments(source, { jsx });
   const changed = output !== source;
 

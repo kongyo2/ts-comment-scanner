@@ -60,4 +60,24 @@ describe("stripComments", () => {
   it("uses a newline separator when the inline comment spanned lines", () => {
     expect(stripComments("a/*\n*/b")).toBe("a\nb");
   });
+
+  it("keeps a triple-slash reference directive", () => {
+    expect(stripComments('/// <reference types="node" />\nconst x = 1; // gone')).toBe(
+      '/// <reference types="node" />\nconst x = 1;',
+    );
+  });
+
+  it("removes a triple-slash comment that is not a directive", () => {
+    expect(stripComments("/// just a note\nconst x = 1;")).toBe("const x = 1;");
+  });
+
+  it("keeps a JSX import-source pragma", () => {
+    expect(stripComments("/** @jsxImportSource preact */\nconst x = 1; /* gone */")).toBe(
+      "/** @jsxImportSource preact */\nconst x = 1;",
+    );
+  });
+
+  it("keeps a JSX factory pragma", () => {
+    expect(stripComments("/* @jsx h */\nconst x = 1;")).toBe("/* @jsx h */\nconst x = 1;");
+  });
 });

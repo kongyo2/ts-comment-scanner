@@ -1,4 +1,8 @@
 import { scanComments, type ScanOptions } from "./scanner.js";
+import type { Comment } from "./types.js";
+
+const TRIPLE_SLASH_DIRECTIVE = /^\/\/\/\s*</;
+const JSX_PRAGMA = /@jsx/;
 
 function isHorizontalWhitespace(char: string): boolean {
   return char === " " || char === "\t";
@@ -6,6 +10,11 @@ function isHorizontalWhitespace(char: string): boolean {
 
 function isIdentifierChar(char: string): boolean {
   return /[A-Za-z0-9_$]/.test(char);
+}
+
+export function isDirectiveComment(comment: Comment): boolean {
+  if (comment.kind === "line" && TRIPLE_SLASH_DIRECTIVE.test(comment.text)) return true;
+  return JSX_PRAGMA.test(comment.text);
 }
 
 export function stripComments(source: string, options: ScanOptions = {}): string {
@@ -16,6 +25,8 @@ export function stripComments(source: string, options: ScanOptions = {}): string
   let cursor = 0;
 
   for (const comment of comments) {
+    if (isDirectiveComment(comment)) continue;
+
     const lineStart = source.lastIndexOf("\n", comment.start - 1) + 1;
 
     let removeStart = comment.start;

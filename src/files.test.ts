@@ -65,6 +65,16 @@ describe("stripFile", () => {
     expect(result).toMatchObject({ removed: 0, changed: false });
     expect(await readFile(file, "utf8")).toBe("const x = 1;\n");
   });
+
+  it("keeps compiler directives and counts only the comments it removed", async () => {
+    const file = join(dir, "a.ts");
+    await writeFile(file, '/// <reference types="node" />\n// gone\nconst x = 1;\n');
+
+    const result = await stripFile(file, true);
+
+    expect(result.removed).toBe(1);
+    expect(await readFile(file, "utf8")).toBe('/// <reference types="node" />\nconst x = 1;\n');
+  });
 });
 
 describe("stripPaths", () => {
