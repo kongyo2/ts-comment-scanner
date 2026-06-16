@@ -49,10 +49,13 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
       const results = await stripPaths(options.paths, { write: options.write });
       if (options.write) {
         io.out(`${formatStripSummary(results)}\n`);
-      } else {
-        for (const result of results) {
-          io.out(result.output);
-        }
+        return 0;
+      }
+      if (results.length > 1) {
+        throw new Error("--strip writes to stdout for a single file; use --write to strip multiple files in place");
+      }
+      for (const result of results) {
+        io.out(result.output);
       }
       return 0;
     }

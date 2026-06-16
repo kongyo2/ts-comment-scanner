@@ -76,6 +76,18 @@ describe("run", () => {
     expect(await readFile(file, "utf8")).toBe("const x = 1; // hi\n");
   });
 
+  it("refuses to stream multiple stripped files to stdout without --write", async () => {
+    await writeFile(join(dir, "a.ts"), "const a = 1; // x\n");
+    await writeFile(join(dir, "b.ts"), "const b = 2; // y\n");
+    const { io, out, err } = capture();
+
+    const code = await run(["--strip", dir], io);
+
+    expect(code).toBe(1);
+    expect(out()).toBe("");
+    expect(err()).toContain("--write");
+  });
+
   it("rewrites files in place and reports a summary with --strip --write", async () => {
     const file = join(dir, "a.ts");
     await writeFile(file, "const x = 1; // hi\n");
