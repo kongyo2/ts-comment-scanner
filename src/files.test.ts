@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { collectFiles, scanFile, scanPaths } from "./files.js";
+import { collectFiles, scanFile, scanPaths, stripFile, stripPaths } from "./files.js";
 
 let dir: string;
 
@@ -33,6 +33,59 @@ describe("scanFile", () => {
     const result = await scanFile(file);
 
     expect(result.comments).toEqual([]);
+  });
+});
+
+describe("stripFile", () => {
+  it("returns the source with comments removed without modifying the file by default", async () => {
+    const file = join(dir, "a.ts");
+    await writeFile(file, "const x = 1; // hi\n");
+
+    const result = await stripFile(file);
+
+    expect(result).toMatchObject({ file, output: "const x = 1;\n", removed: 1, changed: true });
+    expect(await readFile(file, "utf8")).toBe("const x = 1; // hi\n");
+  });
+
+  it("rewrites the file in place when write is true", async () => {
+    const file = join(dir, "a.ts");
+    await writeFile(file, "const x = 1; // hi\n");
+
+    await stripFile(file, true);
+
+    expect(await readFile(file, "utf8")).toBe("const x = 1;\n");
+  });
+
+  it("reports no change and leaves the file alone when there are no comments", async () => {
+    const file = join(dir, "a.ts");
+    await writeFile(file, "const x = 1;\n");
+
+    const result = await stripFile(file, true);
+
+    expect(result).toMatchObject({ removed: 0, changed: false });
+    expect(await readFile(file, "utf8")).toBe("const x = 1;\n");
+  });
+});
+
+describe("stripPaths", () => {
+  it("strips every collected file and reports per-file results", async () => {
+    await writeFile(join(dir, "a.ts"), "// a\nconst x = 1;");
+    await writeFile(join(dir, "b.ts"), "const y = 2;");
+
+    const results = await stripPaths([dir]);
+
+    expect(results).toEqual([
+      { file: join(dir, "a.ts"), output: "const x = 1;", removed: 1, changed: true },
+      { file: join(dir, "b.ts"), output: "const y = 2;", removed: 0, changed: false },
+    ]);
+  });
+
+  it("writes changes back to disk when write is true", async () => {
+    await writeFile(join(dir, "a.ts"), "// a\nconst x = 1;");
+
+    await stripPaths([dir], { write: true });
+
+    expect(await readFile(join(dir, "a.ts"), "utf8")).toBe("const x = 1;");
   });
 });
 

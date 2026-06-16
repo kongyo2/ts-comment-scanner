@@ -1,4 +1,18 @@
-import type { FileScanResult } from "./types.js";
+import type { FileScanResult, StripResult } from "./types.js";
+
+export function formatStripSummary(results: StripResult[]): string {
+  const changed = results.filter((result) => result.changed);
+
+  if (changed.length === 0) {
+    return "No comments to remove.";
+  }
+
+  const lines = changed.map((result) => `${result.file}: ${count(result.removed, "comment")} removed`);
+  const total = changed.reduce((sum, result) => sum + result.removed, 0);
+
+  lines.push("", `${count(total, "comment")} removed across ${count(changed.length, "file")}`);
+  return lines.join("\n");
+}
 
 export function formatText(results: FileScanResult[]): string {
   const withComments = results.filter((result) => result.comments.length > 0);

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { formatText, formatJson } from "./report.js";
-import type { FileScanResult } from "./types.js";
+import { formatText, formatJson, formatStripSummary } from "./report.js";
+import type { FileScanResult, StripResult } from "./types.js";
 
 const oneFile: FileScanResult[] = [
   {
@@ -82,5 +82,25 @@ describe("formatJson", () => {
     expect(parsed.summary).toEqual({ files: 1, comments: 1 });
     expect(parsed.files).toHaveLength(1);
     expect(parsed.files[0]?.file).toBe("a.ts");
+  });
+});
+
+describe("formatStripSummary", () => {
+  it("lists each changed file and totals the comments removed", () => {
+    const results: StripResult[] = [
+      { file: "a.ts", output: "", removed: 2, changed: true },
+      { file: "b.ts", output: "", removed: 1, changed: true },
+      { file: "skipped.ts", output: "", removed: 0, changed: false },
+    ];
+
+    expect(formatStripSummary(results)).toBe(
+      ["a.ts: 2 comments removed", "b.ts: 1 comment removed", "", "3 comments removed across 2 files"].join("\n"),
+    );
+  });
+
+  it("returns a nothing-to-remove message when no file changed", () => {
+    expect(formatStripSummary([{ file: "a.ts", output: "", removed: 0, changed: false }])).toBe(
+      "No comments to remove.",
+    );
   });
 });

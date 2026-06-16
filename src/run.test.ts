@@ -55,6 +55,39 @@ describe("run", () => {
     expect(out()).toContain("Usage: ts-comment-scanner");
   });
 
+  it("documents the --strip flag in the help text", async () => {
+    const { io, out } = capture();
+
+    await run(["--help"], io);
+
+    expect(out()).toContain("--strip");
+  });
+
+  it("prints the comment-stripped source to stdout without touching the file when --strip is set", async () => {
+    const file = join(dir, "a.ts");
+    await writeFile(file, "const x = 1; // hi\n");
+    const { io, out, err } = capture();
+
+    const code = await run(["--strip", file], io);
+
+    expect(code).toBe(0);
+    expect(out()).toBe("const x = 1;\n");
+    expect(err()).toBe("");
+    expect(await readFile(file, "utf8")).toBe("const x = 1; // hi\n");
+  });
+
+  it("rewrites files in place and reports a summary with --strip --write", async () => {
+    const file = join(dir, "a.ts");
+    await writeFile(file, "const x = 1; // hi\n");
+    const { io, out } = capture();
+
+    const code = await run(["--strip", "--write", file], io);
+
+    expect(code).toBe(0);
+    expect(await readFile(file, "utf8")).toBe("const x = 1;\n");
+    expect(out()).toContain("1 comment removed across 1 file");
+  });
+
   it("prints the version and returns 0", async () => {
     const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
     const { io, out } = capture();

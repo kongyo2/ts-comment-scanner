@@ -13,3 +13,10 @@ export interface FileScanResult {
   file: string;
   comments: Comment[];
 }
+
+export interface StripResult {
+  file: string;
+  removed: number;
+  output: string;
+  changed: boolean;
+}

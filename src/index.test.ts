@@ -14,4 +14,15 @@ describe("public API", () => {
   it("scans a string end to end through the public entry", () => {
     expect(api.scanComments("// hi")).toHaveLength(1);
   });
+
+  it("exposes the comment-removal functions", () => {
+    expect(typeof api.stripComments).toBe("function");
+    expect(typeof api.stripFile).toBe("function");
+    expect(typeof api.stripPaths).toBe("function");
+    expect(typeof api.formatStripSummary).toBe("function");
+  });
+
+  it("strips comments from a string through the public entry", () => {
+    expect(api.stripComments("const x = 1; // hi")).toBe("const x = 1;");
+  });
 });

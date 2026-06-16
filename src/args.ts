@@ -3,6 +3,8 @@ export interface CliOptions {
   json: boolean;
   help: boolean;
   version: boolean;
+  strip: boolean;
+  write: boolean;
 }
 
 export function parseArgs(argv: string[]): CliOptions {
@@ -10,11 +12,19 @@ export function parseArgs(argv: string[]): CliOptions {
   let json = false;
   let help = false;
   let version = false;
+  let strip = false;
+  let write = false;
 
   for (const arg of argv) {
     switch (arg) {
       case "--json":
         json = true;
+        break;
+      case "--strip":
+        strip = true;
+        break;
+      case "--write":
+        write = true;
         break;
       case "-h":
       case "--help":
@@ -29,5 +39,5 @@ export function parseArgs(argv: string[]): CliOptions {
     }
   }
 
-  return { paths: paths.length > 0 ? paths : ["."], json, help, version };
+  return { paths: paths.length > 0 ? paths : ["."], json, help, version, strip, write };
 }
