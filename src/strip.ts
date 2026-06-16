@@ -2,7 +2,7 @@ import { scanComments, type ScanOptions } from "./scanner.js";
 import type { Comment } from "./types.js";
 
 const TRIPLE_SLASH_DIRECTIVE = /^\/\/\/\s*</;
-const JSX_PRAGMA = /@jsx/;
+const LEADING_PRAGMA = /^@(?:jsx(?:ImportSource|Runtime|Frag)?|ts-(?:check|nocheck|ignore|expect-error))\b/;
 
 function isHorizontalWhitespace(char: string): boolean {
   return char === " " || char === "\t";
@@ -12,9 +12,20 @@ function isWhitespace(char: string): boolean {
   return /\s/.test(char);
 }
 
+function directiveBodyLines(comment: Comment): string[] {
+  if (comment.kind === "line") {
+    return [comment.text.replace(/^\/\/+\s*/, "")];
+  }
+  return comment.text
+    .replace(/^\/\*+/, "")
+    .replace(/\*+\/$/, "")
+    .split("\n")
+    .map((line) => line.replace(/^\s*\*?\s*/, ""));
+}
+
 export function isDirectiveComment(comment: Comment): boolean {
   if (comment.kind === "line" && TRIPLE_SLASH_DIRECTIVE.test(comment.text)) return true;
-  return JSX_PRAGMA.test(comment.text);
+  return directiveBodyLines(comment).some((line) => LEADING_PRAGMA.test(line));
 }
 
 export function stripComments(source: string, options: ScanOptions = {}): string {

@@ -88,4 +88,16 @@ describe("stripComments", () => {
   it("keeps a JSX factory pragma", () => {
     expect(stripComments("/* @jsx h */\nconst x = 1;")).toBe("/* @jsx h */\nconst x = 1;");
   });
+
+  it("keeps a // @ts-nocheck directive", () => {
+    expect(stripComments("// @ts-nocheck\nconst x = 1; // gone")).toBe("// @ts-nocheck\nconst x = 1;");
+  });
+
+  it("keeps a // @ts-expect-error directive", () => {
+    expect(stripComments("// @ts-expect-error\nconst x = 1;")).toBe("// @ts-expect-error\nconst x = 1;");
+  });
+
+  it("removes an ordinary comment that merely mentions @jsx", () => {
+    expect(stripComments("// TODO: drop @jsx hack\nconst x = 1;")).toBe("const x = 1;");
+  });
 });
