@@ -99,4 +99,13 @@ describe("scanPaths", () => {
       { file: join(dir, "b.ts"), comments: [] },
     ]);
   });
+
+  it("returns results in sorted file order across many files", async () => {
+    const names = Array.from({ length: 25 }, (_, index) => `f${String(index).padStart(2, "0")}.ts`);
+    await Promise.all(names.map((name) => writeFile(join(dir, name), `// ${name}`)));
+
+    const results = await scanPaths([dir]);
+
+    expect(results.map((result) => result.file)).toEqual(names.map((name) => join(dir, name)));
+  });
 });
