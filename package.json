@@ -1,0 +1,54 @@
+{
+  "name": "@kongyo2/ts-comment-scanner",
+  "version": "0.0.0",
+  "description": "CLI to detect and report comments across a TypeScript project.",
+  "keywords": [
+    "typescript",
+    "comments",
+    "comment",
+    "cli",
+    "scanner",
+    "ast",
+    "code-analysis",
+    "kongyo2"
+  ],
+  "license": "MIT",
+  "author": "kongyo2",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "bin": {
+    "ts-comment-scanner": "dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "typecheck:watch": "tsc --noEmit --watch",
+    "start": "node dist/cli.js",
+    "prepublishOnly": "npm run build"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "typescript": "^6.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3"
+  }
+}
