@@ -44,4 +44,20 @@ describe("stripComments", () => {
   it("strips comments from a JSX expression container in tsx mode", () => {
     expect(stripComments("const e = <div>{/* hi */}</div>;", { jsx: true })).toBe("const e = <div>{}</div>;");
   });
+
+  it("inserts a space when a comment was the only separator between two words", () => {
+    expect(stripComments("const/**/x = 1")).toBe("const x = 1");
+  });
+
+  it("separates identifiers that were joined only by an inline comment", () => {
+    expect(stripComments("a/*c*/b")).toBe("a b");
+  });
+
+  it("keeps a keyword separated from its operand", () => {
+    expect(stripComments("return/*c*/x")).toBe("return x");
+  });
+
+  it("uses a newline separator when the inline comment spanned lines", () => {
+    expect(stripComments("a/*\n*/b")).toBe("a\nb");
+  });
 });
