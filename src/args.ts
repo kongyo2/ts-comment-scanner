@@ -82,14 +82,17 @@ export function parseArgs(argv: string[]): CliOptions {
       case "--ignore":
         ignore.push(readValue());
         break;
-      case "--ext":
-        extensions.push(
-          ...readValue()
-            .split(",")
-            .map((extension) => extension.trim())
-            .filter((extension) => extension !== ""),
-        );
+      case "--ext": {
+        const parsed = readValue()
+          .split(",")
+          .map((extension) => extension.trim())
+          .filter((extension) => extension !== "");
+        if (parsed.length === 0) {
+          throw new UsageError("option --ext requires at least one extension");
+        }
+        extensions.push(...parsed);
         break;
+      }
       case "--skip-directives":
         rejectValue();
         if (directives === "only") throw new UsageError(DIRECTIVE_CONFLICT);

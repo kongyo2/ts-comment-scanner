@@ -43,6 +43,15 @@ describe("scanFile", () => {
 
     expect(result.comments).toEqual([]);
   });
+
+  it("reports positions relative to the content after a byte-order mark", async () => {
+    const file = join(dir, "bom.ts");
+    await writeFile(file, "\uFEFF// hi\nconst x = 1;\n");
+
+    const result = await scanFile(file);
+
+    expect(result.comments[0]).toMatchObject({ start: 0, line: 1, column: 1 });
+  });
 });
 
 describe("isJsxFile", () => {
@@ -154,6 +163,16 @@ describe("collectFiles", () => {
     await writeFile(join(dir, "legacy", "b.ts"), "// b");
 
     const files = await collectFiles([dir], { ignore: ["**/legacy/**"] });
+
+    expect(files).toEqual([join(dir, "src", "a.ts")]);
+  });
+
+  it("matches path globs relative to the scanned root directory", async () => {
+    await mkdir(join(dir, "src", "legacy"), { recursive: true });
+    await writeFile(join(dir, "src", "a.ts"), "// a");
+    await writeFile(join(dir, "src", "legacy", "b.ts"), "// b");
+
+    const files = await collectFiles([dir], { ignore: ["src/legacy/**"] });
 
     expect(files).toEqual([join(dir, "src", "a.ts")]);
   });

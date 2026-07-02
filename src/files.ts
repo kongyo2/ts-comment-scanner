@@ -20,7 +20,7 @@ export interface CollectOptions {
   ignore?: string[];
 }
 
-type IgnoreMatcher = (path: string) => boolean;
+type IgnoreMatcher = (path: string, root: string) => boolean;
 
 export async function collectFiles(inputs: string[], options: CollectOptions = {}): Promise<string[]> {
   const extensions = normalizeExtensions(options.extensions ?? DEFAULT_EXTENSIONS);
@@ -33,7 +33,7 @@ export async function collectFiles(inputs: string[], options: CollectOptions = {
       const input = normalize(rawInput);
       const info = await stat(input);
       if (info.isDirectory()) {
-        await walk(input, { extensions, ignoreDirs, isIgnored }, found);
+        await walk(input, { extensions, ignoreDirs, isIgnored, root: input }, found);
       } else {
         found.add(input);
       }
@@ -47,6 +47,8 @@ interface WalkContext {
   extensions: string[];
   ignoreDirs: Set<string>;
   isIgnored: IgnoreMatcher;
+  /** Top-level directory this walk started from; ignore globs also match relative to it. */
+  root: string;
 }
 
 async function walk(dir: string, context: WalkContext, found: Set<string>): Promise<void> {
@@ -56,13 +58,13 @@ async function walk(dir: string, context: WalkContext, found: Set<string>): Prom
     entries.map(async (entry) => {
       const full = join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (!context.ignoreDirs.has(entry.name) && !context.isIgnored(full)) {
+        if (!context.ignoreDirs.has(entry.name) && !context.isIgnored(full, context.root)) {
           await walk(full, context, found);
         }
       } else if (
         entry.isFile() &&
         context.extensions.includes(extname(entry.name).toLowerCase()) &&
-        !context.isIgnored(full)
+        !context.isIgnored(full, context.root)
       ) {
         found.add(full);
       }
@@ -90,13 +92,18 @@ function buildIgnoreMatcher(patterns: string[]): IgnoreMatcher {
   if (byPath.length > 0) matchers.push(picomatch(byPath, { dot: true }));
   const match = (path: string): boolean => matchers.some((matcher) => matcher(path));
 
-  return (path) => {
+  // Anchored patterns like `src/legacy/**` are tried against the path as
+  // spelled, relative to the scanned root, and relative to the working
+  // directory, so they work regardless of where the scan was started from.
+  return (path, root) => {
     if (match(toPosix(path))) return true;
-    // Also try the path relative to the working directory, so patterns like
-    // `src/legacy/**` work no matter how the input path was spelled.
-    const fromCwd = relative(process.cwd(), path);
-    return fromCwd !== "" && !fromCwd.startsWith("..") && match(toPosix(fromCwd));
+    return relativeMatches(root, path, match) || relativeMatches(process.cwd(), path, match);
   };
+}
+
+function relativeMatches(base: string, path: string, match: (path: string) => boolean): boolean {
+  const relativePath = relative(base, path);
+  return relativePath !== "" && !relativePath.startsWith("..") && match(toPosix(relativePath));
 }
 
 function toPosix(path: string): string {
@@ -109,7 +116,10 @@ export function isJsxFile(file: string): boolean {
 }
 
 export async function scanFile(file: string): Promise<FileScanResult> {
-  const source = await readFile(file, "utf8");
+  const raw = await readFile(file, "utf8");
+  // Positions are reported relative to the content after a leading byte-order
+  // mark, matching editors, GitHub annotations and the removal report.
+  const source = raw.startsWith("\uFEFF") ? raw.slice(1) : raw;
   return { file, comments: scanComments(source, { jsx: isJsxFile(file) }) };
 }
 

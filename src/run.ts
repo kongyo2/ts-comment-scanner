@@ -52,6 +52,12 @@ Examples:
 `;
 
 export async function run(argv: string[], io: CliIO): Promise<number> {
+  // Help always wins, even on an otherwise-invalid command line.
+  if (wantsHelp(argv)) {
+    io.out(HELP_TEXT);
+    return 0;
+  }
+
   let options: CliOptions;
   try {
     options = parseArgs(argv);
@@ -61,11 +67,6 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
       return 2;
     }
     throw error;
-  }
-
-  if (options.help) {
-    io.out(HELP_TEXT);
-    return 0;
   }
 
   try {
@@ -93,6 +94,15 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
     io.err(`ts-comment-scanner: ${message}\n`);
     return 2;
   }
+}
+
+/** True when -h/--help appears before any `--` separator. */
+function wantsHelp(argv: string[]): boolean {
+  for (const arg of argv) {
+    if (arg === "--") return false;
+    if (arg === "-h" || arg === "--help") return true;
+  }
+  return false;
 }
 
 function render(results: FileScanResult[], format: CliOptions["format"]): string {

@@ -67,6 +67,25 @@ describe("run", () => {
     expect(out()).toContain("Usage: ts-comment-scanner");
   });
 
+  it("prints help even when the rest of the command line is invalid", async () => {
+    const { io, out, err } = capture();
+
+    const code = await run(["--help", "--dry-run"], io);
+
+    expect(code).toBe(0);
+    expect(out()).toContain("Usage: ts-comment-scanner");
+    expect(err()).toBe("");
+  });
+
+  it("treats --help after -- as a path, not a request for help", async () => {
+    const { io, err } = capture();
+
+    const code = await run(["--", "--help"], io);
+
+    expect(code).toBe(2);
+    expect(err()).toContain("--help");
+  });
+
   it("prints the version and returns 0", async () => {
     const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
     const { io, out } = capture();

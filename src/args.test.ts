@@ -59,6 +59,11 @@ describe("parseArgs", () => {
     expect(parseArgs(["--ext=js", "--ext=jsx"]).extensions).toEqual(["js", "jsx"]);
   });
 
+  it("rejects an --ext value that contains no extensions", () => {
+    expect(() => parseArgs(["--ext", ""])).toThrow(/at least one extension/);
+    expect(() => parseArgs(["--ext", " , "])).toThrow(UsageError);
+  });
+
   it("maps directive flags onto the directives mode", () => {
     expect(parseArgs([]).directives).toBe("include");
     expect(parseArgs(["--skip-directives"]).directives).toBe("skip");
