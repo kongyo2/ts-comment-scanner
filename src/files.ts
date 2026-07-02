@@ -37,7 +37,11 @@ export async function collectFiles(inputs: string[], options: CollectOptions = {
       const input = normalize(rawInput);
       const info = await stat(input);
       if (info.isDirectory()) {
-        await walk(input, { extensions, ignoreDirs, isIgnored, root: input }, found);
+        // Directory inputs are themselves subject to the ignore patterns;
+        // only explicitly listed files bypass them.
+        if (!isIgnored(input, input)) {
+          await walk(input, { extensions, ignoreDirs, isIgnored, root: input }, found);
+        }
       } else {
         found.add(input);
       }

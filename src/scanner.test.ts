@@ -139,6 +139,14 @@ describe("scanComments", () => {
     expect(comments[0]?.directive).toBe("@ts-ignore");
   });
 
+  it("treats triple-slash references as directives only before the first token", () => {
+    const early = scanComments('/// <reference path="./a.d.ts" />\nconst x = 1;');
+    const late = scanComments('const x = 1;\n/// <reference path="./a.d.ts" />');
+
+    expect(early[0]?.directive).toBe("triple-slash-reference");
+    expect(late[0]?.directive).toBeUndefined();
+  });
+
   it("does not set the directive key on ordinary comments", () => {
     const comments = scanComments("// plain");
 

@@ -237,6 +237,20 @@ describe("removeComments", () => {
     expect(result.code).toBe("// @ts-nocheck\nconst x = 1;\n");
   });
 
+  it("does not shield comments below range-scoped coverage pragmas", () => {
+    const source = "/* c8 ignore start */\n// gone\nconst x = 1;\n/* c8 ignore stop */\n";
+    const result = removeComments(source);
+
+    expect(result.code).toBe("/* c8 ignore start */\nconst x = 1;\n/* c8 ignore stop */\n");
+  });
+
+  it("shields comments below next-statement coverage pragmas", () => {
+    const source = "/* istanbul ignore next */\n// shielded\nfunction f() {}\n";
+    const result = removeComments(source);
+
+    expect(result.code).toBe(source);
+  });
+
   it("keeps a byte-order mark when removing the first line", () => {
     const result = removeComments("\uFEFF// gone\nconst x = 1;\n");
 

@@ -108,6 +108,8 @@ function shieldNextLineDirectives(source: string, removed: Comment[], kept: Comm
   return stillRemoved;
 }
 
+// File- and range-scoped pragmas (`c8 ignore start`, `istanbul ignore file`,
+// ...) do not target the following line, so they never shield it.
 function isNextLineDirective(name: string): boolean {
   return (
     name.endsWith("-next-line") ||
@@ -119,8 +121,13 @@ function isNextLineDirective(name: string): boolean {
       "deno-fmt-ignore",
       "prettier-ignore",
       "istanbul-ignore",
+      "istanbul-ignore-next",
+      "istanbul-ignore-if",
+      "istanbul-ignore-else",
       "c8-ignore",
+      "c8-ignore-next",
       "v8-ignore",
+      "v8-ignore-next",
     ].includes(name)
   );
 }

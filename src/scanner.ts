@@ -43,11 +43,13 @@ export function scanComments(source: string, options: ScanOptions = {}): Comment
 
   const insideJsxText = (pos: number): boolean => jsxTextSpans.some(([start, end]) => pos >= start && pos < end);
 
-  // TypeScript only honours file-wide check pragmas that appear before the
-  // first token; anywhere later they are ordinary comments.
+  // TypeScript only honours file-wide pragmas (check pragmas and triple-slash
+  // directives) before the first token; anywhere later they are ordinary text.
   const firstTokenStart = sourceFile.getStart(sourceFile);
+  const isHeaderOnlyDirective = (directive: string): boolean =>
+    directive === "@ts-nocheck" || directive === "@ts-check" || directive.startsWith("triple-slash-");
   const isActiveDirective = (directive: string, pos: number): boolean =>
-    directive !== "@ts-nocheck" && directive !== "@ts-check" ? true : pos < firstTokenStart;
+    !isHeaderOnlyDirective(directive) || pos < firstTokenStart;
 
   return ranges
     .filter((range) => !insideJsxText(range.pos))

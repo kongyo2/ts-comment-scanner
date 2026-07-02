@@ -49,12 +49,31 @@ describe("detectDirective", () => {
   });
 
   it.each([
-    ["/* istanbul ignore next */", "istanbul-ignore"],
-    ["/* c8 ignore start */", "c8-ignore"],
-    ["/* v8 ignore next 3 */", "v8-ignore"],
+    ["/* istanbul ignore next */", "istanbul-ignore-next"],
+    ["/* istanbul ignore file */", "istanbul-ignore-file"],
+    ["/* c8 ignore start */", "c8-ignore-start"],
+    ["/* c8 ignore next */", "c8-ignore-next"],
+    ["/* v8 ignore next 3 */", "v8-ignore-next"],
     ["/* node:coverage disable */", "node:coverage"],
-  ])("detects coverage directives: %s", (text, expected) => {
+  ])("detects coverage directives with their mode: %s", (text, expected) => {
     expect(detectDirective("block", text)).toBe(expected);
+  });
+
+  it("honours block @ts directives only on the block's last line, like TypeScript", () => {
+    expect(detectDirective("block", "/* @ts-ignore */")).toBe("@ts-ignore");
+    expect(detectDirective("block", "/* note\n@ts-expect-error */")).toBe("@ts-expect-error");
+    expect(detectDirective("block", "/* note\n * @ts-ignore */")).toBe("@ts-ignore");
+    expect(detectDirective("block", "/* @ts-ignore\nnote */")).toBeUndefined();
+  });
+
+  it("keeps block-form check pragmas ordinary, since TypeScript ignores them", () => {
+    expect(detectDirective("block", "/* @ts-nocheck */")).toBeUndefined();
+    expect(detectDirective("block", "/* @ts-check */")).toBeUndefined();
+  });
+
+  it("treats leading stars in line comments as content, not markers", () => {
+    expect(detectDirective("line", "// * eslint-disable-next-line no-console")).toBeUndefined();
+    expect(detectDirective("line", "// * prettier-ignore")).toBeUndefined();
   });
 
   // The pragma names are assembled at runtime so vitest's own docblock-environment

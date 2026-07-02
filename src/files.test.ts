@@ -227,6 +227,15 @@ describe("collectFiles", () => {
     expect(files).toEqual([join(dir, "top.ts")]);
   });
 
+  it("applies ignore patterns to directories passed as inputs", async () => {
+    await mkdir(join(dir, "generated"), { recursive: true });
+    await writeFile(join(dir, "generated", "g.ts"), "// g");
+
+    const files = await collectFiles([join(dir, "generated")], { ignore: ["generated"] });
+
+    expect(files).toEqual([]);
+  });
+
   it("rejects an empty input path instead of widening it to the current directory", async () => {
     await expect(collectFiles([""])).rejects.toThrow(/empty path/);
   });

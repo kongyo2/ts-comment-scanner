@@ -8,9 +8,6 @@ interface DirectiveRule {
 }
 
 const RULES: DirectiveRule[] = [
-  // TypeScript compiler (block form; the line form is matched on the raw text
-  // with TS_LINE_DIRECTIVE, since TS only honours `//` or `///` markers)
-  { pattern: /^@ts-(?:ignore|expect-error|nocheck|check)\b/, blockOnly: true },
   // ESLint
   { pattern: /^eslint-(?:disable|enable)(?:-next-line|-line)?\b/ },
   { pattern: /^eslint-env\b/ },
@@ -26,9 +23,14 @@ const RULES: DirectiveRule[] = [
   { pattern: /^deno-(?:lint-ignore(?:-file)?|fmt-ignore(?:-file)?|coverage-ignore(?:-file|-start|-stop)?)\b/ },
   // Prettier
   { pattern: /^prettier-ignore(?:-start|-end)?\b/ },
-  // Coverage tools
+  // Coverage tools. The mode is part of the name so that consumers can tell
+  // next-statement pragmas (`next`, `if`, ...) from file/range ones (`file`,
+  // `start`, `stop`).
+  { pattern: /^istanbul\s+ignore\s+([a-z]+)/, name: (match) => `istanbul-ignore-${match[1]}` },
   { pattern: /^istanbul\s+ignore\b/, name: "istanbul-ignore" },
+  { pattern: /^c8\s+ignore\s+([a-z]+)/, name: (match) => `c8-ignore-${match[1]}` },
   { pattern: /^c8\s+ignore\b/, name: "c8-ignore" },
+  { pattern: /^v8\s+ignore\s+([a-z]+)/, name: (match) => `v8-ignore-${match[1]}` },
   { pattern: /^v8\s+ignore\b/, name: "v8-ignore" },
   { pattern: /^node:coverage\s+(?:disable|enable|ignore)\b/, name: "node:coverage" },
   // Bundlers
@@ -47,9 +49,12 @@ const RULES: DirectiveRule[] = [
 
 const TRIPLE_SLASH = /^\/\/\/\s*<(reference|amd-dependency|amd-module)\b/;
 
-// Mirrors the TypeScript compiler's own comment-directive matching: exactly
-// two or three slashes, optional whitespace, then the directive.
+// Mirrors the TypeScript compiler's own comment-directive matching. Line
+// comments: exactly two or three slashes, optional whitespace, the directive.
 const TS_LINE_DIRECTIVE = /^\/\/\/?\s*@ts-(ignore|expect-error|nocheck|check)\b/;
+// Block comments: TypeScript only honours @ts-ignore / @ts-expect-error (not
+// the file-wide check pragmas), and only on the block's last line.
+const TS_BLOCK_DIRECTIVE = /^[\s/*]*@ts-(ignore|expect-error)\b/;
 
 /**
  * Returns the canonical name of the compiler/linter/tooling directive the
@@ -62,6 +67,11 @@ export function detectDirective(kind: CommentKind, text: string): string | undef
       return `triple-slash-${tripleSlash[1]}`;
     }
     const tsDirective = TS_LINE_DIRECTIVE.exec(text);
+    if (tsDirective) {
+      return `@ts-${tsDirective[1]}`;
+    }
+  } else {
+    const tsDirective = TS_BLOCK_DIRECTIVE.exec(lastContentLine(text));
     if (tsDirective) {
       return `@ts-${tsDirective[1]}`;
     }
@@ -90,14 +100,26 @@ export function isLegalComment(text: string): boolean {
 
 /**
  * First non-empty content line of the comment, with comment markers stripped.
- * For line comments only the `//` marker itself is removed: extra slashes are
- * content, so a commented-out directive like `//// @ts-ignore` stays ordinary.
+ * For line comments only the `//` marker itself is removed: extra slashes or
+ * stars are content, so `//// @ts-ignore` and `// * prettier-ignore` stay
+ * ordinary. JSDoc-style `*` prefixes are stripped for block comments only.
  */
 function leadingContent(kind: CommentKind, text: string): string {
   const inner = kind === "line" ? text.replace(/^\/\//, "") : text.replace(/^\/\*+/, "").replace(/\*+\/\s*$/, "");
   for (const line of inner.split(/\r?\n/)) {
-    const stripped = line.replace(/^\s*\*+\s*/, "").trim();
+    const stripped = (kind === "block" ? line.replace(/^\s*\*+\s*/, "") : line).trim();
     if (stripped !== "") return stripped;
+  }
+  return "";
+}
+
+/** Last non-blank line of the comment, with the closing comment marker stripped. */
+function lastContentLine(text: string): string {
+  const inner = text.replace(/\*+\/\s*$/, "");
+  const lines = inner.split(/\r?\n/);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index] ?? "";
+    if (line.trim() !== "") return line;
   }
   return "";
 }
