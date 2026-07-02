@@ -1,7 +1,7 @@
 {
   "name": "@kongyo2/ts-comment-scanner",
-  "version": "0.0.0",
-  "description": "CLI to detect and report comments across a TypeScript project.",
+  "version": "1.0.0",
+  "description": "CLI to detect, report and safely remove comments across a TypeScript project.",
   "keywords": [
     "typescript",
     "comments",
@@ -10,6 +10,9 @@
     "scanner",
     "ast",
     "code-analysis",
+    "comment-removal",
+    "code-cleanup",
+    "github-actions",
     "kongyo2"
   ],
   "license": "MIT",
@@ -57,10 +60,12 @@
     "access": "public"
   },
   "dependencies": {
+    "picomatch": "^4.0.4",
     "typescript": "^6.0.3"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",
+    "@types/picomatch": "^4.0.3",
     "oxlint": "^1.70.0",
     "prettier": "^3.8.4",
     "vitest": "^4.1.9"

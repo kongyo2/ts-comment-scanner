@@ -1,4 +1,5 @@
 import ts from "typescript";
+import { detectDirective } from "./directives.js";
 import type { Comment, CommentKind } from "./types.js";
 
 export interface ScanOptions {
@@ -6,8 +7,10 @@ export interface ScanOptions {
 }
 
 export function scanComments(source: string, options: ScanOptions = {}): Comment[] {
-  const scriptKind = options.jsx === true ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
-  const sourceFile = ts.createSourceFile("module.ts", source, ts.ScriptTarget.Latest, true, scriptKind);
+  const jsx = options.jsx === true;
+  const fileName = jsx ? "module.tsx" : "module.ts";
+  const scriptKind = jsx ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, scriptKind);
 
   const jsxTextSpans: Array<[number, number]> = [];
   const ranges: ts.CommentRange[] = [];
@@ -45,14 +48,20 @@ export function scanComments(source: string, options: ScanOptions = {}): Comment
     .sort((a, b) => a.pos - b.pos)
     .map((range) => {
       const kind: CommentKind = range.kind === ts.SyntaxKind.SingleLineCommentTrivia ? "line" : "block";
-      const position = sourceFile.getLineAndCharacterOfPosition(range.pos);
+      const text = source.slice(range.pos, range.end);
+      const startPosition = sourceFile.getLineAndCharacterOfPosition(range.pos);
+      const endPosition = sourceFile.getLineAndCharacterOfPosition(range.end);
+      const directive = detectDirective(kind, text);
       return {
         kind,
-        text: source.slice(range.pos, range.end),
+        text,
         start: range.pos,
         end: range.end,
-        line: position.line + 1,
-        column: position.character + 1,
+        line: startPosition.line + 1,
+        column: startPosition.character + 1,
+        endLine: endPosition.line + 1,
+        endColumn: endPosition.character + 1,
+        ...(directive === undefined ? {} : { directive }),
       };
     });
 }

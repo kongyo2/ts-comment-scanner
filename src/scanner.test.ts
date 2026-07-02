@@ -20,12 +20,20 @@ describe("scanComments", () => {
     expect(scanComments("const x = 1;")).toEqual([]);
   });
 
+  it("returns an empty array for empty source", () => {
+    expect(scanComments("")).toEqual([]);
+  });
+
   it("ignores // inside a string literal", () => {
     expect(scanComments('const s = "// not a comment";')).toEqual([]);
   });
 
   it("ignores /* inside a string literal", () => {
     expect(scanComments('const s = "/* not a comment */";')).toEqual([]);
+  });
+
+  it("ignores comment markers inside template literals", () => {
+    expect(scanComments("const s = `// not ${1} /* nope */`;")).toEqual([]);
   });
 
   it("returns comments in source order", () => {
@@ -46,13 +54,19 @@ describe("scanComments", () => {
     expect(comments[0]).toMatchObject({ start: 2, end: 6 });
   });
 
+  it("reports the end position of a comment", () => {
+    const comments = scanComments("// hi\nconst x = 1;");
+
+    expect(comments[0]).toMatchObject({ line: 1, column: 1, endLine: 1, endColumn: 6 });
+  });
+
   it("captures a multi-line block comment as a single comment", () => {
     const source = "/**\n * doc\n */";
 
     const comments = scanComments(source);
 
     expect(comments).toHaveLength(1);
-    expect(comments[0]).toMatchObject({ kind: "block", text: source, line: 1 });
+    expect(comments[0]).toMatchObject({ kind: "block", text: source, line: 1, endLine: 3, endColumn: 4 });
   });
 
   it("detects a trailing comment after code on the same line", () => {
@@ -80,5 +94,34 @@ describe("scanComments", () => {
 
     expect(comments).toHaveLength(1);
     expect(comments[0]).toMatchObject({ kind: "block", text: "/* hi */" });
+  });
+
+  it("filters JSX text correctly across many JSX children", () => {
+    const source = [
+      "const e = (",
+      "  <ul>",
+      "    <li>first // nope</li>",
+      "    <li>{/* yes */}</li>",
+      "    <li>second /* nope */</li>",
+      "  </ul>",
+      ");",
+    ].join("\n");
+
+    const comments = scanComments(source, { jsx: true });
+
+    expect(comments.map((comment) => comment.text)).toEqual(["/* yes */"]);
+  });
+
+  it("tags directive comments with their canonical name", () => {
+    const comments = scanComments("// @ts-expect-error\nconst x: number = null as any;\n// plain note");
+
+    expect(comments[0]?.directive).toBe("@ts-expect-error");
+    expect(comments[1]?.directive).toBeUndefined();
+  });
+
+  it("does not set the directive key on ordinary comments", () => {
+    const comments = scanComments("// plain");
+
+    expect(comments[0] && "directive" in comments[0]).toBe(false);
   });
 });
