@@ -5,6 +5,8 @@ interface DirectiveRule {
   /** Fixed name, or derive it from the match. Defaults to the full matched text. */
   name?: string | ((match: RegExpExecArray) => string);
   blockOnly?: boolean;
+  /** Match any content line, not just the first (for docblock pragmas). */
+  anyLine?: boolean;
 }
 
 const RULES: DirectiveRule[] = [
@@ -32,29 +34,31 @@ const RULES: DirectiveRule[] = [
   { pattern: /^c8\s+ignore\b/, name: "c8-ignore" },
   { pattern: /^v8\s+ignore\s+([a-z]+)/, name: (match) => `v8-ignore-${match[1]}` },
   { pattern: /^v8\s+ignore\b/, name: "v8-ignore" },
-  { pattern: /^node:coverage\s+(?:disable|enable|ignore)\b/, name: "node:coverage" },
+  { pattern: /^node:coverage\s+(disable|enable|ignore)\b/, name: (match) => `node:coverage-${match[1]}` },
   // Bundlers
   { pattern: /^webpack[A-Z][A-Za-z]*\s*:/, name: "webpack-magic-comment" },
   { pattern: /^@vite-ignore\b/ },
   { pattern: /^[#@]__(?:PURE|NO_SIDE_EFFECTS|INLINE|NOINLINE)__/ },
   // Source maps (`//# sourceMappingURL=`, legacy `//@`, and the block form)
   { pattern: /^[#@]\s*(source(?:Mapping)?URL)=/, name: (match) => match[1] ?? "sourceMappingURL" },
-  // JSX pragmas
-  { pattern: /^@jsx(?:Runtime|ImportSource|Frag)?\b/ },
-  // Test runners
-  { pattern: /^@(?:jest|vitest)-environment\b/ },
+  // JSX pragmas (docblock pragmas: block comments only, honoured on any line)
+  { pattern: /^@jsx(?:Runtime|ImportSource|Frag)?\b/, blockOnly: true, anyLine: true },
+  // Test runners (docblock pragmas as well)
+  { pattern: /^@(?:jest|vitest)-environment\b/, blockOnly: true, anyLine: true },
   // Editor folding
   { pattern: /^#(?:region|endregion)\b/ },
 ];
 
 const TRIPLE_SLASH = /^\/\/\/\s*<(reference|amd-dependency|amd-module)\b/;
 
-// Mirrors the TypeScript compiler's own comment-directive matching. Line
-// comments: exactly two or three slashes, optional whitespace, the directive.
-const TS_LINE_DIRECTIVE = /^\/\/\/?\s*@ts-(ignore|expect-error|nocheck|check)\b/;
-// Block comments: TypeScript only honours @ts-ignore / @ts-expect-error (not
-// the file-wide check pragmas), and only on the block's last line.
-const TS_BLOCK_DIRECTIVE = /^[\s/*]*@ts-(ignore|expect-error)\b/;
+// Mirrors the TypeScript compiler's own comment-directive matching, verified
+// against tsc: the suppression directives are case-sensitive PREFIX matches
+// (`@ts-ignoreTODO` is active), while the file-wide check pragmas are
+// case-insensitive and must end at a word boundary (`@ts-nocheckfoo` is not).
+const TS_LINE_SUPPRESSION = /^\/\/\/?\s*@ts-(ignore|expect-error)/;
+const TS_LINE_CHECK_PRAGMA = /^\/\/\/?\s*@ts-(nocheck|check)\b/i;
+// Block comments: only the suppression directives, and only on the last line.
+const TS_BLOCK_SUPPRESSION = /^[\s/*]*@ts-(ignore|expect-error)/;
 
 /**
  * Returns the canonical name of the compiler/linter/tooling directive the
@@ -66,25 +70,32 @@ export function detectDirective(kind: CommentKind, text: string): string | undef
     if (tripleSlash) {
       return `triple-slash-${tripleSlash[1]}`;
     }
-    const tsDirective = TS_LINE_DIRECTIVE.exec(text);
-    if (tsDirective) {
-      return `@ts-${tsDirective[1]}`;
+    const suppression = TS_LINE_SUPPRESSION.exec(text);
+    if (suppression) {
+      return `@ts-${suppression[1]}`;
+    }
+    const checkPragma = TS_LINE_CHECK_PRAGMA.exec(text);
+    if (checkPragma) {
+      return `@ts-${checkPragma[1]?.toLowerCase()}`;
     }
   } else {
-    const tsDirective = TS_BLOCK_DIRECTIVE.exec(lastContentLine(text));
-    if (tsDirective) {
-      return `@ts-${tsDirective[1]}`;
+    const suppression = TS_BLOCK_SUPPRESSION.exec(lastContentLine(text));
+    if (suppression) {
+      return `@ts-${suppression[1]}`;
     }
   }
 
-  const content = leadingContent(kind, text);
+  const lines = contentLines(kind, text);
   for (const rule of RULES) {
     if (rule.blockOnly === true && kind !== "block") continue;
-    const match = rule.pattern.exec(content);
-    if (!match) continue;
-    if (typeof rule.name === "string") return rule.name;
-    if (typeof rule.name === "function") return rule.name(match);
-    return match[0];
+    const candidates = rule.anyLine === true ? lines : lines.slice(0, 1);
+    for (const line of candidates) {
+      const match = rule.pattern.exec(line);
+      if (!match) continue;
+      if (typeof rule.name === "string") return rule.name;
+      if (typeof rule.name === "function") return rule.name(match);
+      return match[0];
+    }
   }
   return undefined;
 }
@@ -99,18 +110,19 @@ export function isLegalComment(text: string): boolean {
 }
 
 /**
- * First non-empty content line of the comment, with comment markers stripped.
+ * Non-empty content lines of the comment, with comment markers stripped.
  * For line comments only the `//` marker itself is removed: extra slashes or
  * stars are content, so `//// @ts-ignore` and `// * prettier-ignore` stay
  * ordinary. JSDoc-style `*` prefixes are stripped for block comments only.
  */
-function leadingContent(kind: CommentKind, text: string): string {
+function contentLines(kind: CommentKind, text: string): string[] {
   const inner = kind === "line" ? text.replace(/^\/\//, "") : text.replace(/^\/\*+/, "").replace(/\*+\/\s*$/, "");
+  const lines: string[] = [];
   for (const line of inner.split(/\r?\n/)) {
     const stripped = (kind === "block" ? line.replace(/^\s*\*+\s*/, "") : line).trim();
-    if (stripped !== "") return stripped;
+    if (stripped !== "") lines.push(stripped);
   }
-  return "";
+  return lines;
 }
 
 /** Last non-blank line of the comment, with the closing comment marker stripped. */

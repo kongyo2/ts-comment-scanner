@@ -128,6 +128,7 @@ function isNextLineDirective(name: string): boolean {
       "c8-ignore-next",
       "v8-ignore",
       "v8-ignore-next",
+      "node:coverage-ignore",
     ].includes(name)
   );
 }

@@ -251,6 +251,14 @@ describe("removeComments", () => {
     expect(result.code).toBe(source);
   });
 
+  it("shields below node:coverage ignore next but not below its range forms", () => {
+    const nextForm = "/* node:coverage ignore next */\n// shielded\nconst a = 1;\n";
+    expect(removeComments(nextForm).code).toBe(nextForm);
+
+    const rangeForm = "/* node:coverage disable */\n// gone\nconst b = 1;\n";
+    expect(removeComments(rangeForm).code).toBe("/* node:coverage disable */\nconst b = 1;\n");
+  });
+
   it("keeps a byte-order mark when removing the first line", () => {
     const result = removeComments("\uFEFF// gone\nconst x = 1;\n");
 

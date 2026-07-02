@@ -54,9 +54,22 @@ describe("detectDirective", () => {
     ["/* c8 ignore start */", "c8-ignore-start"],
     ["/* c8 ignore next */", "c8-ignore-next"],
     ["/* v8 ignore next 3 */", "v8-ignore-next"],
-    ["/* node:coverage disable */", "node:coverage"],
+    ["/* node:coverage disable */", "node:coverage-disable"],
+    ["/* node:coverage ignore next */", "node:coverage-ignore"],
   ])("detects coverage directives with their mode: %s", (text, expected) => {
     expect(detectDirective("block", text)).toBe(expected);
+  });
+
+  it("matches @ts suppression directives by prefix, like the compiler", () => {
+    expect(detectDirective("line", "// @ts-ignoreTODO fix later")).toBe("@ts-ignore");
+    expect(detectDirective("block", "/* note\n@ts-expect-errorfoo */")).toBe("@ts-expect-error");
+  });
+
+  it("keeps the compiler's case rules: suppressions are case-sensitive, check pragmas are not", () => {
+    expect(detectDirective("line", "// @ts-IGNORE")).toBeUndefined();
+    expect(detectDirective("line", "// @TS-NOCHECK")).toBe("@ts-nocheck");
+    expect(detectDirective("line", "// @ts-nocheckfoo")).toBeUndefined();
+    expect(detectDirective("line", "// @ts-nocheck extra words")).toBe("@ts-nocheck");
   });
 
   it("honours block @ts directives only on the block's last line, like TypeScript", () => {
@@ -113,6 +126,16 @@ describe("detectDirective", () => {
 
   it("looks past jsdoc stars for the first content line", () => {
     expect(detectDirective("block", `/**\n * ${jestPragma} jsdom\n */`)).toBe(jestPragma);
+  });
+
+  it("finds docblock pragmas on later lines too", () => {
+    expect(detectDirective("block", "/** docs first\n * @jsxImportSource preact\n */")).toBe("@jsxImportSource");
+    expect(detectDirective("block", `/** docs first\n * ${vitestPragma} jsdom\n */`)).toBe(vitestPragma);
+  });
+
+  it("keeps line-form docblock pragmas ordinary", () => {
+    expect(detectDirective("line", "// @jsx h")).toBeUndefined();
+    expect(detectDirective("line", `// ${jestPragma} jsdom`)).toBeUndefined();
   });
 
   it("returns undefined for ordinary comments", () => {

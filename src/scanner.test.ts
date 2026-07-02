@@ -60,6 +60,13 @@ describe("scanComments", () => {
     expect(comments[0]).toMatchObject({ line: 1, column: 1, endLine: 1, endColumn: 6 });
   });
 
+  it("detects a JSDoc comment at the end of the file", () => {
+    const comments = scanComments("const c = 1;\n/** trailing docs */\n");
+
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toMatchObject({ kind: "block", text: "/** trailing docs */", line: 2 });
+  });
+
   it("captures a multi-line block comment as a single comment", () => {
     const source = "/**\n * doc\n */";
 
@@ -144,6 +151,16 @@ describe("scanComments", () => {
     const late = scanComments('const x = 1;\n/// <reference path="./a.d.ts" />');
 
     expect(early[0]?.directive).toBe("triple-slash-reference");
+    expect(late[0]?.directive).toBeUndefined();
+  });
+
+  it("treats test-environment pragmas as directives only in the file header", () => {
+    // Assembled at runtime so vitest's own docblock detection ignores this file.
+    const envPragma = ["@vitest", "environment"].join("-");
+    const early = scanComments(`/** ${envPragma} jsdom */\nconst x = 1;`);
+    const late = scanComments(`const x = 1;\n/** ${envPragma} jsdom */`);
+
+    expect(early[0]?.directive).toBe(envPragma);
     expect(late[0]?.directive).toBeUndefined();
   });
 

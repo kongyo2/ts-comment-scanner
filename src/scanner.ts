@@ -26,7 +26,10 @@ export function scanComments(source: string, options: ScanOptions = {}): Comment
   };
 
   const visit = (node: ts.Node): void => {
-    const children = node.getChildren(sourceFile);
+    // JSDoc nodes start inside the comment text itself; descending into them
+    // would hide the comment (e.g. a trailing JSDoc attached to the
+    // end-of-file token). Treat them as trivia like any other comment.
+    const children = node.getChildren(sourceFile).filter((child) => !ts.isJSDoc(child));
     if (children.length === 0) {
       if (node.kind === ts.SyntaxKind.JsxText) {
         jsxTextSpans.push([node.getFullStart(), node.getEnd()]);
@@ -43,11 +46,16 @@ export function scanComments(source: string, options: ScanOptions = {}): Comment
 
   const insideJsxText = (pos: number): boolean => jsxTextSpans.some(([start, end]) => pos >= start && pos < end);
 
-  // TypeScript only honours file-wide pragmas (check pragmas and triple-slash
-  // directives) before the first token; anywhere later they are ordinary text.
+  // File-wide pragmas (check pragmas, triple-slash directives, docblock
+  // test-environment pragmas) only count before the first token; anywhere
+  // later the tools treat them as ordinary text.
   const firstTokenStart = sourceFile.getStart(sourceFile);
   const isHeaderOnlyDirective = (directive: string): boolean =>
-    directive === "@ts-nocheck" || directive === "@ts-check" || directive.startsWith("triple-slash-");
+    directive === "@ts-nocheck" ||
+    directive === "@ts-check" ||
+    directive === "@jest-environment" ||
+    directive === "@vitest-environment" ||
+    directive.startsWith("triple-slash-");
   const isActiveDirective = (directive: string, pos: number): boolean =>
     !isHeaderOnlyDirective(directive) || pos < firstTokenStart;
 
