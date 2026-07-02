@@ -1,5 +1,5 @@
 import { readFile, readdir, stat } from "node:fs/promises";
-import { extname, join, normalize, relative, sep } from "node:path";
+import { join, normalize, relative, sep } from "node:path";
 import picomatch from "picomatch";
 import { scanComments } from "./scanner.js";
 import type { FileScanResult } from "./types.js";
@@ -67,7 +67,7 @@ async function walk(dir: string, context: WalkContext, found: Set<string>): Prom
         }
       } else if (
         entry.isFile() &&
-        context.extensions.includes(extname(entry.name).toLowerCase()) &&
+        hasExtension(entry.name, context.extensions) &&
         !context.isIgnored(full, context.root)
       ) {
         found.add(full);
@@ -81,6 +81,12 @@ function normalizeExtensions(extensions: string[]): string[] {
     const withDot = extension.startsWith(".") ? extension : `.${extension}`;
     return withDot.toLowerCase();
   });
+}
+
+/** Suffix match so compound extensions like `.d.ts` work; `extname` would only see `.ts`. */
+function hasExtension(name: string, extensions: string[]): boolean {
+  const lower = name.toLowerCase();
+  return extensions.some((extension) => lower.endsWith(extension));
 }
 
 function buildIgnoreMatcher(patterns: string[]): IgnoreMatcher {

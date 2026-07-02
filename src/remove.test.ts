@@ -127,6 +127,12 @@ describe("removeComments", () => {
     expect(result.code).toBe("const x = 1;\r\n");
   });
 
+  it("inserts a CRLF line break when splitting code around a CRLF multi-line comment", () => {
+    const result = removeComments("const a = 1 /* gone\r\nstill gone */ + 2;\r\n");
+
+    expect(result.code).toBe("const a = 1\r\n + 2;\r\n");
+  });
+
   it("does not touch comment-looking text inside strings or templates", () => {
     const source = 'const s = "// keep";\nconst t = `/* keep */`;\n';
     const result = removeComments(source);

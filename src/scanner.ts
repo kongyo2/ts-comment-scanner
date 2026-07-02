@@ -43,6 +43,12 @@ export function scanComments(source: string, options: ScanOptions = {}): Comment
 
   const insideJsxText = (pos: number): boolean => jsxTextSpans.some(([start, end]) => pos >= start && pos < end);
 
+  // TypeScript only honours file-wide check pragmas that appear before the
+  // first token; anywhere later they are ordinary comments.
+  const firstTokenStart = sourceFile.getStart(sourceFile);
+  const isActiveDirective = (directive: string, pos: number): boolean =>
+    directive !== "@ts-nocheck" && directive !== "@ts-check" ? true : pos < firstTokenStart;
+
   return ranges
     .filter((range) => !insideJsxText(range.pos))
     .sort((a, b) => a.pos - b.pos)
@@ -51,7 +57,8 @@ export function scanComments(source: string, options: ScanOptions = {}): Comment
       const text = source.slice(range.pos, range.end);
       const startPosition = sourceFile.getLineAndCharacterOfPosition(range.pos);
       const endPosition = sourceFile.getLineAndCharacterOfPosition(range.end);
-      const directive = detectDirective(kind, text);
+      const detected = detectDirective(kind, text);
+      const directive = detected !== undefined && isActiveDirective(detected, range.pos) ? detected : undefined;
       return {
         kind,
         text,

@@ -147,6 +147,25 @@ describe("collectFiles", () => {
     expect(files).toEqual([join(dir, "b.mjs")]);
   });
 
+  it("matches compound extensions like d.ts as suffixes", async () => {
+    await writeFile(join(dir, "types.d.ts"), "// decls");
+    await writeFile(join(dir, "code.ts"), "// code");
+    await writeFile(join(dir, "unrelated.ts"), "// other");
+
+    const files = await collectFiles([dir], { extensions: ["d.ts"] });
+
+    expect(files).toEqual([join(dir, "types.d.ts")]);
+  });
+
+  it("does not let a plain extension lose files with compound suffixes", async () => {
+    await writeFile(join(dir, "types.d.ts"), "// decls");
+    await writeFile(join(dir, "code.mts"), "// code");
+
+    const files = await collectFiles([dir], { extensions: [".ts"] });
+
+    expect(files).toEqual([join(dir, "types.d.ts")]);
+  });
+
   it("skips files matching an ignore glob by base name", async () => {
     await writeFile(join(dir, "a.ts"), "// a");
     await writeFile(join(dir, "a.test.ts"), "// test");

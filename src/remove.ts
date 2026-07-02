@@ -218,9 +218,10 @@ function splice(source: string, removals: readonly Comment[]): string {
     } else if (!lineIsBlank && LINE_TERMINATOR.test(comment.text)) {
       // Code on both sides of a block comment that spans lines. Per ECMA-262
       // such a comment acts as a line terminator for semicolon insertion, so
-      // replace it with a real line break instead of merging the lines.
+      // replace it with a real line break (matching the file's style) instead
+      // of merging the lines.
       trimLineEnd();
-      push("\n");
+      push(comment.text.includes("\r\n") ? "\r\n" : "\n");
     } else {
       // Inline comment with code after it on the same line.
       const next = source.charAt(cursor);

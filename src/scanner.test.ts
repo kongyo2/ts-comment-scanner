@@ -119,6 +119,26 @@ describe("scanComments", () => {
     expect(comments[1]?.directive).toBeUndefined();
   });
 
+  it("treats @ts-nocheck as a directive only before the first token, like TypeScript", () => {
+    const early = scanComments("// @ts-nocheck\nconst x = 1;");
+    const late = scanComments("const x = 1;\n// @ts-nocheck");
+
+    expect(early[0]?.directive).toBe("@ts-nocheck");
+    expect(late[0]?.directive).toBeUndefined();
+  });
+
+  it("keeps honouring @ts-check behind a shebang and other leading comments", () => {
+    const comments = scanComments("#!/usr/bin/env node\n// header\n// @ts-check\nconst x = 1;");
+
+    expect(comments.map((comment) => comment.directive)).toEqual([undefined, "@ts-check"]);
+  });
+
+  it("does not position-limit next-line directives like @ts-ignore", () => {
+    const comments = scanComments("const x = 1;\n// @ts-ignore\nconst y: number = null as any;");
+
+    expect(comments[0]?.directive).toBe("@ts-ignore");
+  });
+
   it("does not set the directive key on ordinary comments", () => {
     const comments = scanComments("// plain");
 
