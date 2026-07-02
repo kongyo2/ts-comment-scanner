@@ -8,8 +8,18 @@ describe("detectDirective", () => {
     ["// @ts-nocheck", "@ts-nocheck"],
     ["// @ts-check", "@ts-check"],
     ["//@ts-ignore no space", "@ts-ignore"],
+    ["///@ts-ignore triple-slash form", "@ts-ignore"],
+    ["/// @ts-expect-error triple-slash form", "@ts-expect-error"],
   ])("detects TypeScript compiler directives: %s", (text, expected) => {
     expect(detectDirective("line", text)).toBe(expected);
+  });
+
+  it("treats commented-out directives with extra slashes as ordinary comments", () => {
+    expect(detectDirective("line", "//// @ts-ignore")).toBeUndefined();
+    expect(detectDirective("line", "// / @ts-ignore")).toBeUndefined();
+    expect(detectDirective("line", "/// eslint-disable-next-line no-console")).toBeUndefined();
+    expect(detectDirective("line", "///# sourceMappingURL=x.map")).toBeUndefined();
+    expect(detectDirective("line", "///#region")).toBeUndefined();
   });
 
   it.each([

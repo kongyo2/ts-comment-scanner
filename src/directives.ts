@@ -8,8 +8,9 @@ interface DirectiveRule {
 }
 
 const RULES: DirectiveRule[] = [
-  // TypeScript compiler
-  { pattern: /^@ts-(?:ignore|expect-error|nocheck|check)\b/ },
+  // TypeScript compiler (block form; the line form is matched on the raw text
+  // with TS_LINE_DIRECTIVE, since TS only honours `//` or `///` markers)
+  { pattern: /^@ts-(?:ignore|expect-error|nocheck|check)\b/, blockOnly: true },
   // ESLint
   { pattern: /^eslint-(?:disable|enable)(?:-next-line|-line)?\b/ },
   { pattern: /^eslint-env\b/ },
@@ -46,6 +47,10 @@ const RULES: DirectiveRule[] = [
 
 const TRIPLE_SLASH = /^\/\/\/\s*<(reference|amd-dependency|amd-module)\b/;
 
+// Mirrors the TypeScript compiler's own comment-directive matching: exactly
+// two or three slashes, optional whitespace, then the directive.
+const TS_LINE_DIRECTIVE = /^\/\/\/?\s*@ts-(ignore|expect-error|nocheck|check)\b/;
+
 /**
  * Returns the canonical name of the compiler/linter/tooling directive the
  * comment represents, or `undefined` when the comment is an ordinary comment.
@@ -55,6 +60,10 @@ export function detectDirective(kind: CommentKind, text: string): string | undef
     const tripleSlash = TRIPLE_SLASH.exec(text);
     if (tripleSlash) {
       return `triple-slash-${tripleSlash[1]}`;
+    }
+    const tsDirective = TS_LINE_DIRECTIVE.exec(text);
+    if (tsDirective) {
+      return `@ts-${tsDirective[1]}`;
     }
   }
 
@@ -79,9 +88,13 @@ export function isLegalComment(text: string): boolean {
   return /@(?:license|preserve|copyright)\b/i.test(text);
 }
 
-/** First non-empty content line of the comment, with comment markers stripped. */
+/**
+ * First non-empty content line of the comment, with comment markers stripped.
+ * For line comments only the `//` marker itself is removed: extra slashes are
+ * content, so a commented-out directive like `//// @ts-ignore` stays ordinary.
+ */
 function leadingContent(kind: CommentKind, text: string): string {
-  const inner = kind === "line" ? text.replace(/^\/+/, "") : text.replace(/^\/\*+/, "").replace(/\*+\/\s*$/, "");
+  const inner = kind === "line" ? text.replace(/^\/\//, "") : text.replace(/^\/\*+/, "").replace(/\*+\/\s*$/, "");
   for (const line of inner.split(/\r?\n/)) {
     const stripped = line.replace(/^\s*\*+\s*/, "").trim();
     if (stripped !== "") return stripped;
