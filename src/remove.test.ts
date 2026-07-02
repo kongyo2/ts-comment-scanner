@@ -191,6 +191,46 @@ describe("removeComments", () => {
     expect(removeComments(source).code).toBe("#!/usr/bin/env node\nconst x = 1;\n");
   });
 
+  it("keeps a comment sitting between a next-line directive and its code", () => {
+    const source = "// eslint-disable-next-line no-console\n// shielded\nconsole.log(1);\n// gone\n";
+    const result = removeComments(source);
+
+    expect(result.code).toBe("// eslint-disable-next-line no-console\n// shielded\nconsole.log(1);\n");
+    expect(result.kept.map((comment) => comment.text)).toEqual([
+      "// eslint-disable-next-line no-console",
+      "// shielded",
+    ]);
+  });
+
+  it("shields comments below @ts-expect-error the same way", () => {
+    const source = "// @ts-expect-error\n// shielded\nconst x: number = null;\n";
+    const result = removeComments(source);
+
+    expect(result.code).toBe(source);
+    expect(result.removed).toEqual([]);
+  });
+
+  it("still removes a trailing comment on the line after a next-line directive", () => {
+    const source = "// @ts-expect-error\nconst x: number = null; // gone\n";
+    const result = removeComments(source);
+
+    expect(result.code).toBe("// @ts-expect-error\nconst x: number = null;\n");
+  });
+
+  it("removes the shielding comment when the directive itself is removed", () => {
+    const source = "// eslint-disable-next-line no-console\n// note\nconsole.log(1);\n";
+    const result = removeComments(source, { removeDirectives: true });
+
+    expect(result.code).toBe("console.log(1);\n");
+  });
+
+  it("does not shield comments below range or file directives", () => {
+    const source = "// @ts-nocheck\n// gone\nconst x = 1;\n";
+    const result = removeComments(source);
+
+    expect(result.code).toBe("// @ts-nocheck\nconst x = 1;\n");
+  });
+
   it("keeps a byte-order mark when removing the first line", () => {
     const result = removeComments("\uFEFF// gone\nconst x = 1;\n");
 

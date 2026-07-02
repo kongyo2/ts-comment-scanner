@@ -30,6 +30,10 @@ export async function collectFiles(inputs: string[], options: CollectOptions = {
 
   await Promise.all(
     inputs.map(async (rawInput) => {
+      if (rawInput === "") {
+        // normalize("") would resolve to "." and silently widen the scan.
+        throw new Error("empty path is not a valid input");
+      }
       const input = normalize(rawInput);
       const info = await stat(input);
       if (info.isDirectory()) {

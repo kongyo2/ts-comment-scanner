@@ -105,6 +105,15 @@ describe("run", () => {
     expect(err()).toContain("missing.ts");
   });
 
+  it("returns 2 for an explicitly empty path argument", async () => {
+    const { io, err } = capture();
+
+    const code = await run([""], io);
+
+    expect(code).toBe(2);
+    expect(err()).toContain("empty path");
+  });
+
   it("returns 2 and suggests --help for an unknown option", async () => {
     const { io, err } = capture();
 

@@ -208,6 +208,10 @@ describe("collectFiles", () => {
     expect(files).toEqual([join(dir, "top.ts")]);
   });
 
+  it("rejects an empty input path instead of widening it to the current directory", async () => {
+    await expect(collectFiles([""])).rejects.toThrow(/empty path/);
+  });
+
   it("does not apply ignore globs to explicitly listed files", async () => {
     const file = join(dir, "a.test.ts");
     await writeFile(file, "// test");

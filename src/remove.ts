@@ -16,7 +16,10 @@ export interface RemoveResult {
   /** Source with the removed comments spliced out. */
   code: string;
   removed: Comment[];
-  /** Comments kept because they are protected (directives, license headers). */
+  /**
+   * Comments kept because they are protected: directives, license headers,
+   * and comments whose removal would shift code under a next-line directive.
+   */
   kept: Comment[];
   /** Comments excluded from removal by the `shouldRemove` predicate. */
   skipped: Comment[];
@@ -42,7 +45,7 @@ export function removeComments(source: string, options: RemoveOptions = {}): Rem
   const body = bom === "" ? source : source.slice(bom.length);
   const comments = scanComments(body, { jsx });
 
-  const removed: Comment[] = [];
+  let removed: Comment[] = [];
   const kept: Comment[] = [];
   const skipped: Comment[] = [];
   for (const comment of comments) {
@@ -54,6 +57,8 @@ export function removeComments(source: string, options: RemoveOptions = {}): Rem
       removed.push(comment);
     }
   }
+
+  removed = shieldNextLineDirectives(body, removed, kept, skipped);
 
   if (removed.length === 0) {
     return { code: source, removed, kept, skipped, changed: false };
@@ -72,6 +77,61 @@ function isProtected(comment: Comment, options: RemoveOptions): boolean {
   if (comment.directive !== undefined && options.removeDirectives !== true) return true;
   if (isLegalComment(comment.text) && options.removeLegal !== true) return true;
   return false;
+}
+
+/**
+ * Re-protects whole-line comments sitting directly below a surviving
+ * next-line directive (`@ts-expect-error`, `eslint-disable-next-line`, ...).
+ * Dropping such a line would shift the following code up, silently changing
+ * which line the directive applies to.
+ */
+function shieldNextLineDirectives(source: string, removed: Comment[], kept: Comment[], skipped: Comment[]): Comment[] {
+  const shieldedLines = new Set<number>();
+  for (const comment of [...kept, ...skipped]) {
+    if (comment.directive !== undefined && isNextLineDirective(comment.directive)) {
+      shieldedLines.add(comment.endLine + 1);
+    }
+  }
+  if (shieldedLines.size === 0) return removed;
+
+  const stillRemoved: Comment[] = [];
+  for (const comment of removed) {
+    if (shieldedLines.has(comment.line) && occupiesWholeLines(source, comment)) {
+      kept.push(comment);
+    } else {
+      stillRemoved.push(comment);
+    }
+  }
+  if (stillRemoved.length !== removed.length) {
+    kept.sort((a, b) => a.start - b.start);
+  }
+  return stillRemoved;
+}
+
+function isNextLineDirective(name: string): boolean {
+  return (
+    name.endsWith("-next-line") ||
+    [
+      "@ts-ignore",
+      "@ts-expect-error",
+      "biome-ignore",
+      "deno-lint-ignore",
+      "deno-fmt-ignore",
+      "prettier-ignore",
+      "istanbul-ignore",
+      "c8-ignore",
+      "v8-ignore",
+    ].includes(name)
+  );
+}
+
+/** True when nothing but whitespace shares the comment's first and last lines. */
+function occupiesWholeLines(source: string, comment: Comment): boolean {
+  const lineStart = source.lastIndexOf("\n", comment.start - 1) + 1;
+  if (!isBlank(source.slice(lineStart, comment.start))) return false;
+  const newlineIndex = source.indexOf("\n", comment.end);
+  const lineEnd = newlineIndex === -1 ? source.length : newlineIndex;
+  return isBlank(source.slice(comment.end, lineEnd));
 }
 
 const isBlank = (text: string): boolean => /^\s*$/.test(text);
