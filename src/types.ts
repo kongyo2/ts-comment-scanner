@@ -7,6 +7,10 @@ export interface Comment {
   end: number;
   line: number;
   column: number;
+  endLine: number;
+  endColumn: number;
+  /** Canonical name of the compiler/linter directive this comment represents, if any. */
+  directive?: string;
 }
 
 export interface FileScanResult {

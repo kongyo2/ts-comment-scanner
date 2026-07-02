@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { collectFiles, scanFile, scanPaths } from "./files.js";
+import { collectFiles, isJsxFile, scanFile, scanPaths } from "./files.js";
 
 let dir: string;
 
@@ -33,6 +33,24 @@ describe("scanFile", () => {
     const result = await scanFile(file);
 
     expect(result.comments).toEqual([]);
+  });
+
+  it("treats extensions case-insensitively when deciding on JSX parsing", async () => {
+    const file = join(dir, "Component.TSX");
+    await writeFile(file, "const e = <div>http://example.com</div>;\n");
+
+    const result = await scanFile(file);
+
+    expect(result.comments).toEqual([]);
+  });
+});
+
+describe("isJsxFile", () => {
+  it("recognises .tsx and .jsx in any casing", () => {
+    expect(isJsxFile("a.tsx")).toBe(true);
+    expect(isJsxFile("a.JSX")).toBe(true);
+    expect(isJsxFile("a.ts")).toBe(false);
+    expect(isJsxFile("a.mts")).toBe(false);
   });
 });
 
@@ -75,6 +93,14 @@ describe("collectFiles", () => {
     expect(files).toEqual([join(dir, "keep.ts")]);
   });
 
+  it("matches extensions case-insensitively", async () => {
+    await writeFile(join(dir, "UPPER.TS"), "// upper");
+
+    const files = await collectFiles([dir]);
+
+    expect(files).toEqual([join(dir, "UPPER.TS")]);
+  });
+
   it("skips node_modules directories", async () => {
     await mkdir(join(dir, "node_modules", "pkg"), { recursive: true });
     await mkdir(join(dir, "src"), { recursive: true });
@@ -93,6 +119,83 @@ describe("collectFiles", () => {
     const files = await collectFiles([dir, dir]);
 
     expect(files).toEqual([join(dir, "a.ts"), join(dir, "b.ts")]);
+  });
+
+  it("de-duplicates differently spelled paths to the same file", async () => {
+    await writeFile(join(dir, "a.ts"), "// a");
+
+    const files = await collectFiles([join(dir, "a.ts"), join(dir, ".", "a.ts")]);
+
+    expect(files).toEqual([join(dir, "a.ts")]);
+  });
+
+  it("honours a custom extensions list, with or without dots", async () => {
+    await writeFile(join(dir, "a.ts"), "// a");
+    await writeFile(join(dir, "b.mjs"), "// b");
+
+    const files = await collectFiles([dir], { extensions: ["mjs"] });
+
+    expect(files).toEqual([join(dir, "b.mjs")]);
+  });
+
+  it("skips files matching an ignore glob by base name", async () => {
+    await writeFile(join(dir, "a.ts"), "// a");
+    await writeFile(join(dir, "a.test.ts"), "// test");
+
+    const files = await collectFiles([dir], { ignore: ["*.test.ts"] });
+
+    expect(files).toEqual([join(dir, "a.ts")]);
+  });
+
+  it("skips files matching a path glob", async () => {
+    await mkdir(join(dir, "src"), { recursive: true });
+    await mkdir(join(dir, "legacy"), { recursive: true });
+    await writeFile(join(dir, "src", "a.ts"), "// a");
+    await writeFile(join(dir, "legacy", "b.ts"), "// b");
+
+    const files = await collectFiles([dir], { ignore: ["**/legacy/**"] });
+
+    expect(files).toEqual([join(dir, "src", "a.ts")]);
+  });
+
+  it("matches slash-containing globs against the full path, not the base name", async () => {
+    await mkdir(join(dir, "legacy"), { recursive: true });
+    await writeFile(join(dir, "legacy", "b.ts"), "// b");
+    await writeFile(join(dir, "keep.ts"), "// keep");
+
+    const files = await collectFiles([dir], { ignore: ["**/legacy/*.ts"] });
+
+    expect(files).toEqual([join(dir, "keep.ts")]);
+  });
+
+  it("combines base-name and path globs in one ignore list", async () => {
+    await mkdir(join(dir, "sub"), { recursive: true });
+    await writeFile(join(dir, "a.ts"), "// a");
+    await writeFile(join(dir, "a.test.ts"), "// test");
+    await writeFile(join(dir, "sub", "b.ts"), "// b");
+
+    const files = await collectFiles([dir], { ignore: ["*.test.ts", "**/sub/*.ts"] });
+
+    expect(files).toEqual([join(dir, "a.ts")]);
+  });
+
+  it("prunes whole directories matching an ignore pattern", async () => {
+    await mkdir(join(dir, "fixtures", "deep"), { recursive: true });
+    await writeFile(join(dir, "fixtures", "deep", "x.ts"), "// x");
+    await writeFile(join(dir, "top.ts"), "// top");
+
+    const files = await collectFiles([dir], { ignore: ["fixtures"] });
+
+    expect(files).toEqual([join(dir, "top.ts")]);
+  });
+
+  it("does not apply ignore globs to explicitly listed files", async () => {
+    const file = join(dir, "a.test.ts");
+    await writeFile(file, "// test");
+
+    const files = await collectFiles([file], { ignore: ["*.test.ts"] });
+
+    expect(files).toEqual([file]);
   });
 });
 
@@ -116,5 +219,14 @@ describe("scanPaths", () => {
     const results = await scanPaths([dir]);
 
     expect(results.map((result) => result.file)).toEqual(names.map((name) => join(dir, name)));
+  });
+
+  it("forwards ignore patterns to file collection", async () => {
+    await writeFile(join(dir, "a.ts"), "// a");
+    await writeFile(join(dir, "a.test.ts"), "// test");
+
+    const results = await scanPaths([dir], { ignore: ["*.test.ts"] });
+
+    expect(results.map((result) => result.file)).toEqual([join(dir, "a.ts")]);
   });
 });

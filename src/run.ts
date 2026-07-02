@@ -1,7 +1,10 @@
-import { parseArgs } from "./args.js";
-import { scanPaths } from "./files.js";
-import { formatJson, formatText } from "./report.js";
+import { readFile, writeFile } from "node:fs/promises";
+import { parseArgs, UsageError, type CliOptions, type DirectiveMode } from "./args.js";
+import { collectFiles, isJsxFile, mapLimit, scanPaths, FILE_CONCURRENCY, type CollectOptions } from "./files.js";
+import { removeComments } from "./remove.js";
+import { count, formatGitHub, formatJson, formatText } from "./report.js";
 import { getVersion } from "./version.js";
+import type { Comment, FileScanResult } from "./types.js";
 
 export interface CliIO {
   out: (text: string) => void;
@@ -10,41 +13,184 @@ export interface CliIO {
 
 export const HELP_TEXT = `Usage: ts-comment-scanner [options] [paths...]
 
-Detect and report comments across a TypeScript project.
+Detect, report and clean up comments across a TypeScript project.
 
-Options:
-  --json         Output results as JSON
-  -v, --version  Print the version number
-  -h, --help     Show this help
+Output:
+  --format <fmt>       Output format: text, json or github (default: text)
+  --json               Shorthand for --format json
 
-Paths default to the current directory. Directories are scanned recursively
-for .ts, .tsx, .mts and .cts files, skipping node_modules and .git.
+Filtering:
+  --ignore <glob>      Skip files/directories matching the glob (repeatable)
+  --ext <list>         Comma-separated extensions to scan (default: .ts,.tsx,.mts,.cts)
+  --skip-directives    Hide compiler/linter directives (@ts-ignore, eslint-disable, ...)
+  --only-directives    Report only compiler/linter directives
+
+CI:
+  --fail-on-comment    Exit with code 1 when any comment is reported
+
+Removal:
+  --remove             Delete the reported comments from the files (in place)
+  --dry-run            With --remove: show what would be removed, change nothing
+  --remove-directives  With --remove: also delete directive comments
+  --remove-legal       With --remove: also delete license/legal comments
+
+General:
+  -h, --help           Show this help
+  -v, --version        Print the version number
+
+Paths default to the current directory. Directories are scanned recursively,
+skipping node_modules and .git. Removal keeps directives and license headers
+unless explicitly requested, so builds and linters keep working.
+
+Exit codes: 0 success, 1 comments reported with --fail-on-comment, 2 error.
 
 Examples:
   ts-comment-scanner src
-  ts-comment-scanner --json src test
+  ts-comment-scanner --format github --fail-on-comment src
+  ts-comment-scanner --ignore "**/*.test.ts" --skip-directives src
+  ts-comment-scanner --remove --dry-run src
 `;
 
 export async function run(argv: string[], io: CliIO): Promise<number> {
-  const options = parseArgs(argv);
+  let options: CliOptions;
+  try {
+    options = parseArgs(argv);
+  } catch (error) {
+    if (error instanceof UsageError) {
+      io.err(`ts-comment-scanner: ${error.message}\nTry 'ts-comment-scanner --help' for usage.\n`);
+      return 2;
+    }
+    throw error;
+  }
 
   if (options.help) {
     io.out(HELP_TEXT);
     return 0;
   }
 
-  if (options.version) {
-    io.out(`${await getVersion()}\n`);
-    return 0;
-  }
-
   try {
-    const results = await scanPaths(options.paths);
-    io.out(`${options.json ? formatJson(results) : formatText(results)}\n`);
-    return 0;
+    if (options.version) {
+      io.out(`${await getVersion()}\n`);
+      return 0;
+    }
+
+    const collectOptions: CollectOptions = {
+      ignore: options.ignore,
+      ...(options.extensions === undefined ? {} : { extensions: options.extensions }),
+    };
+
+    if (options.remove) {
+      return await runRemove(options, collectOptions, io);
+    }
+
+    const results = filterDirectives(await scanPaths(options.paths, collectOptions), options.directives);
+    io.out(`${render(results, options.format)}\n`);
+
+    const total = results.reduce((sum, result) => sum + result.comments.length, 0);
+    return options.failOnComment && total > 0 ? 1 : 0;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     io.err(`ts-comment-scanner: ${message}\n`);
-    return 1;
+    return 2;
   }
+}
+
+function render(results: FileScanResult[], format: CliOptions["format"]): string {
+  if (format === "json") return formatJson(results);
+  if (format === "github") return formatGitHub(results);
+  return formatText(results);
+}
+
+function inScope(comment: Comment, mode: DirectiveMode): boolean {
+  if (mode === "skip") return comment.directive === undefined;
+  if (mode === "only") return comment.directive !== undefined;
+  return true;
+}
+
+function filterDirectives(results: FileScanResult[], mode: DirectiveMode): FileScanResult[] {
+  if (mode === "include") return results;
+  return results.map((result) => ({
+    file: result.file,
+    comments: result.comments.filter((comment) => inScope(comment, mode)),
+  }));
+}
+
+interface FileRemoval {
+  file: string;
+  removed: Comment[];
+  kept: Comment[];
+}
+
+async function runRemove(options: CliOptions, collectOptions: CollectOptions, io: CliIO): Promise<number> {
+  const files = await collectFiles(options.paths, collectOptions);
+
+  const outcomes = await mapLimit(files, FILE_CONCURRENCY, async (file) => {
+    try {
+      const source = await readFile(file, "utf8");
+      const result = removeComments(source, {
+        jsx: isJsxFile(file),
+        removeDirectives: options.removeDirectives,
+        removeLegal: options.removeLegal,
+        shouldRemove: (comment) => inScope(comment, options.directives),
+      });
+      if (result.changed && !options.dryRun) {
+        await writeFile(file, result.code, "utf8");
+      }
+      return { file, removed: result.removed, kept: result.kept };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { file, failure: `${file}: ${message}` };
+    }
+  });
+
+  const removals: FileRemoval[] = [];
+  const failures: string[] = [];
+  for (const outcome of outcomes) {
+    if ("failure" in outcome) {
+      failures.push(outcome.failure);
+    } else if (outcome.removed.length > 0 || outcome.kept.length > 0) {
+      removals.push(outcome);
+    }
+  }
+
+  io.out(`${renderRemoval(removals, options)}\n`);
+  for (const failure of failures) {
+    io.err(`ts-comment-scanner: ${failure}\n`);
+  }
+  return failures.length > 0 ? 2 : 0;
+}
+
+function renderRemoval(removals: FileRemoval[], options: CliOptions): string {
+  const totalRemoved = removals.reduce((sum, entry) => sum + entry.removed.length, 0);
+  const totalKept = removals.reduce((sum, entry) => sum + entry.kept.length, 0);
+  const changedFiles = removals.filter((entry) => entry.removed.length > 0);
+  const keptNote = totalKept > 0 ? ` Kept ${count(totalKept, "protected comment")}.` : "";
+
+  if (options.format === "json") {
+    return JSON.stringify(
+      {
+        summary: { files: changedFiles.length, removed: totalRemoved, kept: totalKept, dryRun: options.dryRun },
+        files: removals,
+      },
+      null,
+      2,
+    );
+  }
+
+  if (totalRemoved === 0) {
+    return `No removable comments found.${keptNote}`;
+  }
+
+  const verb = options.dryRun ? "would remove" : "removed";
+  const lines = changedFiles.map((entry) => {
+    const kept = entry.kept.length > 0 ? ` (kept ${entry.kept.length})` : "";
+    return `${entry.file}: ${verb} ${entry.removed.length}${kept}`;
+  });
+
+  const sentenceVerb = verb.charAt(0).toUpperCase() + verb.slice(1);
+  lines.push(
+    "",
+    `${sentenceVerb} ${count(totalRemoved, "comment")} across ${count(changedFiles.length, "file")}.${keptNote}`,
+  );
+  return lines.join("\n");
 }
