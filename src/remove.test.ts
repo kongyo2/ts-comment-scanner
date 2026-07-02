@@ -251,6 +251,20 @@ describe("removeComments", () => {
     expect(result.code).toBe(source);
   });
 
+  it("shields every line covered by a counted ignore-next pragma", () => {
+    const source = "/* c8 ignore next 2 */\n// shielded one\n// shielded two\nconst x = 1;\n// gone\n";
+    const result = removeComments(source);
+
+    expect(result.code).toBe("/* c8 ignore next 2 */\n// shielded one\n// shielded two\nconst x = 1;\n");
+    expect(result.kept).toHaveLength(3);
+  });
+
+  it("shields below a bare deno-coverage-ignore", () => {
+    const source = "// deno-coverage-ignore\n// shielded\nconst x = 1;\n";
+
+    expect(removeComments(source).code).toBe(source);
+  });
+
   it("shields below node:coverage ignore next but not below its range forms", () => {
     const nextForm = "/* node:coverage ignore next */\n// shielded\nconst a = 1;\n";
     expect(removeComments(nextForm).code).toBe(nextForm);

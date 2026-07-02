@@ -47,14 +47,15 @@ export function scanComments(source: string, options: ScanOptions = {}): Comment
   const insideJsxText = (pos: number): boolean => jsxTextSpans.some(([start, end]) => pos >= start && pos < end);
 
   // File-wide pragmas (check pragmas, triple-slash directives, docblock
-  // test-environment pragmas) only count before the first token; anywhere
-  // later the tools treat them as ordinary text.
+  // test-environment pragmas, Deno's *-ignore-file forms) only count before
+  // the first token; anywhere later the tools treat them as ordinary text.
   const firstTokenStart = sourceFile.getStart(sourceFile);
   const isHeaderOnlyDirective = (directive: string): boolean =>
     directive === "@ts-nocheck" ||
     directive === "@ts-check" ||
     directive === "@jest-environment" ||
     directive === "@vitest-environment" ||
+    directive.endsWith("-ignore-file") ||
     directive.startsWith("triple-slash-");
   const isActiveDirective = (directive: string, pos: number): boolean =>
     !isHeaderOnlyDirective(directive) || pos < firstTokenStart;

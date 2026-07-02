@@ -89,7 +89,10 @@ function shieldNextLineDirectives(source: string, removed: Comment[], kept: Comm
   const shieldedLines = new Set<number>();
   for (const comment of [...kept, ...skipped]) {
     if (comment.directive !== undefined && isNextLineDirective(comment.directive)) {
-      shieldedLines.add(comment.endLine + 1);
+      // Counted pragmas like `c8 ignore next 3` cover several lines.
+      for (let offset = 1; offset <= shieldedLineCount(comment.text); offset += 1) {
+        shieldedLines.add(comment.endLine + offset);
+      }
     }
   }
   if (shieldedLines.size === 0) return removed;
@@ -119,6 +122,7 @@ function isNextLineDirective(name: string): boolean {
       "biome-ignore",
       "deno-lint-ignore",
       "deno-fmt-ignore",
+      "deno-coverage-ignore",
       "prettier-ignore",
       "istanbul-ignore",
       "istanbul-ignore-next",
@@ -131,6 +135,12 @@ function isNextLineDirective(name: string): boolean {
       "node:coverage-ignore",
     ].includes(name)
   );
+}
+
+/** Number of following lines a next-line pragma covers (`ignore next 3` → 3). */
+function shieldedLineCount(text: string): number {
+  const match = /\bignore\s+next\s+(\d{1,4})\b/.exec(text);
+  return match ? Math.max(1, Number(match[1])) : 1;
 }
 
 /** True when nothing but whitespace shares the comment's first and last lines. */

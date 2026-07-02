@@ -60,6 +60,13 @@ describe("detectDirective", () => {
     expect(detectDirective("block", text)).toBe(expected);
   });
 
+  it("keeps V8-based coverage pragmas block-only but allows istanbul hints in line comments", () => {
+    expect(detectDirective("line", "// c8 ignore next")).toBeUndefined();
+    expect(detectDirective("line", "// v8 ignore next")).toBeUndefined();
+    expect(detectDirective("line", "// node:coverage ignore next")).toBeUndefined();
+    expect(detectDirective("line", "// istanbul ignore next")).toBe("istanbul-ignore-next");
+  });
+
   it("matches @ts suppression directives by prefix, like the compiler", () => {
     expect(detectDirective("line", "// @ts-ignoreTODO fix later")).toBe("@ts-ignore");
     expect(detectDirective("block", "/* note\n@ts-expect-errorfoo */")).toBe("@ts-expect-error");

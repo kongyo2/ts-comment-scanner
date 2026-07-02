@@ -154,6 +154,14 @@ describe("scanComments", () => {
     expect(late[0]?.directive).toBeUndefined();
   });
 
+  it("treats Deno file-wide ignore directives as directives only in the header", () => {
+    const early = scanComments("// deno-lint-ignore-file\nconst x = 1;");
+    const late = scanComments("const x = 1;\n// deno-lint-ignore-file");
+
+    expect(early[0]?.directive).toBe("deno-lint-ignore-file");
+    expect(late[0]?.directive).toBeUndefined();
+  });
+
   it("treats test-environment pragmas as directives only in the file header", () => {
     // Assembled at runtime so vitest's own docblock detection ignores this file.
     const envPragma = ["@vitest", "environment"].join("-");

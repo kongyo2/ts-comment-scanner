@@ -27,14 +27,19 @@ const RULES: DirectiveRule[] = [
   { pattern: /^prettier-ignore(?:-start|-end)?\b/ },
   // Coverage tools. The mode is part of the name so that consumers can tell
   // next-statement pragmas (`next`, `if`, ...) from file/range ones (`file`,
-  // `start`, `stop`).
+  // `start`, `stop`). Istanbul hints work in either comment kind; the V8-based
+  // tools (c8, v8, node:coverage) only document and parse block comments.
   { pattern: /^istanbul\s+ignore\s+([a-z]+)/, name: (match) => `istanbul-ignore-${match[1]}` },
   { pattern: /^istanbul\s+ignore\b/, name: "istanbul-ignore" },
-  { pattern: /^c8\s+ignore\s+([a-z]+)/, name: (match) => `c8-ignore-${match[1]}` },
-  { pattern: /^c8\s+ignore\b/, name: "c8-ignore" },
-  { pattern: /^v8\s+ignore\s+([a-z]+)/, name: (match) => `v8-ignore-${match[1]}` },
-  { pattern: /^v8\s+ignore\b/, name: "v8-ignore" },
-  { pattern: /^node:coverage\s+(disable|enable|ignore)\b/, name: (match) => `node:coverage-${match[1]}` },
+  { pattern: /^c8\s+ignore\s+([a-z]+)/, name: (match) => `c8-ignore-${match[1]}`, blockOnly: true },
+  { pattern: /^c8\s+ignore\b/, name: "c8-ignore", blockOnly: true },
+  { pattern: /^v8\s+ignore\s+([a-z]+)/, name: (match) => `v8-ignore-${match[1]}`, blockOnly: true },
+  { pattern: /^v8\s+ignore\b/, name: "v8-ignore", blockOnly: true },
+  {
+    pattern: /^node:coverage\s+(disable|enable|ignore)\b/,
+    name: (match) => `node:coverage-${match[1]}`,
+    blockOnly: true,
+  },
   // Bundlers
   { pattern: /^webpack[A-Z][A-Za-z]*\s*:/, name: "webpack-magic-comment" },
   { pattern: /^@vite-ignore\b/ },
