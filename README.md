@@ -1,5 +1,12 @@
 # ts-comment-scanner
 
+[![npm version](https://img.shields.io/npm/v/@kongyo2/ts-comment-scanner.svg)](https://www.npmjs.com/package/@kongyo2/ts-comment-scanner)
+[![npm downloads](https://img.shields.io/npm/dm/@kongyo2/ts-comment-scanner.svg)](https://www.npmjs.com/package/@kongyo2/ts-comment-scanner)
+[![CI](https://github.com/kongyo2/ts-comment-scanner/actions/workflows/ci.yml/badge.svg)](https://github.com/kongyo2/ts-comment-scanner/actions/workflows/ci.yml)
+[![node](https://img.shields.io/node/v/@kongyo2/ts-comment-scanner.svg)](https://nodejs.org)
+[![install size](https://packagephobia.com/badge?p=@kongyo2/ts-comment-scanner)](https://packagephobia.com/result?p=@kongyo2/ts-comment-scanner)
+[![license](https://img.shields.io/npm/l/@kongyo2/ts-comment-scanner.svg)](./LICENSE)
+
 TypeScript プロジェクト内のコメントを検出・一覧・集計し、安全に削除もできる CLI / ライブラリです。TypeScript の AST を使って解析するため、文字列・テンプレートリテラル・正規表現・JSX テキストを誤検出しません。
 
 ## 特徴
