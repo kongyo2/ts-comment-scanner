@@ -42,10 +42,11 @@ const RULES: DirectiveRule[] = [
   { pattern: /^biome-ignore(?:-all|-start|-end)?\b/ },
   // Deno
   { pattern: /^deno-(?:lint-ignore(?:-file)?|fmt-ignore(?:-file)?|coverage-ignore(?:-file|-start|-stop)?)\b/ },
-  // Prettier
-  { pattern: /^prettier-ignore(?:-start|-end)?\b/ },
-  // oxfmt (oxc's formatter; suppresses formatting of the next node, like prettier-ignore)
-  { pattern: /^oxfmt-ignore\b/ },
+  // Formatter suppressions (prettier, and oxfmt which mirrors it). These are
+  // exact-name markers, so hyphenated lookalikes (`oxfmt-ignore-more`) stay
+  // ordinary; `\b` would accept them because it treats `-` as a boundary.
+  { pattern: /^prettier-ignore(?:-start|-end)?(?=\s|$)/ },
+  { pattern: /^oxfmt-ignore(?=\s|$)/ },
   // Coverage tools. The mode is part of the name so that consumers can tell
   // next-statement pragmas (`next`, `if`, ...) from file/range ones (`file`,
   // `start`, `stop`). Istanbul hints work in either comment kind; the V8-based

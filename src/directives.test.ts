@@ -62,6 +62,12 @@ describe("detectDirective", () => {
     expect(detectDirective("line", "// oxfmt-ignores nothing")).toBeUndefined();
   });
 
+  it("rejects hyphenated lookalikes of the formatter suppressions", () => {
+    expect(detectDirective("line", "// oxfmt-ignore-more")).toBeUndefined();
+    expect(detectDirective("line", "// prettier-ignore-more")).toBeUndefined();
+    expect(detectDirective("line", "// prettier-ignore-start")).toBe("prettier-ignore-start");
+  });
+
   it("detects block-form eslint directives", () => {
     expect(detectDirective("block", "/* eslint-disable no-console */")).toBe("eslint-disable");
     expect(detectDirective("block", '/* eslint eqeqeq: "error" */')).toBe("eslint");

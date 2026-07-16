@@ -287,6 +287,12 @@ describe("removeComments", () => {
 
     const bareCr = "// oxfmt-ignore\r// shielded\rconst x = 1;\r";
     expect(removeComments(bareCr).code).toBe(bareCr);
+
+    const paragraphSeparator = "// oxfmt-ignore\u2029// shielded\u2029const x = 1;\n";
+    expect(removeComments(paragraphSeparator).code).toBe(paragraphSeparator);
+
+    const crlf = "// oxfmt-ignore\r\n// shielded\r\nconst x = 1;\r\n";
+    expect(removeComments(crlf).code).toBe(crlf);
   });
 
   it("shields below node:coverage ignore next but not below its range forms", () => {
