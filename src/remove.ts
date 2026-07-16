@@ -89,6 +89,11 @@ function shieldNextLineDirectives(source: string, removed: Comment[], kept: Comm
   const shieldedLines = new Set<number>();
   for (const comment of [...kept, ...skipped]) {
     if (comment.directive !== undefined && isNextLineDirective(comment.directive)) {
+      // A trailing formatter suppression (`a = [1]; // oxfmt-ignore`) targets
+      // its own line, so it shields nothing below it.
+      if (FORMATTER_SUPPRESSIONS.has(comment.directive) && !occupiesWholeLines(source, comment)) {
+        continue;
+      }
       // Counted pragmas like `c8 ignore next 3` cover several lines.
       for (let offset = 1; offset <= shieldedLineCount(comment.text); offset += 1) {
         shieldedLines.add(comment.endLine + offset);
@@ -111,6 +116,11 @@ function shieldNextLineDirectives(source: string, removed: Comment[], kept: Comm
   return stillRemoved;
 }
 
+// Formatter suppressions only apply to the following node when they stand on
+// their own line; other next-line directives (`@ts-ignore`, ...) target the
+// next line even when they trail code.
+const FORMATTER_SUPPRESSIONS = new Set(["prettier-ignore", "oxfmt-ignore"]);
+
 // File- and range-scoped pragmas (`c8 ignore start`, `istanbul ignore file`,
 // ...) do not target the following line, so they never shield it.
 function isNextLineDirective(name: string): boolean {
@@ -124,6 +134,7 @@ function isNextLineDirective(name: string): boolean {
       "deno-fmt-ignore",
       "deno-coverage-ignore",
       "prettier-ignore",
+      "oxfmt-ignore",
       "istanbul-ignore",
       "istanbul-ignore-next",
       "istanbul-ignore-if",
@@ -143,13 +154,23 @@ function shieldedLineCount(text: string): number {
   return match ? Math.max(1, Number(match[1])) : 1;
 }
 
-/** True when nothing but whitespace shares the comment's first and last lines. */
+/**
+ * True when nothing but whitespace shares the comment's first and last lines.
+ * Lines are delimited by any ECMAScript line terminator, matching how the
+ * scanner numbers them (a lone `\r`, U+2028 and U+2029 count too).
+ */
 function occupiesWholeLines(source: string, comment: Comment): boolean {
-  const lineStart = source.lastIndexOf("\n", comment.start - 1) + 1;
-  if (!isBlank(source.slice(lineStart, comment.start))) return false;
-  const newlineIndex = source.indexOf("\n", comment.end);
-  const lineEnd = newlineIndex === -1 ? source.length : newlineIndex;
-  return isBlank(source.slice(comment.end, lineEnd));
+  for (let index = comment.start - 1; index >= 0; index -= 1) {
+    const char = source[index] as string;
+    if (LINE_TERMINATOR.test(char)) break;
+    if (!isBlank(char)) return false;
+  }
+  for (let index = comment.end; index < source.length; index += 1) {
+    const char = source[index] as string;
+    if (LINE_TERMINATOR.test(char)) break;
+    if (!isBlank(char)) return false;
+  }
+  return true;
 }
 
 const isBlank = (text: string): boolean => /^\s*$/.test(text);

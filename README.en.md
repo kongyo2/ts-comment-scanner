@@ -162,7 +162,7 @@ This is designed for workflows like letting a coding agent do some work and then
 
 ### Detectable directives (excerpt)
 
-`@ts-ignore` `@ts-expect-error` `@ts-nocheck` `@ts-check` / the `eslint-disable` family, `eslint-env`, `/* global */` / `tslint:` / the `oxlint-disable` family / the `biome-ignore` family / the `deno-lint-ignore` family / `prettier-ignore` / `istanbul ignore`, `c8 ignore`, `v8 ignore`, `node:coverage` / webpack magic comments such as `webpackChunkName:` / `@vite-ignore` / `#__PURE__` / `//# sourceMappingURL=`, `//# sourceURL=` / `@jsx`-family pragmas / `@jest-environment`, `@vitest-environment` / `/// <reference>` / `#region`, `#endregion`
+`@ts-ignore` `@ts-expect-error` `@ts-nocheck` `@ts-check` / the `eslint-disable` family, `eslint-env`, `/* global */` / `tslint:`, `jshint`, `jscs:` / the `oxlint-disable` family / the `biome-ignore` family / the `deno-lint-ignore` family / `prettier-ignore`, `oxfmt-ignore` / `istanbul ignore`, `c8 ignore`, `v8 ignore`, `node:coverage` / webpack magic comments such as `webpackChunkName:` and turbopack magic comments such as `turbopackIgnore:` / `@vite-ignore` / `#__PURE__` / `//# sourceMappingURL=`, `//# sourceURL=` / `@jsx`-family pragmas / `@jest-environment`, `@vitest-environment` / `/// <reference>` / `#region`, `#endregion`
 
 ## Using it as a library
 

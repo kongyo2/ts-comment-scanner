@@ -30,9 +30,56 @@ describe("detectDirective", () => {
     ["// biome-ignore lint: reason", "biome-ignore"],
     ["// deno-lint-ignore no-explicit-any", "deno-lint-ignore"],
     ["// prettier-ignore", "prettier-ignore"],
+    ["// oxfmt-ignore", "oxfmt-ignore"],
     ["// tslint:disable-next-line:no-any", "tslint:disable-next-line"],
+    ["// jshint ignore:line", "jshint"],
+    ["// jscs:disable requireCurlyBraces", "jscs:disable"],
+    ["// jscs:enable", "jscs:enable"],
+    ["// jscs: enable", "jscs:enable"],
+    ["// jscs:ignore requireCurlyBraces", "jscs:ignore"],
   ])("detects linter directives: %s", (text, expected) => {
     expect(detectDirective("line", text)).toBe(expected);
+  });
+
+  it("detects block-form jshint option comments", () => {
+    expect(detectDirective("block", "/* jshint esversion: 6 */")).toBe("jshint");
+    expect(detectDirective("block", "/* jshint ignore:start */")).toBe("jshint");
+    expect(detectDirective("block", "/* jshint -W034 */")).toBe("jshint");
+  });
+
+  it("follows label-plus-options directives onto later lines", () => {
+    expect(detectDirective("block", "/* jshint\n   esversion: 6\n*/")).toBe("jshint");
+    expect(detectDirective("block", '/* eslint\n   quotes: ["error", "double"]\n*/')).toBe("eslint");
+    expect(detectDirective("block", "/* globals\n   window, document\n*/")).toBe("globals");
+    // The label still has to open the comment.
+    expect(detectDirective("block", "/* notes\n   jshint esversion: 6\n*/")).toBeUndefined();
+  });
+
+  it("splits joined directives on every JS line terminator", () => {
+    expect(detectDirective("block", "/* jshint\r * esversion: 6\r */")).toBe("jshint");
+    expect(detectDirective("block", "/* jshint\u2028 * esversion: 6\u2028 */")).toBe("jshint");
+    expect(detectDirective("block", "/* jshint\u2029 * esversion: 6\u2029 */")).toBe("jshint");
+  });
+
+  it("keeps bare or prose mentions of the legacy tools ordinary", () => {
+    expect(detectDirective("line", "// jshint")).toBeUndefined();
+    expect(detectDirective("line", "// jshint is no longer used here")).toBeUndefined();
+    expect(detectDirective("line", "// jscs:configuration notes")).toBeUndefined();
+    expect(detectDirective("line", "// oxfmt-ignores nothing")).toBeUndefined();
+  });
+
+  it("rejects hyphenated lookalikes of the formatter suppressions", () => {
+    expect(detectDirective("line", "// oxfmt-ignore-more")).toBeUndefined();
+    expect(detectDirective("line", "// prettier-ignore-more")).toBeUndefined();
+    expect(detectDirective("line", "// prettier-ignore-start")).toBe("prettier-ignore-start");
+  });
+
+  it("requires formatter suppressions to be the whole comment, like their parsers", () => {
+    expect(detectDirective("line", "// oxfmt-ignore is obsolete")).toBeUndefined();
+    expect(detectDirective("line", "// prettier-ignore because it is hand-aligned")).toBeUndefined();
+    expect(detectDirective("block", "/* oxfmt-ignore\nprose */")).toBeUndefined();
+    expect(detectDirective("block", "/* prettier-ignore\nprose */")).toBeUndefined();
+    expect(detectDirective("block", "/* oxfmt-ignore */")).toBe("oxfmt-ignore");
   });
 
   it("detects block-form eslint directives", () => {
@@ -83,6 +130,7 @@ describe("detectDirective", () => {
     expect(detectDirective("block", "/* @ts-ignore */")).toBe("@ts-ignore");
     expect(detectDirective("block", "/* note\n@ts-expect-error */")).toBe("@ts-expect-error");
     expect(detectDirective("block", "/* note\n * @ts-ignore */")).toBe("@ts-ignore");
+    expect(detectDirective("block", "/* note\r@ts-ignore */")).toBe("@ts-ignore");
     expect(detectDirective("block", "/* @ts-ignore\nnote */")).toBeUndefined();
   });
 
@@ -103,6 +151,8 @@ describe("detectDirective", () => {
 
   it.each([
     ['/* webpackChunkName: "chunk" */', "webpack-magic-comment"],
+    ["/* turbopackIgnore: true */", "turbopack-magic-comment"],
+    ["/* turbopackOptional: true */", "turbopack-magic-comment"],
     ["/* @vite-ignore */", "@vite-ignore"],
     ["/* #__PURE__ */", "#__PURE__"],
     ["/* @__NO_SIDE_EFFECTS__ */", "@__NO_SIDE_EFFECTS__"],
@@ -155,6 +205,11 @@ describe("detectDirective", () => {
   it("does not report a directive mentioned mid-sentence", () => {
     expect(detectDirective("line", "// remove the @ts-ignore above")).toBeUndefined();
     expect(detectDirective("block", "/* docs mention eslint-disable here */")).toBeUndefined();
+  });
+
+  it("requires the magic-comment key form for turbopack, like webpack", () => {
+    expect(detectDirective("block", "/* turbopack */")).toBeUndefined();
+    expect(detectDirective("line", "// turbopack is fast")).toBeUndefined();
   });
 });
 

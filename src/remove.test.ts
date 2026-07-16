@@ -265,6 +265,46 @@ describe("removeComments", () => {
     expect(removeComments(source).code).toBe(source);
   });
 
+  it("shields below formatter suppressions targeting the next node", () => {
+    const source = "// oxfmt-ignore\n// shielded\nconst matrix = [1, 2, 3];\n";
+
+    expect(removeComments(source).code).toBe(source);
+  });
+
+  it("does not shield below a trailing formatter suppression", () => {
+    const oxfmt = "const a = [1, 2]; // oxfmt-ignore\n// gone\nconst b = 3;\n";
+    expect(removeComments(oxfmt).code).toBe("const a = [1, 2]; // oxfmt-ignore\nconst b = 3;\n");
+
+    const prettier = "const c = [4, 5]; // prettier-ignore\n// gone\nconst d = 6;\n";
+    expect(removeComments(prettier).code).toBe("const c = [4, 5]; // prettier-ignore\nconst d = 6;\n");
+  });
+
+  it("treats every JS line terminator as ending a suppression's line", () => {
+    // With U+2028 or a lone \r as the break, the suppression still stands on
+    // its own line and must shield the comment below it.
+    const lineSeparator = "// oxfmt-ignore\u2028// shielded\u2028const x = 1;\n";
+    expect(removeComments(lineSeparator).code).toBe(lineSeparator);
+
+    const bareCr = "// oxfmt-ignore\r// shielded\rconst x = 1;\r";
+    expect(removeComments(bareCr).code).toBe(bareCr);
+
+    const paragraphSeparator = "// oxfmt-ignore\u2029// shielded\u2029const x = 1;\n";
+    expect(removeComments(paragraphSeparator).code).toBe(paragraphSeparator);
+
+    const crlf = "// oxfmt-ignore\r\n// shielded\r\nconst x = 1;\r\n";
+    expect(removeComments(crlf).code).toBe(crlf);
+  });
+
+  it("excises removable comments intact on exotic line terminators", () => {
+    // Lone-CR / U+2028 / U+2029 sources: the comment range is always spliced
+    // out and the code kept byte-for-byte (guarded by the re-scan check);
+    // only the blank-line/gap tidying stays best-effort on these terminators.
+    expect(removeComments("// gone\rconst b = 2;\r").code).toBe("\rconst b = 2;\r");
+    expect(removeComments("const a = 1; // gone\rconst b = 2;\r").code).toBe("const a = 1; \rconst b = 2;\r");
+    expect(removeComments("// gone\u2028const b = 2;\u2028").code).toBe("\u2028const b = 2;\u2028");
+    expect(removeComments("// gone\u2029const b = 2;\u2029").code).toBe("\u2029const b = 2;\u2029");
+  });
+
   it("shields below node:coverage ignore next but not below its range forms", () => {
     const nextForm = "/* node:coverage ignore next */\n// shielded\nconst a = 1;\n";
     expect(removeComments(nextForm).code).toBe(nextForm);
