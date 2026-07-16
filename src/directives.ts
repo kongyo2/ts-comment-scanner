@@ -17,11 +17,13 @@ const RULES: DirectiveRule[] = [
   { pattern: /^(globals?|exported)\s+\S/, name: (match) => match[1] ?? "global", blockOnly: true },
   // TSLint (legacy)
   { pattern: /^tslint:[a-z-]+/ },
-  // JSHint (legacy): options (`jshint esversion: 6`) and ignore markers
-  // (`jshint ignore:line`, `jshint ignore:start`) share the one prefix.
-  { pattern: /^jshint\s+\S/, name: "jshint" },
-  // JSCS (legacy)
-  { pattern: /^jscs:[a-z-]+/ },
+  // JSHint (legacy): `key: value` options and ignore markers (`jshint
+  // esversion: 6`, `jshint ignore:line`) plus `-W###`/`+W###` warning toggles.
+  // Requiring those shapes keeps prose like `jshint is unused` ordinary.
+  { pattern: /^jshint\s+(?:[A-Za-z$_][\w$]*\s*:|[-+]W\d+\b)/, name: "jshint" },
+  // JSCS (legacy). Spacing after the colon is lenient (`jscs: enable` works),
+  // so the name is normalised to the compact form.
+  { pattern: /^jscs:\s*(disable|enable|ignore)\b/, name: (match) => `jscs:${match[1]}` },
   // oxlint
   { pattern: /^oxlint-(?:disable|enable)(?:-next-line|-line)?\b/ },
   // Biome

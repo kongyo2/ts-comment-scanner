@@ -35,6 +35,8 @@ describe("detectDirective", () => {
     ["// jshint ignore:line", "jshint"],
     ["// jscs:disable requireCurlyBraces", "jscs:disable"],
     ["// jscs:enable", "jscs:enable"],
+    ["// jscs: enable", "jscs:enable"],
+    ["// jscs:ignore requireCurlyBraces", "jscs:ignore"],
   ])("detects linter directives: %s", (text, expected) => {
     expect(detectDirective("line", text)).toBe(expected);
   });
@@ -42,10 +44,13 @@ describe("detectDirective", () => {
   it("detects block-form jshint option comments", () => {
     expect(detectDirective("block", "/* jshint esversion: 6 */")).toBe("jshint");
     expect(detectDirective("block", "/* jshint ignore:start */")).toBe("jshint");
+    expect(detectDirective("block", "/* jshint -W034 */")).toBe("jshint");
   });
 
   it("keeps bare or prose mentions of the legacy tools ordinary", () => {
     expect(detectDirective("line", "// jshint")).toBeUndefined();
+    expect(detectDirective("line", "// jshint is no longer used here")).toBeUndefined();
+    expect(detectDirective("line", "// jscs:configuration notes")).toBeUndefined();
     expect(detectDirective("line", "// oxfmt-ignores nothing")).toBeUndefined();
   });
 

@@ -89,6 +89,11 @@ function shieldNextLineDirectives(source: string, removed: Comment[], kept: Comm
   const shieldedLines = new Set<number>();
   for (const comment of [...kept, ...skipped]) {
     if (comment.directive !== undefined && isNextLineDirective(comment.directive)) {
+      // A trailing formatter suppression (`a = [1]; // oxfmt-ignore`) targets
+      // its own line, so it shields nothing below it.
+      if (FORMATTER_SUPPRESSIONS.has(comment.directive) && !occupiesWholeLines(source, comment)) {
+        continue;
+      }
       // Counted pragmas like `c8 ignore next 3` cover several lines.
       for (let offset = 1; offset <= shieldedLineCount(comment.text); offset += 1) {
         shieldedLines.add(comment.endLine + offset);
@@ -110,6 +115,11 @@ function shieldNextLineDirectives(source: string, removed: Comment[], kept: Comm
   }
   return stillRemoved;
 }
+
+// Formatter suppressions only apply to the following node when they stand on
+// their own line; other next-line directives (`@ts-ignore`, ...) target the
+// next line even when they trail code.
+const FORMATTER_SUPPRESSIONS = new Set(["prettier-ignore", "oxfmt-ignore"]);
 
 // File- and range-scoped pragmas (`c8 ignore start`, `istanbul ignore file`,
 // ...) do not target the following line, so they never shield it.

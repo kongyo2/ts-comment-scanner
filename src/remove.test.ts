@@ -271,6 +271,14 @@ describe("removeComments", () => {
     expect(removeComments(source).code).toBe(source);
   });
 
+  it("does not shield below a trailing formatter suppression", () => {
+    const oxfmt = "const a = [1, 2]; // oxfmt-ignore\n// gone\nconst b = 3;\n";
+    expect(removeComments(oxfmt).code).toBe("const a = [1, 2]; // oxfmt-ignore\nconst b = 3;\n");
+
+    const prettier = "const c = [4, 5]; // prettier-ignore\n// gone\nconst d = 6;\n";
+    expect(removeComments(prettier).code).toBe("const c = [4, 5]; // prettier-ignore\nconst d = 6;\n");
+  });
+
   it("shields below node:coverage ignore next but not below its range forms", () => {
     const nextForm = "/* node:coverage ignore next */\n// shielded\nconst a = 1;\n";
     expect(removeComments(nextForm).code).toBe(nextForm);
