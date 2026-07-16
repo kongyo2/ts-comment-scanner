@@ -42,11 +42,12 @@ const RULES: DirectiveRule[] = [
   { pattern: /^biome-ignore(?:-all|-start|-end)?\b/ },
   // Deno
   { pattern: /^deno-(?:lint-ignore(?:-file)?|fmt-ignore(?:-file)?|coverage-ignore(?:-file|-start|-stop)?)\b/ },
-  // Formatter suppressions (prettier, and oxfmt which mirrors it). These are
-  // exact-name markers, so hyphenated lookalikes (`oxfmt-ignore-more`) stay
-  // ordinary; `\b` would accept them because it treats `-` as a boundary.
-  { pattern: /^prettier-ignore(?:-start|-end)?(?=\s|$)/ },
-  { pattern: /^oxfmt-ignore(?=\s|$)/ },
+  // Formatter suppressions (prettier, and oxfmt which mirrors it). Both
+  // parsers compare the exact trimmed comment body, so the marker must be the
+  // whole line: hyphenated lookalikes (`oxfmt-ignore-more`) and prose
+  // (`oxfmt-ignore is obsolete`) stay ordinary.
+  { pattern: /^prettier-ignore(?:-start|-end)?$/ },
+  { pattern: /^oxfmt-ignore$/ },
   // Coverage tools. The mode is part of the name so that consumers can tell
   // next-statement pragmas (`next`, `if`, ...) from file/range ones (`file`,
   // `start`, `stop`). Istanbul hints work in either comment kind; the V8-based
@@ -138,6 +139,10 @@ export function isLegalComment(text: string): boolean {
   return /@(?:license|preserve|copyright)\b/i.test(text);
 }
 
+// Every ECMAScript line terminator, the way the scanner breaks lines: CRLF as
+// one break, plus lone LF / CR and the U+2028/U+2029 separators.
+const LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/;
+
 /**
  * Non-empty content lines of the comment, with comment markers stripped.
  * For line comments only the `//` marker itself is removed: extra slashes or
@@ -147,7 +152,7 @@ export function isLegalComment(text: string): boolean {
 function contentLines(kind: CommentKind, text: string): string[] {
   const inner = kind === "line" ? text.replace(/^\/\//, "") : text.replace(/^\/\*+/, "").replace(/\*+\/\s*$/, "");
   const lines: string[] = [];
-  for (const line of inner.split(/\r?\n/)) {
+  for (const line of inner.split(LINE_BREAK)) {
     const stripped = (kind === "block" ? line.replace(/^\s*\*+\s*/, "") : line).trim();
     if (stripped !== "") lines.push(stripped);
   }
@@ -157,7 +162,7 @@ function contentLines(kind: CommentKind, text: string): string[] {
 /** Last non-blank line of the comment, with the closing comment marker stripped. */
 function lastContentLine(text: string): string {
   const inner = text.replace(/\*+\/\s*$/, "");
-  const lines = inner.split(/\r?\n/);
+  const lines = inner.split(LINE_BREAK);
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const line = lines[index] ?? "";
     if (line.trim() !== "") return line;

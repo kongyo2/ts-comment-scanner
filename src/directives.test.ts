@@ -55,6 +55,12 @@ describe("detectDirective", () => {
     expect(detectDirective("block", "/* notes\n   jshint esversion: 6\n*/")).toBeUndefined();
   });
 
+  it("splits joined directives on every JS line terminator", () => {
+    expect(detectDirective("block", "/* jshint\r * esversion: 6\r */")).toBe("jshint");
+    expect(detectDirective("block", "/* jshint\u2028 * esversion: 6\u2028 */")).toBe("jshint");
+    expect(detectDirective("block", "/* jshint\u2029 * esversion: 6\u2029 */")).toBe("jshint");
+  });
+
   it("keeps bare or prose mentions of the legacy tools ordinary", () => {
     expect(detectDirective("line", "// jshint")).toBeUndefined();
     expect(detectDirective("line", "// jshint is no longer used here")).toBeUndefined();
@@ -66,6 +72,12 @@ describe("detectDirective", () => {
     expect(detectDirective("line", "// oxfmt-ignore-more")).toBeUndefined();
     expect(detectDirective("line", "// prettier-ignore-more")).toBeUndefined();
     expect(detectDirective("line", "// prettier-ignore-start")).toBe("prettier-ignore-start");
+  });
+
+  it("requires formatter suppressions to be the whole comment, like their parsers", () => {
+    expect(detectDirective("line", "// oxfmt-ignore is obsolete")).toBeUndefined();
+    expect(detectDirective("line", "// prettier-ignore because it is hand-aligned")).toBeUndefined();
+    expect(detectDirective("block", "/* oxfmt-ignore */")).toBe("oxfmt-ignore");
   });
 
   it("detects block-form eslint directives", () => {
@@ -116,6 +128,7 @@ describe("detectDirective", () => {
     expect(detectDirective("block", "/* @ts-ignore */")).toBe("@ts-ignore");
     expect(detectDirective("block", "/* note\n@ts-expect-error */")).toBe("@ts-expect-error");
     expect(detectDirective("block", "/* note\n * @ts-ignore */")).toBe("@ts-ignore");
+    expect(detectDirective("block", "/* note\r@ts-ignore */")).toBe("@ts-ignore");
     expect(detectDirective("block", "/* @ts-ignore\nnote */")).toBeUndefined();
   });
 
