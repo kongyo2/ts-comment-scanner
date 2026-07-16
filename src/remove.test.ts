@@ -279,6 +279,16 @@ describe("removeComments", () => {
     expect(removeComments(prettier).code).toBe("const c = [4, 5]; // prettier-ignore\nconst d = 6;\n");
   });
 
+  it("treats every JS line terminator as ending a suppression's line", () => {
+    // With U+2028 or a lone \r as the break, the suppression still stands on
+    // its own line and must shield the comment below it.
+    const lineSeparator = "// oxfmt-ignore\u2028// shielded\u2028const x = 1;\n";
+    expect(removeComments(lineSeparator).code).toBe(lineSeparator);
+
+    const bareCr = "// oxfmt-ignore\r// shielded\rconst x = 1;\r";
+    expect(removeComments(bareCr).code).toBe(bareCr);
+  });
+
   it("shields below node:coverage ignore next but not below its range forms", () => {
     const nextForm = "/* node:coverage ignore next */\n// shielded\nconst a = 1;\n";
     expect(removeComments(nextForm).code).toBe(nextForm);

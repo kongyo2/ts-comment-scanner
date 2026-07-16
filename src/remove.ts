@@ -154,13 +154,23 @@ function shieldedLineCount(text: string): number {
   return match ? Math.max(1, Number(match[1])) : 1;
 }
 
-/** True when nothing but whitespace shares the comment's first and last lines. */
+/**
+ * True when nothing but whitespace shares the comment's first and last lines.
+ * Lines are delimited by any ECMAScript line terminator, matching how the
+ * scanner numbers them (a lone `\r`, U+2028 and U+2029 count too).
+ */
 function occupiesWholeLines(source: string, comment: Comment): boolean {
-  const lineStart = source.lastIndexOf("\n", comment.start - 1) + 1;
-  if (!isBlank(source.slice(lineStart, comment.start))) return false;
-  const newlineIndex = source.indexOf("\n", comment.end);
-  const lineEnd = newlineIndex === -1 ? source.length : newlineIndex;
-  return isBlank(source.slice(comment.end, lineEnd));
+  for (let index = comment.start - 1; index >= 0; index -= 1) {
+    const char = source[index] as string;
+    if (LINE_TERMINATOR.test(char)) break;
+    if (!isBlank(char)) return false;
+  }
+  for (let index = comment.end; index < source.length; index += 1) {
+    const char = source[index] as string;
+    if (LINE_TERMINATOR.test(char)) break;
+    if (!isBlank(char)) return false;
+  }
+  return true;
 }
 
 const isBlank = (text: string): boolean => /^\s*$/.test(text);

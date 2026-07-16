@@ -7,23 +7,35 @@ interface DirectiveRule {
   blockOnly?: boolean;
   /** Match any content line, not just the first (for docblock pragmas). */
   anyLine?: boolean;
+  /**
+   * Match the content lines joined into one, for label-plus-options directives
+   * whose options may continue on later lines, like a block comment opening
+   * with `jshint` and `esversion: 6` below it. The label still has to open
+   * the comment.
+   */
+  joinLines?: boolean;
 }
 
 const RULES: DirectiveRule[] = [
   // ESLint
   { pattern: /^eslint-(?:disable|enable)(?:-next-line|-line)?\b/ },
   { pattern: /^eslint-env\b/ },
-  { pattern: /^eslint\s+\S/, name: "eslint", blockOnly: true },
-  { pattern: /^(globals?|exported)\s+\S/, name: (match) => match[1] ?? "global", blockOnly: true },
+  { pattern: /^eslint\s+\S/, name: "eslint", blockOnly: true, joinLines: true },
+  {
+    pattern: /^(globals?|exported)\s+\S/,
+    name: (match) => match[1] ?? "global",
+    blockOnly: true,
+    joinLines: true,
+  },
   // TSLint (legacy)
   { pattern: /^tslint:[a-z-]+/ },
   // JSHint (legacy): `key: value` options and ignore markers (`jshint
   // esversion: 6`, `jshint ignore:line`) plus `-W###`/`+W###` warning toggles.
   // Requiring those shapes keeps prose like `jshint is unused` ordinary.
-  { pattern: /^jshint\s+(?:[A-Za-z$_][\w$]*\s*:|[-+]W\d+\b)/, name: "jshint" },
+  { pattern: /^jshint\s+(?:[A-Za-z$_][\w$]*\s*:|[-+]W\d+\b)/, name: "jshint", joinLines: true },
   // JSCS (legacy). Spacing after the colon is lenient (`jscs: enable` works),
   // so the name is normalised to the compact form.
-  { pattern: /^jscs:\s*(disable|enable|ignore)\b/, name: (match) => `jscs:${match[1]}` },
+  { pattern: /^jscs:\s*(disable|enable|ignore)\b/, name: (match) => `jscs:${match[1]}`, joinLines: true },
   // oxlint
   { pattern: /^oxlint-(?:disable|enable)(?:-next-line|-line)?\b/ },
   // Biome
@@ -104,7 +116,7 @@ export function detectDirective(kind: CommentKind, text: string): string | undef
   const lines = contentLines(kind, text);
   for (const rule of RULES) {
     if (rule.blockOnly === true && kind !== "block") continue;
-    const candidates = rule.anyLine === true ? lines : lines.slice(0, 1);
+    const candidates = rule.anyLine === true ? lines : rule.joinLines === true ? [lines.join(" ")] : lines.slice(0, 1);
     for (const line of candidates) {
       const match = rule.pattern.exec(line);
       if (!match) continue;

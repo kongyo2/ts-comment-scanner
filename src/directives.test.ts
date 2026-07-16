@@ -47,6 +47,14 @@ describe("detectDirective", () => {
     expect(detectDirective("block", "/* jshint -W034 */")).toBe("jshint");
   });
 
+  it("follows label-plus-options directives onto later lines", () => {
+    expect(detectDirective("block", "/* jshint\n   esversion: 6\n*/")).toBe("jshint");
+    expect(detectDirective("block", '/* eslint\n   quotes: ["error", "double"]\n*/')).toBe("eslint");
+    expect(detectDirective("block", "/* globals\n   window, document\n*/")).toBe("globals");
+    // The label still has to open the comment.
+    expect(detectDirective("block", "/* notes\n   jshint esversion: 6\n*/")).toBeUndefined();
+  });
+
   it("keeps bare or prose mentions of the legacy tools ordinary", () => {
     expect(detectDirective("line", "// jshint")).toBeUndefined();
     expect(detectDirective("line", "// jshint is no longer used here")).toBeUndefined();
