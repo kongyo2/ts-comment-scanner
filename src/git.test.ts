@@ -114,6 +114,17 @@ describe("changedFiles", () => {
     expect(await changedFiles("HEAD~1..HEAD", dir)).toEqual([join(dir, "a.ts")]);
   });
 
+  it("treats HEAD^! as a commit comparison and adds no untracked files", async () => {
+    await initRepo();
+    await writeFile(join(dir, "a.ts"), "// a\n");
+    await commitAll("base");
+    await writeFile(join(dir, "a.ts"), "// a2\n");
+    await commitAll("change");
+    await writeFile(join(dir, "b.ts"), "// untracked\n");
+
+    expect(await changedFiles("HEAD^!", dir)).toEqual([join(dir, "a.ts")]);
+  });
+
   it("honours .gitignore for untracked files", async () => {
     await initRepo();
     await writeFile(join(dir, ".gitignore"), "ignored.ts\n");

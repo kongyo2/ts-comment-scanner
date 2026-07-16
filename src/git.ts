@@ -24,14 +24,25 @@ export async function changedFiles(range: string, cwd: string = process.cwd()): 
   const top = (await git(["rev-parse", "--show-toplevel"], cwd)).replace(/\r?\n$/, "");
   const root = await realpath(top);
   const entries = split(await git(["diff", "--name-only", "-z", "--no-renames", "--diff-filter=d", range, "--"], cwd));
-  // A single revision (no ".." operator — refnames cannot contain "..")
-  // compares against the working tree, where brand-new files are changes too,
-  // yet `git diff` never lists them. Runs at the root so the whole repository
-  // is covered regardless of cwd; .gitignore still applies.
-  if (!range.includes("..")) {
+  // A working-tree comparison treats brand-new files as changes too, yet
+  // `git diff` never lists them. Runs at the root so the whole repository is
+  // covered regardless of cwd; .gitignore still applies.
+  if (await comparesWorkingTree(range, cwd)) {
     entries.push(...split(await git(["ls-files", "--others", "--exclude-standard", "--full-name", "-z"], root)));
   }
   return [...new Set(entries)].map((entry) => resolve(root, entry));
+}
+
+/**
+ * `git diff` compares the working tree only against a lone positive revision;
+ * every other shape (`a..b`, `a...b`, `HEAD^!`, multi-parent `HEAD^@`)
+ * compares commits. String sniffing cannot tell these apart — `HEAD^!`
+ * contains no ".." yet excludes the working tree — so ask rev-parse for the
+ * expansion and check for exactly one non-negated revision.
+ */
+async function comparesWorkingTree(range: string, cwd: string): Promise<boolean> {
+  const revs = (await git(["rev-parse", "--revs-only", range, "--"], cwd)).split("\n").filter((line) => line !== "");
+  return revs.length === 1 && !(revs[0] as string).startsWith("^");
 }
 
 function split(listing: string): string[] {
