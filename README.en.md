@@ -145,7 +145,7 @@ Removal is driven by the AST's comment ranges, so it never touches strings or co
 
 ### Scanning only changed files (`--diff`)
 
-With `--diff <range>`, scanning and removal are limited to the files git reports as changed. The range is exactly what `git diff` accepts as revisions: a single revision compares the working tree against it, while `a..b` / `a...b` compare commits.
+With `--diff <range>`, scanning and removal are limited to the files git reports as changed. The range is exactly what `git diff` accepts as revisions: a single revision compares the working tree against it (untracked new files included, honouring `.gitignore`), while `a..b` / `a...b` compare two commits.
 
 ```bash
 # Scan only files with uncommitted changes

@@ -9,21 +9,33 @@ const execFileAsync = promisify(execFile);
 const MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 
 /**
- * Absolute paths (symlinks resolved) of the working-tree files touched in a
- * git revision range. The range is anything `git diff` accepts as revisions:
- * a single commit-ish compares the working tree against it (`HEAD` covers all
- * uncommitted work), while `a..b` and `a...b` compare commits. Files deleted
- * in the range are omitted because they have no working-tree content left,
- * and renames are reported at their new path.
+ * Absolute paths of the working-tree files touched in a git revision range.
+ * The range is anything `git diff` accepts as revisions: a single commit-ish
+ * compares the working tree against it (`HEAD` covers all uncommitted work,
+ * untracked files included), while `a..b` and `a...b` compare commits. Files
+ * deleted in the range are omitted because they have no working-tree content
+ * left, and renames are reported at their new path.
  */
 export async function changedFiles(range: string, cwd: string = process.cwd()): Promise<string[]> {
+  if (range === "" || range.startsWith("-")) {
+    // Never let the range reach git where it could parse as an option (--output=...).
+    throw new Error(`invalid git revision range: ${JSON.stringify(range)}`);
+  }
   const top = (await git(["rev-parse", "--show-toplevel"], cwd)).replace(/\r?\n$/, "");
   const root = await realpath(top);
-  const listing = await git(["diff", "--name-only", "-z", "--no-renames", "--diff-filter=d", range, "--"], cwd);
-  return listing
-    .split("\0")
-    .filter((entry) => entry !== "")
-    .map((entry) => resolve(root, entry));
+  const entries = split(await git(["diff", "--name-only", "-z", "--no-renames", "--diff-filter=d", range, "--"], cwd));
+  // A single revision (no ".." operator — refnames cannot contain "..")
+  // compares against the working tree, where brand-new files are changes too,
+  // yet `git diff` never lists them. Runs at the root so the whole repository
+  // is covered regardless of cwd; .gitignore still applies.
+  if (!range.includes("..")) {
+    entries.push(...split(await git(["ls-files", "--others", "--exclude-standard", "--full-name", "-z"], root)));
+  }
+  return [...new Set(entries)].map((entry) => resolve(root, entry));
+}
+
+function split(listing: string): string[] {
+  return listing.split("\0").filter((entry) => entry !== "");
 }
 
 async function git(args: string[], cwd: string): Promise<string> {

@@ -1,6 +1,6 @@
 import { realpathSync } from "node:fs";
 import { readFile, stat, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs, UsageError, type CliOptions, type DirectiveMode } from "./args.js";
 import { collectFiles, isJsxFile, mapLimit, scanFile, FILE_CONCURRENCY, type CollectOptions } from "./files.js";
 import { changedFiles } from "./git.js";
@@ -47,9 +47,9 @@ skipping node_modules and .git. Removal keeps directives and license headers
 unless explicitly requested, so builds and linters keep working.
 
 --diff narrows any scan or removal to files changed in git: a single revision
-compares the working tree against it (HEAD covers all uncommitted work), a
-range covers the commits in between (main..HEAD). Handy for cleaning up only
-the files a coding agent just touched.
+compares the working tree against it (HEAD covers all uncommitted work,
+untracked files included), while main..HEAD compares two commits. Handy for
+cleaning up only the files a coding agent just touched.
 
 Exit codes: 0 success, 1 comments reported with --fail-on-comment, 2 error.
 
@@ -115,13 +115,15 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
  */
 async function collectTargets(options: CliOptions, collectOptions: CollectOptions): Promise<string[]> {
   const files = await collectFiles(options.paths, collectOptions);
-  if (options.diff === undefined || files.length === 0) return files;
+  if (options.diff === undefined) return files;
 
   const first = resolve(options.paths[0] as string);
   const anchor = (await stat(first)).isDirectory() ? first : dirname(first);
   const changed = new Set(await changedFiles(options.diff, anchor));
-  // Both sides are realpath'd so spellings through symlinks still compare equal.
-  return files.filter((file) => changed.has(realpathSync(file)));
+  // Realpath only the directory part: spellings through symlinked directories
+  // then compare equal, while a tracked symlink still matches the path git
+  // reports it at instead of dereferencing to its target.
+  return files.filter((file) => changed.has(join(realpathSync(dirname(file)), basename(file))));
 }
 
 /** True when -h/--help appears before any `--` separator. */

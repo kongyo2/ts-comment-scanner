@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -87,8 +87,58 @@ describe("changedFiles", () => {
     await writeFile(join(dir, "sub", "c.ts"), "// c\n");
     await commitAll("base");
     await writeFile(join(dir, "sub", "c.ts"), "// c2\n");
+    await writeFile(join(dir, "u.ts"), "// untracked at the root\n");
 
-    expect(await changedFiles("HEAD", join(dir, "sub"))).toEqual([join(dir, "sub", "c.ts")]);
+    const files = await changedFiles("HEAD", join(dir, "sub"));
+
+    expect(files.sort()).toEqual([join(dir, "sub", "c.ts"), join(dir, "u.ts")]);
+  });
+
+  it("includes untracked files when comparing against the working tree", async () => {
+    await initRepo();
+    await writeFile(join(dir, "a.ts"), "// a\n");
+    await commitAll("base");
+    await writeFile(join(dir, "b.ts"), "// new\n");
+
+    expect(await changedFiles("HEAD", dir)).toEqual([join(dir, "b.ts")]);
+  });
+
+  it("excludes untracked files from commit-to-commit ranges", async () => {
+    await initRepo();
+    await writeFile(join(dir, "a.ts"), "// a\n");
+    await commitAll("base");
+    await writeFile(join(dir, "a.ts"), "// a2\n");
+    await commitAll("change");
+    await writeFile(join(dir, "b.ts"), "// new\n");
+
+    expect(await changedFiles("HEAD~1..HEAD", dir)).toEqual([join(dir, "a.ts")]);
+  });
+
+  it("honours .gitignore for untracked files", async () => {
+    await initRepo();
+    await writeFile(join(dir, ".gitignore"), "ignored.ts\n");
+    await commitAll("base");
+    await writeFile(join(dir, "ignored.ts"), "// generated\n");
+    await writeFile(join(dir, "b.ts"), "// new\n");
+
+    expect(await changedFiles("HEAD", dir)).toEqual([join(dir, "b.ts")]);
+  });
+
+  it("reports a changed symlink at its own path, not its target's", async () => {
+    await initRepo();
+    await writeFile(join(dir, "one.ts"), "// one\n");
+    await writeFile(join(dir, "two.ts"), "// two\n");
+    await symlink("one.ts", join(dir, "link.ts"));
+    await commitAll("base");
+    await rm(join(dir, "link.ts"));
+    await symlink("two.ts", join(dir, "link.ts"));
+
+    expect(await changedFiles("HEAD", dir)).toEqual([join(dir, "link.ts")]);
+  });
+
+  it("rejects a range that could be parsed as a git option", async () => {
+    await expect(changedFiles("--output=/tmp/x", dir)).rejects.toThrow(/invalid git revision range/);
+    await expect(changedFiles("", dir)).rejects.toThrow(/invalid git revision range/);
   });
 
   it("rejects an unknown revision with git's error message", async () => {

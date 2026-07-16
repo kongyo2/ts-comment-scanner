@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, writeFile, rm, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile, rm, readFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -317,6 +317,55 @@ describe("run", () => {
 
     expect(code).toBe(2);
     expect(err()).toContain("not a git repository");
+  });
+
+  it("includes files created but never committed with --diff HEAD", async () => {
+    await initRepo();
+    await writeFile(join(dir, "old.ts"), "// old\n");
+    await commitAll("base");
+    await writeFile(join(dir, "fresh.ts"), "// fresh\n");
+    const { io, out } = capture();
+
+    const code = await run(["--diff", "HEAD", dir], io);
+
+    expect(code).toBe(0);
+    expect(out()).toContain("fresh.ts:1:1");
+    expect(out()).not.toContain("old.ts");
+  });
+
+  it("returns 2 for an invalid --diff revision even when no files were collected", async () => {
+    await initRepo();
+    const { io, err } = capture();
+
+    const code = await run(["--diff", "no-such-ref", dir], io);
+
+    expect(code).toBe(2);
+    expect(err()).toContain("git diff failed");
+  });
+
+  it("returns 2 with --diff in an empty directory outside a git repository", async () => {
+    const { io, err } = capture();
+
+    const code = await run(["--diff", "HEAD", dir], io);
+
+    expect(code).toBe(2);
+    expect(err()).toContain("not a git repository");
+  });
+
+  it("keeps a re-pointed symlink in the --diff scope when passed explicitly", async () => {
+    await initRepo();
+    await writeFile(join(dir, "one.ts"), "// one\n");
+    await writeFile(join(dir, "two.ts"), "// two\n");
+    await symlink("one.ts", join(dir, "link.ts"));
+    await commitAll("base");
+    await rm(join(dir, "link.ts"));
+    await symlink("two.ts", join(dir, "link.ts"));
+    const { io, out } = capture();
+
+    const code = await run(["--diff", "HEAD", join(dir, "link.ts")], io);
+
+    expect(code).toBe(0);
+    expect(out()).toContain(`${join(dir, "link.ts")}:1:1 [line] // two`);
   });
 
   it("anchors --diff on the input path, not on a nested repository's files", async () => {
