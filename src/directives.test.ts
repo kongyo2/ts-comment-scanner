@@ -77,6 +77,8 @@ describe("detectDirective", () => {
   it("requires formatter suppressions to be the whole comment, like their parsers", () => {
     expect(detectDirective("line", "// oxfmt-ignore is obsolete")).toBeUndefined();
     expect(detectDirective("line", "// prettier-ignore because it is hand-aligned")).toBeUndefined();
+    expect(detectDirective("block", "/* oxfmt-ignore\nprose */")).toBeUndefined();
+    expect(detectDirective("block", "/* prettier-ignore\nprose */")).toBeUndefined();
     expect(detectDirective("block", "/* oxfmt-ignore */")).toBe("oxfmt-ignore");
   });
 

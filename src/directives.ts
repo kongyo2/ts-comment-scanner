@@ -44,10 +44,10 @@ const RULES: DirectiveRule[] = [
   { pattern: /^deno-(?:lint-ignore(?:-file)?|fmt-ignore(?:-file)?|coverage-ignore(?:-file|-start|-stop)?)\b/ },
   // Formatter suppressions (prettier, and oxfmt which mirrors it). Both
   // parsers compare the exact trimmed comment body, so the marker must be the
-  // whole line: hyphenated lookalikes (`oxfmt-ignore-more`) and prose
-  // (`oxfmt-ignore is obsolete`) stay ordinary.
-  { pattern: /^prettier-ignore(?:-start|-end)?$/ },
-  { pattern: /^oxfmt-ignore$/ },
+  // whole comment (joinLines makes `$` span every line): hyphenated
+  // lookalikes (`oxfmt-ignore-more`) and prose stay ordinary.
+  { pattern: /^prettier-ignore(?:-start|-end)?$/, joinLines: true },
+  { pattern: /^oxfmt-ignore$/, joinLines: true },
   // Coverage tools. The mode is part of the name so that consumers can tell
   // next-statement pragmas (`next`, `if`, ...) from file/range ones (`file`,
   // `start`, `stop`). Istanbul hints work in either comment kind; the V8-based
