@@ -6,6 +6,7 @@ export interface CliOptions {
   format: OutputFormat;
   ignore: string[];
   extensions: string[] | undefined;
+  diff: string | undefined;
   directives: DirectiveMode;
   failOnComment: boolean;
   remove: boolean;
@@ -32,6 +33,7 @@ export function parseArgs(argv: string[]): CliOptions {
   const ignore: string[] = [];
   const extensions: string[] = [];
   let format: OutputFormat = "text";
+  let diff: string | undefined;
   let directives: DirectiveMode = "include";
   let failOnComment = false;
   let remove = false;
@@ -91,6 +93,14 @@ export function parseArgs(argv: string[]): CliOptions {
           throw new UsageError("option --ext requires at least one extension");
         }
         extensions.push(...parsed);
+        break;
+      }
+      case "--diff": {
+        const value = readValue();
+        if (value === "" || value.startsWith("-")) {
+          throw new UsageError("option --diff requires a git revision range (e.g. HEAD or main..HEAD)");
+        }
+        diff = value;
         break;
       }
       case "--skip-directives":
@@ -167,6 +177,7 @@ export function parseArgs(argv: string[]): CliOptions {
     format,
     ignore,
     extensions: extensions.length > 0 ? extensions : undefined,
+    diff,
     directives,
     failOnComment,
     remove,

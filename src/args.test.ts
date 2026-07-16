@@ -8,6 +8,7 @@ describe("parseArgs", () => {
       format: "text",
       ignore: [],
       extensions: undefined,
+      diff: undefined,
       directives: "include",
       failOnComment: false,
       remove: false,
@@ -62,6 +63,17 @@ describe("parseArgs", () => {
   it("rejects an --ext value that contains no extensions", () => {
     expect(() => parseArgs(["--ext", ""])).toThrow(/at least one extension/);
     expect(() => parseArgs(["--ext", " , "])).toThrow(UsageError);
+  });
+
+  it("accepts --diff with a separate or inline value", () => {
+    expect(parseArgs(["--diff", "main..HEAD"]).diff).toBe("main..HEAD");
+    expect(parseArgs(["--diff=HEAD"]).diff).toBe("HEAD");
+  });
+
+  it("rejects an empty or flag-like --diff value", () => {
+    expect(() => parseArgs(["--diff", ""])).toThrow(/revision range/);
+    expect(() => parseArgs(["--diff", "--remove"])).toThrow(/revision range/);
+    expect(() => parseArgs(["--diff"])).toThrow(/requires a value/);
   });
 
   it("maps directive flags onto the directives mode", () => {
