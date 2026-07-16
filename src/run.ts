@@ -1,6 +1,9 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { readFile, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs, UsageError, type CliOptions, type DirectiveMode } from "./args.js";
-import { collectFiles, isJsxFile, mapLimit, scanPaths, FILE_CONCURRENCY, type CollectOptions } from "./files.js";
+import { collectFiles, isJsxFile, mapLimit, scanFile, FILE_CONCURRENCY, type CollectOptions } from "./files.js";
+import { changedFiles } from "./git.js";
 import { removeComments } from "./remove.js";
 import { count, formatGitHub, formatJson, formatText } from "./report.js";
 import { getVersion } from "./version.js";
@@ -22,6 +25,7 @@ Output:
 Filtering:
   --ignore <glob>      Skip files/directories matching the glob (repeatable)
   --ext <list>         Comma-separated extensions to scan (default: .ts,.tsx,.mts,.cts)
+  --diff <range>       Only files git reports changed in the revision range
   --skip-directives    Hide compiler/linter directives (@ts-ignore, eslint-disable, ...)
   --only-directives    Report only compiler/linter directives
 
@@ -42,6 +46,11 @@ Paths default to the current directory. Directories are scanned recursively,
 skipping node_modules and .git. Removal keeps directives and license headers
 unless explicitly requested, so builds and linters keep working.
 
+--diff narrows any scan or removal to files changed in git: a single revision
+compares the working tree against it (HEAD covers all uncommitted work,
+untracked files included), while main..HEAD compares two commits. Handy for
+cleaning up only the files a coding agent just touched.
+
 Exit codes: 0 success, 1 comments reported with --fail-on-comment, 2 error.
 
 Examples:
@@ -49,6 +58,7 @@ Examples:
   ts-comment-scanner --format github --fail-on-comment src
   ts-comment-scanner --ignore "**/*.test.ts" --skip-directives src
   ts-comment-scanner --remove --dry-run src
+  ts-comment-scanner --remove --diff main..HEAD
 `;
 
 export async function run(argv: string[], io: CliIO): Promise<number> {
@@ -84,7 +94,8 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
       return await runRemove(options, collectOptions, io);
     }
 
-    const results = filterDirectives(await scanPaths(options.paths, collectOptions), options.directives);
+    const files = await collectTargets(options, collectOptions);
+    const results = filterDirectives(await mapLimit(files, FILE_CONCURRENCY, scanFile), options.directives);
     io.out(`${render(results, options.format)}\n`);
 
     const total = results.reduce((sum, result) => sum + result.comments.length, 0);
@@ -94,6 +105,25 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
     io.err(`ts-comment-scanner: ${message}\n`);
     return 2;
   }
+}
+
+/**
+ * Collects the input files, narrowed to the files git reports changed when
+ * --diff is set. git runs in the repository containing the first input path
+ * (not the collected files, which could sit in a nested repository), so
+ * scanning another repository's checkout works from anywhere.
+ */
+async function collectTargets(options: CliOptions, collectOptions: CollectOptions): Promise<string[]> {
+  const files = await collectFiles(options.paths, collectOptions);
+  if (options.diff === undefined) return files;
+
+  const first = resolve(options.paths[0] as string);
+  const anchor = (await stat(first)).isDirectory() ? first : dirname(first);
+  const changed = new Set(await changedFiles(options.diff, anchor));
+  // Realpath only the directory part: spellings through symlinked directories
+  // then compare equal, while a tracked symlink still matches the path git
+  // reports it at instead of dereferencing to its target.
+  return files.filter((file) => changed.has(join(realpathSync(dirname(file)), basename(file))));
 }
 
 /** True when -h/--help appears before any `--` separator. */
@@ -132,7 +162,7 @@ interface FileRemoval {
 }
 
 async function runRemove(options: CliOptions, collectOptions: CollectOptions, io: CliIO): Promise<number> {
-  const files = await collectFiles(options.paths, collectOptions);
+  const files = await collectTargets(options, collectOptions);
 
   const outcomes = await mapLimit(files, FILE_CONCURRENCY, async (file) => {
     try {
@@ -173,13 +203,13 @@ async function runRemove(options: CliOptions, collectOptions: CollectOptions, io
 function renderRemoval(removals: FileRemoval[], options: CliOptions): string {
   const totalRemoved = removals.reduce((sum, entry) => sum + entry.removed.length, 0);
   const totalKept = removals.reduce((sum, entry) => sum + entry.kept.length, 0);
-  const changedFiles = removals.filter((entry) => entry.removed.length > 0);
+  const changedEntries = removals.filter((entry) => entry.removed.length > 0);
   const keptNote = totalKept > 0 ? ` Kept ${count(totalKept, "protected comment")}.` : "";
 
   if (options.format === "json") {
     return JSON.stringify(
       {
-        summary: { files: changedFiles.length, removed: totalRemoved, kept: totalKept, dryRun: options.dryRun },
+        summary: { files: changedEntries.length, removed: totalRemoved, kept: totalKept, dryRun: options.dryRun },
         files: removals,
       },
       null,
@@ -192,7 +222,7 @@ function renderRemoval(removals: FileRemoval[], options: CliOptions): string {
   }
 
   const verb = options.dryRun ? "would remove" : "removed";
-  const lines = changedFiles.map((entry) => {
+  const lines = changedEntries.map((entry) => {
     const kept = entry.kept.length > 0 ? ` (kept ${entry.kept.length})` : "";
     return `${entry.file}: ${verb} ${entry.removed.length}${kept}`;
   });
@@ -200,7 +230,7 @@ function renderRemoval(removals: FileRemoval[], options: CliOptions): string {
   const sentenceVerb = verb.charAt(0).toUpperCase() + verb.slice(1);
   lines.push(
     "",
-    `${sentenceVerb} ${count(totalRemoved, "comment")} across ${count(changedFiles.length, "file")}.${keptNote}`,
+    `${sentenceVerb} ${count(totalRemoved, "comment")} across ${count(changedEntries.length, "file")}.${keptNote}`,
   );
   return lines.join("\n");
 }

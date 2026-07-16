@@ -20,6 +20,7 @@ TypeScript プロジェクト内のコメントを検出・一覧・集計し、
 - `@ts-ignore` や `eslint-disable` などの**コンパイラ・リンター指示子(ディレクティブ)を自動判別**し、絞り込み・除外が可能
 - **安全なコメント削除**(コードクリーンアップ): ディレクティブとライセンスヘッダーはデフォルトで保持
 - Glob による**カスタム無視パターン** (`--ignore`)、対象拡張子の変更 (`--ext`)
+- **git 連携 (`--diff`)**: 特定コミット間や未コミットの変更で触れられたファイルだけに対象を絞り込み
 - CI 向けの `--fail-on-comment`(コメント検出時に終了コード 1)
 - CLI としても、ライブラリとしても利用可能
 
@@ -47,6 +48,7 @@ ts-comment-scanner [options] [paths...]
 フィルタリング:
   --ignore <glob>      Glob に一致するファイル・ディレクトリを除外(複数指定可)
   --ext <list>         スキャン対象の拡張子(カンマ区切り、既定: .ts,.tsx,.mts,.cts)
+  --diff <range>       git で変更されたファイルのみを対象(例: HEAD, main..HEAD)
   --skip-directives    コンパイラ・リンター指示子を結果から除外
   --only-directives    指示子のみを報告
 
@@ -141,6 +143,23 @@ ts-comment-scanner --remove --remove-directives --remove-legal src
 - コメントだけの行は行ごと削除、行末コメントは手前の空白ごと削除
 - 削除後のソースを再スキャンして検証し、想定外の結果になる場合はファイルを変更せずエラー報告
 
+### 変更されたファイルだけを対象にする(`--diff`)
+
+`--diff <range>` を付けると、git が変更ありと報告するファイルだけにスキャン・削除を絞り込めます。範囲は `git diff` がリビジョンとして受け付ける書式そのままで、単一リビジョンなら作業ツリーとの比較(未追跡の新規ファイルも含む・`.gitignore` は尊重)、`a..b` / `a...b` ならコミット同士の比較になります。
+
+```bash
+# 未コミットの変更があるファイルだけをスキャン
+ts-comment-scanner --diff HEAD
+
+# ブランチで変更されたファイルだけからコメントを削除
+ts-comment-scanner --remove --diff main...HEAD
+
+# 特定コミット間で変更されたファイルのみを CI でチェック
+ts-comment-scanner --fail-on-comment --diff a1b2c3..d4e5f6 src
+```
+
+コーディングエージェントに作業させた後、その変更範囲だけを対象にノイズコメントを掃除する、といった使い方を想定しています。範囲内で削除されたファイルは対象外になり、リネームは新しいパスで扱われます。git は最初の入力パスが属するリポジトリで実行されるため、別リポジトリのパスを指定しても動作します。なお `--ignore` と異なり、明示的に指定したファイルにも絞り込みが適用されます。
+
 ### 検出できるディレクティブ(抜粋)
 
 `@ts-ignore` `@ts-expect-error` `@ts-nocheck` `@ts-check` / `eslint-disable` 系・`eslint-env`・`/* global */` / `tslint:` / `oxlint-disable` 系 / `biome-ignore` 系 / `deno-lint-ignore` 系 / `prettier-ignore` / `istanbul ignore`・`c8 ignore`・`v8 ignore`・`node:coverage` / `webpackChunkName:` などの webpack マジックコメント / `@vite-ignore` / `#__PURE__` / `//# sourceMappingURL=`・`//# sourceURL=` / `@jsx` 系プラグマ / `@jest-environment`・`@vitest-environment` / `/// <reference>` / `#region`・`#endregion`
@@ -148,7 +167,7 @@ ts-comment-scanner --remove --remove-directives --remove-legal src
 ## ライブラリとして使う
 
 ```ts
-import { scanPaths, scanComments, removeComments, formatText } from "@kongyo2/ts-comment-scanner";
+import { scanPaths, scanComments, removeComments, changedFiles, formatText } from "@kongyo2/ts-comment-scanner";
 
 // ファイル / ディレクトリをまとめてスキャン
 const results = await scanPaths(["src"], { ignore: ["**/*.test.ts"] });
@@ -159,6 +178,9 @@ const comments = scanComments("// hello\nconst x = 1;");
 
 // コメントを安全に削除
 const { code, removed, kept } = removeComments("// note\nconst x = 1;\n");
+
+// git のリビジョン範囲で変更されたファイルの絶対パスを取得
+const changed = await changedFiles("main..HEAD");
 ```
 
 ### 主な API
@@ -169,6 +191,7 @@ const { code, removed, kept } = removeComments("// note\nconst x = 1;\n");
 | `scanFile(file)` | 1 ファイルをスキャン |
 | `scanPaths(inputs, options?)` | ファイル / ディレクトリ群を再帰的にスキャン(`ignore` / `extensions` 対応) |
 | `collectFiles(inputs, options?)` | 対象ファイルのパス一覧を収集 |
+| `changedFiles(range, cwd?)` | git のリビジョン範囲で変更された作業ツリーのファイルを絶対パスで返す |
 | `removeComments(source, options?)` | コメントを安全に削除(`removeDirectives` / `removeLegal` / `shouldRemove`) |
 | `detectDirective(kind, text)` | コメントがディレクティブなら正規化した名前を返す |
 | `isLegalComment(text)` | ライセンス・法的コメントかどうかを判定 |

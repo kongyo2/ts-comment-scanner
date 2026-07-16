@@ -20,6 +20,7 @@ A CLI / library that detects, lists, and summarizes comments in a TypeScript pro
 - **Automatically identifies compiler and linter directives** such as `@ts-ignore` and `eslint-disable`, so you can filter them in or out
 - **Safe comment removal** (code cleanup): directives and license headers are kept by default
 - **Custom ignore patterns** via glob (`--ignore`) and configurable target extensions (`--ext`)
+- **git integration (`--diff`)**: narrow the scan to files touched between specific commits or in uncommitted work
 - `--fail-on-comment` for CI (exit code 1 when comments are detected)
 - Usable both as a CLI and as a library
 
@@ -47,6 +48,7 @@ Output:
 Filtering:
   --ignore <glob>      Exclude files/directories matching the glob (repeatable)
   --ext <list>         Extensions to scan (comma-separated, default: .ts,.tsx,.mts,.cts)
+  --diff <range>       Only files git reports changed (e.g. HEAD, main..HEAD)
   --skip-directives    Exclude compiler/linter directives from the results
   --only-directives    Report only directives
 
@@ -141,6 +143,23 @@ Removal is driven by the AST's comment ranges, so it never touches strings or co
 - Comment-only lines are removed entirely, and trailing comments are removed together with the preceding whitespace
 - The result is re-scanned to verify it, and if the outcome is unexpected the file is left unchanged and an error is reported
 
+### Scanning only changed files (`--diff`)
+
+With `--diff <range>`, scanning and removal are limited to the files git reports as changed. The range is exactly what `git diff` accepts as revisions: a single revision compares the working tree against it (untracked new files included, honouring `.gitignore`), while `a..b` / `a...b` compare two commits.
+
+```bash
+# Scan only files with uncommitted changes
+ts-comment-scanner --diff HEAD
+
+# Remove comments only from files changed on the branch
+ts-comment-scanner --remove --diff main...HEAD
+
+# Check only files changed between two commits in CI
+ts-comment-scanner --fail-on-comment --diff a1b2c3..d4e5f6 src
+```
+
+This is designed for workflows like letting a coding agent do some work and then sweeping noise comments out of just the files it touched. Files deleted within the range are excluded, and renames are handled at their new path. git runs in the repository that contains the first input path, so pointing at another repository's checkout works too. Note that unlike `--ignore`, the narrowing also applies to explicitly listed files.
+
 ### Detectable directives (excerpt)
 
 `@ts-ignore` `@ts-expect-error` `@ts-nocheck` `@ts-check` / the `eslint-disable` family, `eslint-env`, `/* global */` / `tslint:` / the `oxlint-disable` family / the `biome-ignore` family / the `deno-lint-ignore` family / `prettier-ignore` / `istanbul ignore`, `c8 ignore`, `v8 ignore`, `node:coverage` / webpack magic comments such as `webpackChunkName:` / `@vite-ignore` / `#__PURE__` / `//# sourceMappingURL=`, `//# sourceURL=` / `@jsx`-family pragmas / `@jest-environment`, `@vitest-environment` / `/// <reference>` / `#region`, `#endregion`
@@ -148,7 +167,7 @@ Removal is driven by the AST's comment ranges, so it never touches strings or co
 ## Using it as a library
 
 ```ts
-import { scanPaths, scanComments, removeComments, formatText } from "@kongyo2/ts-comment-scanner";
+import { scanPaths, scanComments, removeComments, changedFiles, formatText } from "@kongyo2/ts-comment-scanner";
 
 // Scan files / directories together
 const results = await scanPaths(["src"], { ignore: ["**/*.test.ts"] });
@@ -159,6 +178,9 @@ const comments = scanComments("// hello\nconst x = 1;");
 
 // Remove comments safely
 const { code, removed, kept } = removeComments("// note\nconst x = 1;\n");
+
+// Absolute paths of files changed in a git revision range
+const changed = await changedFiles("main..HEAD");
 ```
 
 ### Main API
@@ -169,6 +191,7 @@ const { code, removed, kept } = removeComments("// note\nconst x = 1;\n");
 | `scanFile(file)` | Scan a single file |
 | `scanPaths(inputs, options?)` | Recursively scan files / directories (supports `ignore` / `extensions`) |
 | `collectFiles(inputs, options?)` | Collect the list of target file paths |
+| `changedFiles(range, cwd?)` | Absolute paths of working-tree files changed in a git revision range |
 | `removeComments(source, options?)` | Remove comments safely (`removeDirectives` / `removeLegal` / `shouldRemove`) |
 | `detectDirective(kind, text)` | Return a normalized name if the comment is a directive |
 | `isLegalComment(text)` | Determine whether a comment is a license/legal comment |

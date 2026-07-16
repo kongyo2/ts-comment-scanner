@@ -1,8 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, writeFile, rm, readFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, writeFile, rm, readFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { run, type CliIO } from "./run.js";
+
+const execFileAsync = promisify(execFile);
 
 let dir: string;
 
@@ -14,6 +18,22 @@ function capture(): { io: CliIO; out: () => string; err: () => string } {
     out: () => outChunks.join(""),
     err: () => errChunks.join(""),
   };
+}
+
+async function git(args: string[], cwd = dir): Promise<void> {
+  await execFileAsync("git", args, { cwd });
+}
+
+async function initRepo(cwd = dir): Promise<void> {
+  await git(["init", "-q", "-b", "main"], cwd);
+  await git(["config", "user.email", "test@example.com"], cwd);
+  await git(["config", "user.name", "Test"], cwd);
+  await git(["config", "commit.gpgsign", "false"], cwd);
+}
+
+async function commitAll(message: string, cwd = dir): Promise<void> {
+  await git(["add", "-A"], cwd);
+  await git(["commit", "-q", "-m", message], cwd);
 }
 
 beforeEach(async () => {
@@ -230,5 +250,135 @@ describe("run", () => {
 
     expect(code).toBe(0);
     expect(out()).toContain("No removable comments found.");
+  });
+
+  it("limits the scan to files changed in the --diff range", async () => {
+    await initRepo();
+    await writeFile(join(dir, "old.ts"), "// old\n");
+    await commitAll("base");
+    await writeFile(join(dir, "new.ts"), "// new\n");
+    await commitAll("feature");
+    const { io, out } = capture();
+
+    const code = await run(["--diff", "HEAD~1..HEAD", dir], io);
+
+    expect(code).toBe(0);
+    expect(out()).toContain("new.ts:1:1");
+    expect(out()).not.toContain("old.ts");
+  });
+
+  it("limits --remove to files changed in the --diff range", async () => {
+    await initRepo();
+    const untouched = join(dir, "untouched.ts");
+    const edited = join(dir, "edited.ts");
+    await writeFile(untouched, "// stays\n");
+    await writeFile(edited, "const x = 1;\n");
+    await commitAll("base");
+    await writeFile(edited, "const x = 1; // gone\n");
+    const { io, out } = capture();
+
+    const code = await run(["--remove", "--diff", "HEAD", dir], io);
+
+    expect(code).toBe(0);
+    expect(await readFile(edited, "utf8")).toBe("const x = 1;\n");
+    expect(await readFile(untouched, "utf8")).toBe("// stays\n");
+    expect(out()).toContain("Removed 1 comment across 1 file.");
+  });
+
+  it("reports no comments when the --diff range changed nothing", async () => {
+    await initRepo();
+    await writeFile(join(dir, "a.ts"), "// hi\n");
+    await commitAll("base");
+    const { io, out } = capture();
+
+    const code = await run(["--diff", "HEAD", dir], io);
+
+    expect(code).toBe(0);
+    expect(out()).toContain("No comments found.");
+  });
+
+  it("returns 2 when --diff gets an unknown revision", async () => {
+    await initRepo();
+    await writeFile(join(dir, "a.ts"), "// hi\n");
+    await commitAll("base");
+    const { io, err } = capture();
+
+    const code = await run(["--diff", "no-such-ref", dir], io);
+
+    expect(code).toBe(2);
+    expect(err()).toContain("git diff failed");
+  });
+
+  it("returns 2 when --diff is used outside a git repository", async () => {
+    await writeFile(join(dir, "a.ts"), "// hi\n");
+    const { io, err } = capture();
+
+    const code = await run(["--diff", "HEAD", dir], io);
+
+    expect(code).toBe(2);
+    expect(err()).toContain("not a git repository");
+  });
+
+  it("includes files created but never committed with --diff HEAD", async () => {
+    await initRepo();
+    await writeFile(join(dir, "old.ts"), "// old\n");
+    await commitAll("base");
+    await writeFile(join(dir, "fresh.ts"), "// fresh\n");
+    const { io, out } = capture();
+
+    const code = await run(["--diff", "HEAD", dir], io);
+
+    expect(code).toBe(0);
+    expect(out()).toContain("fresh.ts:1:1");
+    expect(out()).not.toContain("old.ts");
+  });
+
+  it("returns 2 for an invalid --diff revision even when no files were collected", async () => {
+    await initRepo();
+    const { io, err } = capture();
+
+    const code = await run(["--diff", "no-such-ref", dir], io);
+
+    expect(code).toBe(2);
+    expect(err()).toContain("git diff failed");
+  });
+
+  it("returns 2 with --diff in an empty directory outside a git repository", async () => {
+    const { io, err } = capture();
+
+    const code = await run(["--diff", "HEAD", dir], io);
+
+    expect(code).toBe(2);
+    expect(err()).toContain("not a git repository");
+  });
+
+  it("keeps a re-pointed symlink in the --diff scope when passed explicitly", async () => {
+    await initRepo();
+    await writeFile(join(dir, "one.ts"), "// one\n");
+    await writeFile(join(dir, "two.ts"), "// two\n");
+    await symlink("one.ts", join(dir, "link.ts"));
+    await commitAll("base");
+    await rm(join(dir, "link.ts"));
+    await symlink("two.ts", join(dir, "link.ts"));
+    const { io, out } = capture();
+
+    const code = await run(["--diff", "HEAD", join(dir, "link.ts")], io);
+
+    expect(code).toBe(0);
+    expect(out()).toContain(`${join(dir, "link.ts")}:1:1 [line] // two`);
+  });
+
+  it("anchors --diff on the input path, not on a nested repository's files", async () => {
+    const nested = join(dir, "repo");
+    await mkdir(nested);
+    await initRepo(nested);
+    await writeFile(join(nested, "a.ts"), "// hi\n");
+    await commitAll("base", nested);
+    const { io, err } = capture();
+
+    const code = await run(["--diff", "HEAD", dir], io);
+
+    expect(code).toBe(2);
+    expect(err()).toContain("not a git repository");
   });
 });
