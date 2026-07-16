@@ -265,6 +265,12 @@ describe("removeComments", () => {
     expect(removeComments(source).code).toBe(source);
   });
 
+  it("shields below formatter suppressions targeting the next node", () => {
+    const source = "// oxfmt-ignore\n// shielded\nconst matrix = [1, 2, 3];\n";
+
+    expect(removeComments(source).code).toBe(source);
+  });
+
   it("shields below node:coverage ignore next but not below its range forms", () => {
     const nextForm = "/* node:coverage ignore next */\n// shielded\nconst a = 1;\n";
     expect(removeComments(nextForm).code).toBe(nextForm);

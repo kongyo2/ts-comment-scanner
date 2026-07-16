@@ -17,6 +17,11 @@ const RULES: DirectiveRule[] = [
   { pattern: /^(globals?|exported)\s+\S/, name: (match) => match[1] ?? "global", blockOnly: true },
   // TSLint (legacy)
   { pattern: /^tslint:[a-z-]+/ },
+  // JSHint (legacy): options (`jshint esversion: 6`) and ignore markers
+  // (`jshint ignore:line`, `jshint ignore:start`) share the one prefix.
+  { pattern: /^jshint\s+\S/, name: "jshint" },
+  // JSCS (legacy)
+  { pattern: /^jscs:[a-z-]+/ },
   // oxlint
   { pattern: /^oxlint-(?:disable|enable)(?:-next-line|-line)?\b/ },
   // Biome
@@ -25,6 +30,8 @@ const RULES: DirectiveRule[] = [
   { pattern: /^deno-(?:lint-ignore(?:-file)?|fmt-ignore(?:-file)?|coverage-ignore(?:-file|-start|-stop)?)\b/ },
   // Prettier
   { pattern: /^prettier-ignore(?:-start|-end)?\b/ },
+  // oxfmt (oxc's formatter; suppresses formatting of the next node, like prettier-ignore)
+  { pattern: /^oxfmt-ignore\b/ },
   // Coverage tools. The mode is part of the name so that consumers can tell
   // next-statement pragmas (`next`, `if`, ...) from file/range ones (`file`,
   // `start`, `stop`). Istanbul hints work in either comment kind; the V8-based
@@ -40,8 +47,10 @@ const RULES: DirectiveRule[] = [
     name: (match) => `node:coverage-${match[1]}`,
     blockOnly: true,
   },
-  // Bundlers
+  // Bundlers. Turbopack magic comments mirror webpack's `key: value` form
+  // (`turbopackIgnore: true`, `turbopackOptional: true`, ...).
   { pattern: /^webpack[A-Z][A-Za-z]*\s*:/, name: "webpack-magic-comment" },
+  { pattern: /^turbopack[A-Z][A-Za-z]*\s*:/, name: "turbopack-magic-comment" },
   { pattern: /^@vite-ignore\b/ },
   { pattern: /^[#@]__(?:PURE|NO_SIDE_EFFECTS|INLINE|NOINLINE)__/ },
   // Source maps (`//# sourceMappingURL=`, legacy `//@`, and the block form)

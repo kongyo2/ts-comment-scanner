@@ -162,7 +162,7 @@ ts-comment-scanner --fail-on-comment --diff a1b2c3..d4e5f6 src
 
 ### 検出できるディレクティブ(抜粋)
 
-`@ts-ignore` `@ts-expect-error` `@ts-nocheck` `@ts-check` / `eslint-disable` 系・`eslint-env`・`/* global */` / `tslint:` / `oxlint-disable` 系 / `biome-ignore` 系 / `deno-lint-ignore` 系 / `prettier-ignore` / `istanbul ignore`・`c8 ignore`・`v8 ignore`・`node:coverage` / `webpackChunkName:` などの webpack マジックコメント / `@vite-ignore` / `#__PURE__` / `//# sourceMappingURL=`・`//# sourceURL=` / `@jsx` 系プラグマ / `@jest-environment`・`@vitest-environment` / `/// <reference>` / `#region`・`#endregion`
+`@ts-ignore` `@ts-expect-error` `@ts-nocheck` `@ts-check` / `eslint-disable` 系・`eslint-env`・`/* global */` / `tslint:`・`jshint`・`jscs:` / `oxlint-disable` 系 / `biome-ignore` 系 / `deno-lint-ignore` 系 / `prettier-ignore`・`oxfmt-ignore` / `istanbul ignore`・`c8 ignore`・`v8 ignore`・`node:coverage` / `webpackChunkName:` などの webpack マジックコメント・`turbopackIgnore:` などの turbopack マジックコメント / `@vite-ignore` / `#__PURE__` / `//# sourceMappingURL=`・`//# sourceURL=` / `@jsx` 系プラグマ / `@jest-environment`・`@vitest-environment` / `/// <reference>` / `#region`・`#endregion`
 
 ## ライブラリとして使う
 

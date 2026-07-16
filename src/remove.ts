@@ -124,6 +124,7 @@ function isNextLineDirective(name: string): boolean {
       "deno-fmt-ignore",
       "deno-coverage-ignore",
       "prettier-ignore",
+      "oxfmt-ignore",
       "istanbul-ignore",
       "istanbul-ignore-next",
       "istanbul-ignore-if",

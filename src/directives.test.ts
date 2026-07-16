@@ -30,9 +30,23 @@ describe("detectDirective", () => {
     ["// biome-ignore lint: reason", "biome-ignore"],
     ["// deno-lint-ignore no-explicit-any", "deno-lint-ignore"],
     ["// prettier-ignore", "prettier-ignore"],
+    ["// oxfmt-ignore", "oxfmt-ignore"],
     ["// tslint:disable-next-line:no-any", "tslint:disable-next-line"],
+    ["// jshint ignore:line", "jshint"],
+    ["// jscs:disable requireCurlyBraces", "jscs:disable"],
+    ["// jscs:enable", "jscs:enable"],
   ])("detects linter directives: %s", (text, expected) => {
     expect(detectDirective("line", text)).toBe(expected);
+  });
+
+  it("detects block-form jshint option comments", () => {
+    expect(detectDirective("block", "/* jshint esversion: 6 */")).toBe("jshint");
+    expect(detectDirective("block", "/* jshint ignore:start */")).toBe("jshint");
+  });
+
+  it("keeps bare or prose mentions of the legacy tools ordinary", () => {
+    expect(detectDirective("line", "// jshint")).toBeUndefined();
+    expect(detectDirective("line", "// oxfmt-ignores nothing")).toBeUndefined();
   });
 
   it("detects block-form eslint directives", () => {
@@ -103,6 +117,8 @@ describe("detectDirective", () => {
 
   it.each([
     ['/* webpackChunkName: "chunk" */', "webpack-magic-comment"],
+    ["/* turbopackIgnore: true */", "turbopack-magic-comment"],
+    ["/* turbopackOptional: true */", "turbopack-magic-comment"],
     ["/* @vite-ignore */", "@vite-ignore"],
     ["/* #__PURE__ */", "#__PURE__"],
     ["/* @__NO_SIDE_EFFECTS__ */", "@__NO_SIDE_EFFECTS__"],
@@ -155,6 +171,11 @@ describe("detectDirective", () => {
   it("does not report a directive mentioned mid-sentence", () => {
     expect(detectDirective("line", "// remove the @ts-ignore above")).toBeUndefined();
     expect(detectDirective("block", "/* docs mention eslint-disable here */")).toBeUndefined();
+  });
+
+  it("requires the magic-comment key form for turbopack, like webpack", () => {
+    expect(detectDirective("block", "/* turbopack */")).toBeUndefined();
+    expect(detectDirective("line", "// turbopack is fast")).toBeUndefined();
   });
 });
 
