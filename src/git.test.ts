@@ -94,6 +94,18 @@ describe("changedFiles", () => {
     expect(files.sort()).toEqual([join(dir, "sub", "c.ts"), join(dir, "u.ts")]);
   });
 
+  it("keeps root-relative output even when diff.relative is configured", async () => {
+    await initRepo();
+    await git("config", "diff.relative", "true");
+    await mkdir(join(dir, "sub"));
+    await writeFile(join(dir, "a.ts"), "// root decoy\n");
+    await writeFile(join(dir, "sub", "a.ts"), "// nested\n");
+    await commitAll("base");
+    await writeFile(join(dir, "sub", "a.ts"), "// nested changed\n");
+
+    expect(await changedFiles("HEAD", join(dir, "sub"))).toEqual([join(dir, "sub", "a.ts")]);
+  });
+
   it("includes untracked files when comparing against the working tree", async () => {
     await initRepo();
     await writeFile(join(dir, "a.ts"), "// a\n");

@@ -23,7 +23,9 @@ export async function changedFiles(range: string, cwd: string = process.cwd()): 
   }
   const top = (await git(["rev-parse", "--show-toplevel"], cwd)).replace(/\r?\n$/, "");
   const root = await realpath(top);
-  const entries = split(await git(["diff", "--name-only", "-z", "--no-renames", "--diff-filter=d", range, "--"], cwd));
+  // --no-relative pins root-relative output even under diff.relative=true.
+  const args = ["diff", "--name-only", "-z", "--no-renames", "--no-relative", "--diff-filter=d", range, "--"];
+  const entries = split(await git(args, cwd));
   // A working-tree comparison treats brand-new files as changes too, yet
   // `git diff` never lists them. Runs at the root so the whole repository is
   // covered regardless of cwd; .gitignore still applies.
