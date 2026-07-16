@@ -295,6 +295,16 @@ describe("removeComments", () => {
     expect(removeComments(crlf).code).toBe(crlf);
   });
 
+  it("excises removable comments intact on exotic line terminators", () => {
+    // Lone-CR / U+2028 / U+2029 sources: the comment range is always spliced
+    // out and the code kept byte-for-byte (guarded by the re-scan check);
+    // only the blank-line/gap tidying stays best-effort on these terminators.
+    expect(removeComments("// gone\rconst b = 2;\r").code).toBe("\rconst b = 2;\r");
+    expect(removeComments("const a = 1; // gone\rconst b = 2;\r").code).toBe("const a = 1; \rconst b = 2;\r");
+    expect(removeComments("// gone\u2028const b = 2;\u2028").code).toBe("\u2028const b = 2;\u2028");
+    expect(removeComments("// gone\u2029const b = 2;\u2029").code).toBe("\u2029const b = 2;\u2029");
+  });
+
   it("shields below node:coverage ignore next but not below its range forms", () => {
     const nextForm = "/* node:coverage ignore next */\n// shielded\nconst a = 1;\n";
     expect(removeComments(nextForm).code).toBe(nextForm);
