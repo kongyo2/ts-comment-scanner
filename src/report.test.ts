@@ -42,6 +42,19 @@ describe("formatText", () => {
     expect(formatText(results)).toContain("a.ts:1:1 [block] /** * doc */");
   });
 
+  it("collapses exotic line terminators in previews instead of printing them raw", () => {
+    const results: FileScanResult[] = [
+      {
+        file: "a.ts",
+        comments: [
+          comment({ kind: "block", text: "/* a\rb\u2028c\u2029d */", start: 0, end: 12, endLine: 4, endColumn: 5 }),
+        ],
+      },
+    ];
+
+    expect(formatText(results)).toContain("a.ts:1:1 [block] /* a b c d */");
+  });
+
   it("marks directive comments with the directive name", () => {
     const results: FileScanResult[] = [
       { file: "a.ts", comments: [comment({ text: "// @ts-ignore", end: 13, endColumn: 14, directive: "@ts-ignore" })] },

@@ -49,13 +49,16 @@ export function scanComments(source: string, options: ScanOptions = {}): Comment
   // File-wide pragmas (check pragmas, triple-slash directives, docblock
   // test-environment pragmas, Deno's *-ignore-file forms) only count before
   // the first token; anywhere later the tools treat them as ordinary text.
+  // Coverage file pragmas (`istanbul ignore file`, `c8/v8 ignore file`) are
+  // NOT gated: istanbul-lib-instrument and Vitest's v8 provider
+  // (ast-v8-to-istanbul) honour them on any comment in the file.
   const firstTokenStart = sourceFile.getStart(sourceFile);
   const isHeaderOnlyDirective = (directive: string): boolean =>
     directive === "@ts-nocheck" ||
     directive === "@ts-check" ||
     directive === "@jest-environment" ||
     directive === "@vitest-environment" ||
-    directive.endsWith("-ignore-file") ||
+    (directive.startsWith("deno-") && directive.endsWith("-ignore-file")) ||
     directive.startsWith("triple-slash-");
   const isActiveDirective = (directive: string, pos: number): boolean =>
     !isHeaderOnlyDirective(directive) || pos < firstTokenStart;

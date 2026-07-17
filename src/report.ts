@@ -35,8 +35,10 @@ export function formatText(results: FileScanResult[]): string {
 }
 
 function preview(text: string): string {
+  // Split on every ECMAScript line terminator so exotic breaks (lone \r,
+  // U+2028/U+2029) cannot leak raw control characters into terminal output.
   return text
-    .split("\n")
+    .split(/\r\n|[\n\r\u2028\u2029]/)
     .map((line) => line.trim())
     .join(" ")
     .trim();

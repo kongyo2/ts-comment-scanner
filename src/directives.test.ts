@@ -107,10 +107,13 @@ describe("detectDirective", () => {
     expect(detectDirective("block", text)).toBe(expected);
   });
 
-  it("keeps V8-based coverage pragmas block-only but allows istanbul hints in line comments", () => {
-    expect(detectDirective("line", "// c8 ignore next")).toBeUndefined();
-    expect(detectDirective("line", "// v8 ignore next")).toBeUndefined();
-    expect(detectDirective("line", "// node:coverage ignore next")).toBeUndefined();
+  it("detects coverage pragmas in line comments too, like Vitest's v8 provider", () => {
+    // The c8 CLI and Node core only parse block comments, but
+    // ast-v8-to-istanbul (Vitest coverage) strips `//` as well, so a line
+    // comment can be an active hint and has to stay protected.
+    expect(detectDirective("line", "// c8 ignore next")).toBe("c8-ignore-next");
+    expect(detectDirective("line", "// v8 ignore next")).toBe("v8-ignore-next");
+    expect(detectDirective("line", "// node:coverage ignore next")).toBe("node:coverage-ignore");
     expect(detectDirective("line", "// istanbul ignore next")).toBe("istanbul-ignore-next");
   });
 
@@ -130,8 +133,25 @@ describe("detectDirective", () => {
     expect(detectDirective("block", "/* @ts-ignore */")).toBe("@ts-ignore");
     expect(detectDirective("block", "/* note\n@ts-expect-error */")).toBe("@ts-expect-error");
     expect(detectDirective("block", "/* note\n * @ts-ignore */")).toBe("@ts-ignore");
+    expect(detectDirective("block", "/* note\n  * @ts-ignore */")).toBe("@ts-ignore");
     expect(detectDirective("block", "/* note\r@ts-ignore */")).toBe("@ts-ignore");
     expect(detectDirective("block", "/* @ts-ignore\nnote */")).toBeUndefined();
+  });
+
+  it("treats a block whose closing line is blank as ordinary, matching tsc exactly", () => {
+    // tsc slices the literal last line of the comment; when the directive sits
+    // on an earlier line the comment is inert, so it must stay removable.
+    expect(detectDirective("block", "/* @ts-ignore\n */")).toBeUndefined();
+    expect(detectDirective("block", "/* @ts-expect-error\n\t*/")).toBeUndefined();
+    expect(detectDirective("block", "/* @ts-ignore\u2028*/")).toBeUndefined();
+  });
+
+  it("rejects marker runs broken by whitespace, matching tsc's block regex", () => {
+    // tsc allows whitespace, then one run of `/`/`*`, then whitespace before
+    // the directive; `/ * @ts-ignore */` interleaves them and is inert.
+    expect(detectDirective("block", "/* / * @ts-ignore */")).toBeUndefined();
+    expect(detectDirective("block", "/*@ts-ignore*/")).toBe("@ts-ignore");
+    expect(detectDirective("block", "/** @ts-expect-error */")).toBe("@ts-expect-error");
   });
 
   it("keeps block-form check pragmas ordinary, since TypeScript ignores them", () => {
