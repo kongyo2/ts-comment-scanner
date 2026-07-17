@@ -50,18 +50,18 @@ const RULES: DirectiveRule[] = [
   { pattern: /^oxfmt-ignore$/, joinLines: true },
   // Coverage tools. The mode is part of the name so that consumers can tell
   // next-statement pragmas (`next`, `if`, ...) from file/range ones (`file`,
-  // `start`, `stop`). Istanbul hints work in either comment kind; the V8-based
-  // tools (c8, v8, node:coverage) only document and parse block comments.
+  // `start`, `stop`). The c8 CLI (v8-to-istanbul) and Node core only parse
+  // block comments, but istanbul-lib-instrument and Vitest's v8 provider
+  // (ast-v8-to-istanbul) honour line comments too, so no rule is block-only.
   { pattern: /^istanbul\s+ignore\s+([a-z]+)/, name: (match) => `istanbul-ignore-${match[1]}` },
   { pattern: /^istanbul\s+ignore\b/, name: "istanbul-ignore" },
-  { pattern: /^c8\s+ignore\s+([a-z]+)/, name: (match) => `c8-ignore-${match[1]}`, blockOnly: true },
-  { pattern: /^c8\s+ignore\b/, name: "c8-ignore", blockOnly: true },
-  { pattern: /^v8\s+ignore\s+([a-z]+)/, name: (match) => `v8-ignore-${match[1]}`, blockOnly: true },
-  { pattern: /^v8\s+ignore\b/, name: "v8-ignore", blockOnly: true },
+  { pattern: /^c8\s+ignore\s+([a-z]+)/, name: (match) => `c8-ignore-${match[1]}` },
+  { pattern: /^c8\s+ignore\b/, name: "c8-ignore" },
+  { pattern: /^v8\s+ignore\s+([a-z]+)/, name: (match) => `v8-ignore-${match[1]}` },
+  { pattern: /^v8\s+ignore\b/, name: "v8-ignore" },
   {
     pattern: /^node:coverage\s+(disable|enable|ignore)\b/,
     name: (match) => `node:coverage-${match[1]}`,
-    blockOnly: true,
   },
   // Bundlers. Turbopack magic comments mirror webpack's `key: value` form
   // (`turbopackIgnore: true`, `turbopackOptional: true`, ...).
@@ -87,8 +87,11 @@ const TRIPLE_SLASH = /^\/\/\/\s*<(reference|amd-dependency|amd-module)\b/;
 // case-insensitive and must end at a word boundary (`@ts-nocheckfoo` is not).
 const TS_LINE_SUPPRESSION = /^\/\/\/?\s*@ts-(ignore|expect-error)/;
 const TS_LINE_CHECK_PRAGMA = /^\/\/\/?\s*@ts-(nocheck|check)\b/i;
-// Block comments: only the suppression directives, and only on the last line.
-const TS_BLOCK_SUPPRESSION = /^[\s/*]*@ts-(ignore|expect-error)/;
+// Block comments: only the suppression directives, and only on the comment's
+// literal last line (`*/` included), even when that line is otherwise blank.
+// tsc trims the line and then allows one run of `/`/`*` characters before the
+// directive, so `* @ts-ignore */` counts but `/ * @ts-ignore */` does not.
+const TS_BLOCK_SUPPRESSION = /^\s*[/*]*\s*@ts-(ignore|expect-error)/;
 
 /**
  * Returns the canonical name of the compiler/linter/tooling directive the
@@ -109,7 +112,7 @@ export function detectDirective(kind: CommentKind, text: string): string | undef
       return `@ts-${checkPragma[1]?.toLowerCase()}`;
     }
   } else {
-    const suppression = TS_BLOCK_SUPPRESSION.exec(lastContentLine(text));
+    const suppression = TS_BLOCK_SUPPRESSION.exec(lastLine(text));
     if (suppression) {
       return `@ts-${suppression[1]}`;
     }
@@ -159,13 +162,8 @@ function contentLines(kind: CommentKind, text: string): string[] {
   return lines;
 }
 
-/** Last non-blank line of the comment, with the closing comment marker stripped. */
-function lastContentLine(text: string): string {
-  const inner = text.replace(/\*+\/\s*$/, "");
-  const lines = inner.split(LINE_BREAK);
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index] ?? "";
-    if (line.trim() !== "") return line;
-  }
-  return "";
+/** Literal last line of the comment, closing marker included, exactly as tsc slices it. */
+function lastLine(text: string): string {
+  const lines = text.split(LINE_BREAK);
+  return lines[lines.length - 1] as string;
 }

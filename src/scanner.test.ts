@@ -162,6 +162,19 @@ describe("scanComments", () => {
     expect(late[0]?.directive).toBeUndefined();
   });
 
+  it("keeps coverage ignore-file pragmas active anywhere in the file", () => {
+    // istanbul-lib-instrument and Vitest's v8 provider (ast-v8-to-istanbul)
+    // scan every comment in the file for `<tool> ignore file`, so mid-file
+    // occurrences are still live and must keep their directive tag.
+    const istanbul = scanComments("const x = 1;\n/* istanbul ignore file */\nconst y = 2;");
+    const c8 = scanComments("const x = 1;\n/* c8 ignore file */");
+    const v8 = scanComments("const x = 1;\n// v8 ignore file");
+
+    expect(istanbul[0]?.directive).toBe("istanbul-ignore-file");
+    expect(c8[0]?.directive).toBe("c8-ignore-file");
+    expect(v8[0]?.directive).toBe("v8-ignore-file");
+  });
+
   it("treats test-environment pragmas as directives only in the file header", () => {
     // Assembled at runtime so vitest's own docblock detection ignores this file.
     const envPragma = ["@vitest", "environment"].join("-");

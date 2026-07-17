@@ -313,6 +313,28 @@ describe("removeComments", () => {
     expect(removeComments(rangeForm).code).toBe("/* node:coverage disable */\nconst b = 1;\n");
   });
 
+  it("keeps mid-file coverage ignore-file pragmas, which stay live for istanbul and Vitest", () => {
+    const source = "const a = 1;\n/* istanbul ignore file */\nconst b = 2;\n// v8 ignore file\n";
+    const result = removeComments(source);
+
+    expect(result.changed).toBe(false);
+    expect(result.kept.map((comment) => comment.directive)).toEqual(["istanbul-ignore-file", "v8-ignore-file"]);
+  });
+
+  it("shields below line-comment coverage hints, which Vitest's v8 provider honours", () => {
+    const source = "// v8 ignore next\n// shielded\nfunction f() {}\n";
+
+    expect(removeComments(source).code).toBe(source);
+  });
+
+  it("removes a block @ts-ignore whose directive is not on the closing line, since tsc ignores it", () => {
+    const source = "/* @ts-ignore\n */\nconst x = 1;\n";
+    const result = removeComments(source);
+
+    expect(result.code).toBe("const x = 1;\n");
+    expect(result.removed).toHaveLength(1);
+  });
+
   it("keeps a byte-order mark when removing the first line", () => {
     const result = removeComments("\uFEFF// gone\nconst x = 1;\n");
 

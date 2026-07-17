@@ -141,8 +141,12 @@ function isNextLineDirective(name: string): boolean {
       "istanbul-ignore-else",
       "c8-ignore",
       "c8-ignore-next",
+      "c8-ignore-if",
+      "c8-ignore-else",
       "v8-ignore",
       "v8-ignore-next",
+      "v8-ignore-if",
+      "v8-ignore-else",
       "node:coverage-ignore",
     ].includes(name)
   );
