@@ -138,7 +138,7 @@ ts-comment-scanner --remove --remove-directives --remove-legal src
 Removal is driven by the AST's comment ranges, so it never touches strings or code. In addition:
 
 - Directives such as `@ts-expect-error` / `eslint-disable` are **kept by default**, because removing them would break the build or the linter
-- Legal comments — `/*! ... */` or those containing `@license` / `@preserve` / `@copyright` — are also **kept by default**
+- Legal comments — `/*! ... */` or those containing `@license` / `@preserve` / `@copyright` or the `SPDX-License-Identifier:` / `SPDX-FileCopyrightText:` tags — are also **kept by default**
 - Whitespace is inserted where removing a block comment would otherwise join tokens together (`a/* x */b` → `a b`)
 - Comment-only lines are removed entirely, and trailing comments are removed together with the preceding whitespace
 - The result is re-scanned to verify it, and if the outcome is unexpected the file is left unchanged and an error is reported
@@ -162,7 +162,16 @@ This is designed for workflows like letting a coding agent do some work and then
 
 ### Detectable directives (excerpt)
 
-`@ts-ignore` `@ts-expect-error` `@ts-nocheck` `@ts-check` / the `eslint-disable` family, `eslint-env`, `/* global */` / `tslint:`, `jshint`, `jscs:` / the `oxlint-disable` family / the `biome-ignore` family / the `deno-lint-ignore` family / `prettier-ignore`, `oxfmt-ignore` / `istanbul ignore`, `c8 ignore`, `v8 ignore`, `node:coverage` / webpack magic comments such as `webpackChunkName:` and turbopack magic comments such as `turbopackIgnore:` / `@vite-ignore` / `#__PURE__` / `//# sourceMappingURL=`, `//# sourceURL=` / `@jsx`-family pragmas / `@jest-environment`, `@vitest-environment` / `/// <reference>` / `#region`, `#endregion`
+Each directive is matched the way the real tool's parser matches it (its regex or string comparison).
+
+- **Compiler / types**: `@ts-ignore` `@ts-expect-error` `@ts-nocheck` `@ts-check` / `/// <reference>` / `@ts-strict-ignore`, `@ts-strict` (typescript-strict-plugin) / `@deno-types=`, `@ts-types=`, `@ts-self-types=` (Deno)
+- **Linters**: the `eslint-disable` family, `eslint-env`, `/* global */`, `/* exported */` / the `oxlint-disable` family / the `biome-ignore` family, `rome-ignore` / the `deno-lint-ignore` family / `@flow`, `@noflow`, the `$FlowFixMe` family, `flowlint` (Flow) / `tslint:`, `jshint`, `jscs:`, `jslint` (legacy)
+- **Formatters**: `prettier-ignore`, the `@format`/`@prettier`/`@noformat`/`@noprettier` pragmas / `oxfmt-ignore` / `dprint-ignore`, `dprint-ignore-file` / `organize-imports-ignore` / `beautify ignore/preserve` (legacy)
+- **Coverage / testing**: `istanbul ignore`, `c8 ignore`, `v8 ignore`, `node:coverage` / `@jest-environment(-options)`, `@vitest-environment(-options)`, `@module-tag` (Vitest 4) / `Stryker disable/restore` / `type-coverage:ignore-line/-next-line` / `ts-prune-ignore-next`
+- **Bundlers / runtimes**: webpack and turbopack magic comments such as `webpackChunkName:` / `@vite-ignore` / `#__PURE__`, `@__NO_SIDE_EFFECTS__`, `@__INLINE__`, `@__KEY__`, `@__MANGLE_PROP__` (terser/rollup annotations) / `// @bun` (Bun) / `@refresh reset/skip/reload` (react-refresh / solid-refresh) / `million-ignore` / `nx-ignore-next-line` (Nx) / `@unocss-include/-ignore/-skip-start/-skip-end` / `@next-codemod-error/-ignore` (Next.js) / `/* GraphQL */`, `/* HTML */` tag comments / `//# sourceMappingURL=`, `//# sourceURL=` / `@jsx`-family pragmas
+- **Security / static analysis**: `NOSONAR` (SonarQube) / `nosemgrep` (Semgrep) / `lgtm[...]`, `codeql[...]` (CodeQL) / `skipcq` (DeepSource) / `deepcode ignore` (Snyk Code) / `no-dd-sa`, `datadog-disable` (Datadog) / `gitleaks:allow` / `trufflehog:ignore` / `pragma: allowlist secret` (detect-secrets)
+- **Spell checkers**: the `cspell:` family (including the `cSpell:`, `spell-checker:`, `spellchecker:` aliases), `LocalWords` / `codespell:ignore`
+- **Editors / IDEs**: `#region`, `#endregion` / `noinspection`, `<editor-fold>`, `language=` (JetBrains) / `ReSharper disable/restore`
 
 ## Using it as a library
 

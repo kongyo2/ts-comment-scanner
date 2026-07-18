@@ -279,6 +279,31 @@ describe("removeComments", () => {
     expect(removeComments(prettier).code).toBe("const c = [4, 5]; // prettier-ignore\nconst d = 6;\n");
   });
 
+  it("shields below the newly covered next-line directives", () => {
+    const dprint = "// dprint-ignore\n// shielded\nconst matrix = [1, 2, 3];\n";
+    expect(removeComments(dprint).code).toBe(dprint);
+
+    const denoTypes = '// @deno-types="./x.d.ts"\n// shielded\nimport y from "./y.js";\n';
+    expect(removeComments(denoTypes).code).toBe(denoTypes);
+
+    const flow = "// $FlowFixMe[incompatible-call]\n// shielded\ncall(1);\n";
+    expect(removeComments(flow).code).toBe(flow);
+
+    const nx = "// nx-ignore-next-line\n// shielded\nimport z from './z.js';\n";
+    expect(removeComments(nx).code).toBe(nx);
+
+    const semgrep = "// nosemgrep: rule-id\n// shielded\ndanger();\n";
+    expect(removeComments(semgrep).code).toBe(semgrep);
+  });
+
+  it("does not shield below trailing scanner suppressions that target their own line", () => {
+    const semgrep = "danger(); // nosemgrep\n// gone\nsafe();\n";
+    expect(removeComments(semgrep).code).toBe("danger(); // nosemgrep\nsafe();\n");
+
+    const dprint = "const a = [1]; // dprint-ignore\n// gone\nconst b = 2;\n";
+    expect(removeComments(dprint).code).toBe("const a = [1]; // dprint-ignore\nconst b = 2;\n");
+  });
+
   it("treats every JS line terminator as ending a suppression's line", () => {
     // With U+2028 or a lone \r as the break, the suppression still stands on
     // its own line and must shield the comment below it.
