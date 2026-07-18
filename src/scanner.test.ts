@@ -175,14 +175,49 @@ describe("scanComments", () => {
     expect(v8[0]?.directive).toBe("v8-ignore-file");
   });
 
-  it("treats test-environment pragmas as directives only in the file header", () => {
-    // Assembled at runtime so vitest's own docblock detection ignores this file.
+  it("keeps test-environment pragmas active anywhere in the file, like Vitest", () => {
+    // Jest only reads the leading docblock, but Vitest matches the pragma
+    // (including the @jest- spelling) with a regex over the entire file, so a
+    // mid-file occurrence is live and has to keep its directive tag.
+    // Assembled at runtime so vitest's own detection ignores this test file.
     const envPragma = ["@vitest", "environment"].join("-");
     const early = scanComments(`/** ${envPragma} jsdom */\nconst x = 1;`);
     const late = scanComments(`const x = 1;\n/** ${envPragma} jsdom */`);
 
     expect(early[0]?.directive).toBe(envPragma);
+    expect(late[0]?.directive).toBe(envPragma);
+  });
+
+  it("treats prettier pragma-mode docblock pragmas as directives only in the header", () => {
+    // --require-pragma and --check-ignore-pragma go through jest-docblock,
+    // which only ever reads the file's first block comment.
+    const early = scanComments("/** @format */\nconst x = 1;");
+    const late = scanComments("const x = 1;\n/** @format */");
+
+    expect(early[0]?.directive).toBe("@format");
     expect(late[0]?.directive).toBeUndefined();
+  });
+
+  it.each([
+    ["// @bun", "@bun"],
+    ["// @flow", "@flow"],
+    ['// @ts-self-types="./mod.d.ts"', "@ts-self-types"],
+    ["/*jslint devel*/", "jslint"],
+  ])("treats %s as a directive only in the file header", (comment, name) => {
+    const early = scanComments(`${comment}\nconst x = 1;`);
+    const late = scanComments(`const x = 1;\n${comment}`);
+
+    expect(early[0]?.directive).toBe(name);
+    expect(late[0]?.directive).toBeUndefined();
+  });
+
+  it("keeps a stray dprint-ignore-file active below the header, as dprint's node pragma", () => {
+    // Out of the leading comment run it no longer skips the file, but the
+    // node-level bounded substring check still matches, so it keeps a tag
+    // under the file-pragma name assigned by rule order.
+    const late = scanComments("const x = 1;\n// dprint-ignore-file");
+
+    expect(late[0]?.directive).toBe("dprint-ignore-file");
   });
 
   it("does not set the directive key on ordinary comments", () => {

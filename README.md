@@ -138,7 +138,7 @@ ts-comment-scanner --remove --remove-directives --remove-legal src
 削除は AST のコメント範囲に基づいて行われるため、文字列やコードには影響しません。さらに:
 
 - `@ts-expect-error` / `eslint-disable` などの指示子は、削除するとビルドやリントが壊れるため**デフォルトで保持**
-- `/*! ... */` や `@license` / `@preserve` / `@copyright` を含む法的コメントも**デフォルトで保持**
+- `/*! ... */` や `@license` / `@preserve` / `@copyright`、`SPDX-License-Identifier:` / `SPDX-FileCopyrightText:` タグを含む法的コメントも**デフォルトで保持**
 - ブロックコメント除去でトークンが結合してしまう位置には空白を挿入(`a/* x */b` → `a b`)
 - コメントだけの行は行ごと削除、行末コメントは手前の空白ごと削除
 - 削除後のソースを再スキャンして検証し、想定外の結果になる場合はファイルを変更せずエラー報告
@@ -162,7 +162,16 @@ ts-comment-scanner --fail-on-comment --diff a1b2c3..d4e5f6 src
 
 ### 検出できるディレクティブ(抜粋)
 
-`@ts-ignore` `@ts-expect-error` `@ts-nocheck` `@ts-check` / `eslint-disable` 系・`eslint-env`・`/* global */` / `tslint:`・`jshint`・`jscs:` / `oxlint-disable` 系 / `biome-ignore` 系 / `deno-lint-ignore` 系 / `prettier-ignore`・`oxfmt-ignore` / `istanbul ignore`・`c8 ignore`・`v8 ignore`・`node:coverage` / `webpackChunkName:` などの webpack マジックコメント・`turbopackIgnore:` などの turbopack マジックコメント / `@vite-ignore` / `#__PURE__` / `//# sourceMappingURL=`・`//# sourceURL=` / `@jsx` 系プラグマ / `@jest-environment`・`@vitest-environment` / `/// <reference>` / `#region`・`#endregion`
+各ディレクティブは実ツールのパーサー実装(正規表現・文字列比較)に合わせて判定されます。
+
+- **コンパイラ / 型**: `@ts-ignore` `@ts-expect-error` `@ts-nocheck` `@ts-check` / `/// <reference>` / `@ts-strict-ignore`・`@ts-strict`(typescript-strict-plugin) / `@deno-types=`・`@ts-types=`・`@ts-self-types=`(Deno)
+- **リンター**: `eslint-disable` 系・`eslint-env`・`/* global */`・`/* exported */` / `oxlint-disable` 系 / `biome-ignore` 系・`rome-ignore` / `deno-lint-ignore` 系 / `@flow`・`@noflow`・`$FlowFixMe` 系・`flowlint` 系(Flow) / `tslint:`・`jshint`・`jscs:`・`jslint`(レガシー)
+- **フォーマッタ**: `prettier-ignore`・`@format`/`@prettier`/`@noformat`/`@noprettier` pragma / `oxfmt-ignore` / `dprint-ignore`・`dprint-ignore-file` / `organize-imports-ignore` / `beautify ignore/preserve`(レガシー)
+- **カバレッジ / テスト**: `istanbul ignore`・`c8 ignore`・`v8 ignore`・`node:coverage` / `@jest-environment(-options)`・`@vitest-environment(-options)`・`@module-tag`(Vitest 4) / `Stryker disable/restore` / `type-coverage:ignore-line/-next-line` / `ts-prune-ignore-next`
+- **バンドラ / ランタイム**: `webpackChunkName:` などの webpack・turbopack マジックコメント / `@vite-ignore` / `#__PURE__`・`@__NO_SIDE_EFFECTS__`・`@__INLINE__`・`@__KEY__`・`@__MANGLE_PROP__`(terser/rollup 注釈) / `// @bun`(Bun) / `@refresh reset/skip/reload`(react-refresh / solid-refresh) / `million-ignore` / `nx-ignore-next-line`(Nx) / `@unocss-include/-ignore/-skip-start/-skip-end` / `@next-codemod-error/-ignore`(Next.js) / `/* GraphQL */`・`/* HTML */` タグコメント / `//# sourceMappingURL=`・`//# sourceURL=` / `@jsx` 系プラグマ
+- **セキュリティ / 静的解析**: `NOSONAR`(SonarQube) / `nosemgrep`(Semgrep) / `lgtm[...]`・`codeql[...]`(CodeQL) / `skipcq`(DeepSource) / `deepcode ignore`(Snyk Code) / `no-dd-sa`・`datadog-disable`(Datadog) / `gitleaks:allow` / `trufflehog:ignore` / `pragma: allowlist secret`(detect-secrets)
+- **スペルチェック**: `cspell:` 系(`cSpell:`・`spell-checker:`・`spellchecker:` 別名込み)・`LocalWords` / `codespell:ignore`
+- **エディタ / IDE**: `#region`・`#endregion` / `noinspection`・`<editor-fold>`・`language=`(JetBrains) / `ReSharper disable/restore`
 
 ## ライブラリとして使う
 

@@ -89,9 +89,10 @@ function shieldNextLineDirectives(source: string, removed: Comment[], kept: Comm
   const shieldedLines = new Set<number>();
   for (const comment of [...kept, ...skipped]) {
     if (comment.directive !== undefined && isNextLineDirective(comment.directive)) {
-      // A trailing formatter suppression (`a = [1]; // oxfmt-ignore`) targets
-      // its own line, so it shields nothing below it.
-      if (FORMATTER_SUPPRESSIONS.has(comment.directive) && !occupiesWholeLines(source, comment)) {
+      // A trailing formatter or scanner suppression (`a = [1]; // oxfmt-ignore`,
+      // `secret(); // nosemgrep`) targets its own line, so it shields nothing
+      // below it.
+      if (TRAILING_TARGETS_OWN_LINE.has(comment.directive) && !occupiesWholeLines(source, comment)) {
         continue;
       }
       // Counted pragmas like `c8 ignore next 3` cover several lines.
@@ -116,10 +117,19 @@ function shieldNextLineDirectives(source: string, removed: Comment[], kept: Comm
   return stillRemoved;
 }
 
-// Formatter suppressions only apply to the following node when they stand on
-// their own line; other next-line directives (`@ts-ignore`, ...) target the
-// next line even when they trail code.
-const FORMATTER_SUPPRESSIONS = new Set(["prettier-ignore", "oxfmt-ignore"]);
+// These suppressions only apply to the following node/line when they stand on
+// their own line — trailing after code they target (at most) their own line.
+// Other next-line directives (`@ts-ignore`, `no-dd-sa`, ...) target the next
+// line even when they trail code.
+const TRAILING_TARGETS_OWN_LINE = new Set([
+  "prettier-ignore",
+  "oxfmt-ignore",
+  "dprint-ignore",
+  "lgtm",
+  "codeql",
+  "skipcq",
+  "nosemgrep",
+]);
 
 // File- and range-scoped pragmas (`c8 ignore start`, `istanbul ignore file`,
 // ...) do not target the following line, so they never shield it.
@@ -135,6 +145,8 @@ function isNextLineDirective(name: string): boolean {
       "deno-coverage-ignore",
       "prettier-ignore",
       "oxfmt-ignore",
+      "dprint-ignore",
+      "rome-ignore",
       "istanbul-ignore",
       "istanbul-ignore-next",
       "istanbul-ignore-if",
@@ -148,6 +160,34 @@ function isNextLineDirective(name: string): boolean {
       "v8-ignore-if",
       "v8-ignore-else",
       "node:coverage-ignore",
+      // Directives that hang off the node or line directly below them: a
+      // whole-line comment between them and their target would change what
+      // they apply to, so the line below stays shielded.
+      "ts-prune-ignore-next",
+      "million-ignore",
+      "@million-skip",
+      "@million-jsx-skip",
+      "@deno-types",
+      "@ts-types",
+      "deepcode-ignore",
+      "skipcq",
+      "lgtm",
+      "codeql",
+      "nosemgrep",
+      "no-dd-sa",
+      "datadog-disable",
+      "noinspection",
+      "language-injection",
+      "@next-codemod-error",
+      "@next-codemod-ignore",
+      "$FlowFixMe",
+      "$FlowExpectedError",
+      "$FlowIssue",
+      "$FlowIgnore",
+      "pragma-allowlist-nextline-secret",
+      "cspell:disable-next",
+      "GraphQL",
+      "HTML",
     ].includes(name)
   );
 }
