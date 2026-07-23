@@ -1,4 +1,4 @@
-import { isLegalComment } from "./directives.js";
+import { activePositionalDirectives, isLegalComment, type DirectivePlacement } from "./directives.js";
 import { scanComments } from "./scanner.js";
 import type { Comment } from "./types.js";
 
@@ -73,7 +73,7 @@ export function removeComments(source: string, options: RemoveOptions = {}): Rem
     }
 
     const code = spliceKeepingBom(source, removed);
-    const survivor = firstChangedSurvivor(scanComments(code, { jsx }), kept, skipped);
+    const survivor = firstChangedSurvivor(source, code, scanComments(code, { jsx }), kept, skipped);
     if (survivor === undefined) {
       return { code, removed, kept, skipped, changed: true };
     }
@@ -104,9 +104,19 @@ function unexpectedResult(): Error {
  * survive, in document order (removal never reorders them). Throws when the
  * texts themselves differ (the output would be corrupted) and returns the
  * first surviving comment whose directive semantics changed, or undefined
- * when the output is exactly as expected.
+ * when the output is exactly as expected. Besides the canonical directive
+ * name, the position-dependent pragmas are compared on their own: a comment
+ * can carry an inert `@format` underneath the directive an earlier rule
+ * already named (an eslint config block, say), and that pragma going live
+ * must not hide behind the unchanged name.
  */
-function firstChangedSurvivor(actual: Comment[], kept: Comment[], skipped: Comment[]): Comment | undefined {
+function firstChangedSurvivor(
+  source: string,
+  code: string,
+  actual: Comment[],
+  kept: Comment[],
+  skipped: Comment[],
+): Comment | undefined {
   const expected = [...kept, ...skipped].sort((a, b) => a.start - b.start);
   if (actual.length !== expected.length) {
     throw unexpectedResult();
@@ -117,8 +127,29 @@ function firstChangedSurvivor(actual: Comment[], kept: Comment[], skipped: Comme
       throw unexpectedResult();
     }
     if (survivor.directive !== comment.directive) return comment;
+    const before = activePositionalDirectives(comment.kind, comment.text, positionalPlacement(source, comment));
+    const after = activePositionalDirectives(survivor.kind, survivor.text, positionalPlacement(code, survivor));
+    if (before.join("\n") !== after.join("\n")) return comment;
   }
   return undefined;
+}
+
+/**
+ * The placement bits the position-dependent directives care about, derived
+ * without a parse: the comment is the file's first comment when nothing but
+ * whitespace (or a shebang) precedes it — any earlier comment's text keeps
+ * the slice non-blank — and it sits at the file start when it begins at
+ * offset zero. Header status needs the token structure, but removing
+ * comments never moves a comment across the first token, so the positional
+ * check does not consult it.
+ */
+function positionalPlacement(text: string, comment: Comment): DirectivePlacement {
+  const shebangLength = /^#!.*/.exec(text)?.[0].length ?? 0;
+  return {
+    header: false,
+    firstComment: isBlank(text.slice(shebangLength, comment.start)),
+    fileStart: comment.start === 0,
+  };
 }
 
 /** The removal candidate that starts closest before the comment, if any. */

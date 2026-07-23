@@ -591,4 +591,49 @@ describe("removeComments position-dependent directive protection", () => {
     expect(result.code).toBe("const x = 1;\n");
     expect(result.removed).toHaveLength(2);
   });
+
+  it("keeps a leading comment whose removal would activate a pragma masked by another directive", () => {
+    // detectDirective names this docblock "eslint" before and after the
+    // removal, so the canonical name alone cannot reveal that the inert
+    // @format underneath just became the file's first comment.
+    const source = "/* lead */\n/**\n * eslint no-console: 0\n * @format\n * @license\n */\nconst x={a:1}\n";
+
+    expect(scanComments(source).map((comment) => comment.directive)).toEqual([undefined, "eslint"]);
+
+    const result = removeComments(source);
+
+    expect(result.changed).toBe(false);
+    expect(result.code).toBe(source);
+  });
+
+  it("keeps a leading comment whose removal would move a masked // @bun to the file start", () => {
+    // The type-coverage rule names the comment before the @bun rule runs;
+    // the marker landing on byte zero must still be caught.
+    const source = "// lead\n// @bun type-coverage:ignore-line\nconst x = 1;\n";
+
+    expect(scanComments(source).map((comment) => comment.directive)).toEqual([undefined, "type-coverage:ignore-line"]);
+
+    const result = removeComments(source);
+
+    expect(result.changed).toBe(false);
+    expect(result.code).toBe(source);
+  });
+
+  it("applies the masked-pragma protection behind a shebang too", () => {
+    const source = "#!/usr/bin/env node\n// lead\n/**\n * eslint no-console: 0\n * @format\n */\nconst x = 1;\n";
+
+    const result = removeComments(source);
+
+    expect(result.changed).toBe(false);
+    expect(result.code).toBe(source);
+  });
+
+  it("still removes comments behind a pragma that was already first and active", () => {
+    const source = "/**\n * eslint no-console: 0\n * @format\n */\n// gone\nconst x = 1;\n";
+
+    const result = removeComments(source);
+
+    expect(result.code).toBe("/**\n * eslint no-console: 0\n * @format\n */\nconst x = 1;\n");
+    expect(result.removed.map((comment) => comment.text)).toEqual(["// gone"]);
+  });
 });

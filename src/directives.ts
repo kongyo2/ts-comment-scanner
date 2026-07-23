@@ -417,6 +417,14 @@ export function detectDirective(kind: CommentKind, text: string, placement?: Dir
     }
   }
 
+  for (const name of ruleMatches(kind, text)) {
+    if (isActiveAt(name, at)) return name;
+  }
+  return undefined;
+}
+
+/** Directive names of every rule the comment matches, in rule order. */
+function* ruleMatches(kind: CommentKind, text: string): Generator<string> {
   const lines = contentLines(kind, text, false);
   const literalLines = kind === "block" ? contentLines(kind, text, true) : lines;
   for (const rule of RULES) {
@@ -435,12 +443,28 @@ export function detectDirective(kind: CommentKind, text: string, placement?: Dir
     for (const line of candidates) {
       const match = rule.pattern.exec(line);
       if (!match) continue;
-      const name =
-        typeof rule.name === "string" ? rule.name : typeof rule.name === "function" ? rule.name(match) : match[0];
-      if (isActiveAt(name, at)) return name;
+      yield typeof rule.name === "string" ? rule.name : typeof rule.name === "function" ? rule.name(match) : match[0];
     }
   }
-  return undefined;
+}
+
+/**
+ * The position-dependent directives (prettier's first-comment pragmas, Bun's
+ * file-start marker) the comment carries that are active at the given
+ * placement, sorted. Unlike detectDirective — which reports one canonical
+ * name — this sees through masking: an eslint config block can also hold a
+ * `@format` pragma, and whether that pragma is live must not hide behind the
+ * name an earlier rule already claimed. Only first-comment and file-start
+ * gates are consulted; header-gated directives cannot change activation when
+ * the comments around them change.
+ */
+export function activePositionalDirectives(kind: CommentKind, text: string, placement: DirectivePlacement): string[] {
+  const names = new Set<string>();
+  for (const name of ruleMatches(kind, text)) {
+    if (!FIRST_COMMENT_ONLY_DIRECTIVES.has(name) && !FILE_START_ONLY_DIRECTIVES.has(name)) continue;
+    if (isActiveAt(name, placement)) names.add(name);
+  }
+  return [...names].sort();
 }
 
 /**
