@@ -200,14 +200,17 @@ async function runRemove(options: CliOptions, collectOptions: CollectOptions, io
         removeLegal: options.removeLegal,
         shouldRemove: (comment) => inScope(comment, options.directives),
       });
-      if (result.changed && !options.dryRun) {
+      if (result.changed) {
         if (!lossless) {
           // Re-encoding would not reproduce the original bytes (invalid
           // UTF-8, truncated UTF-16, ...): rewriting the file would corrupt
-          // content outside the comments.
+          // content outside the comments. Reported for --dry-run too, so the
+          // preflight fails the same way the real removal would.
           throw new Error("file is not valid UTF-8 or UTF-16; refusing to modify it");
         }
-        await writeFileAtomic(file, encodeFileText(result.code, { encoding, bom }));
+        if (!options.dryRun) {
+          await writeFileAtomic(file, encodeFileText(result.code, { encoding, bom }));
+        }
       }
       return { file, removed: result.removed, kept: result.kept, skipped: result.skipped };
     } catch (error) {

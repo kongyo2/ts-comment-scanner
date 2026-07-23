@@ -44,7 +44,7 @@
     "!src/*.test.ts"
   ],
   "scripts": {
-    "clean": "node --eval \"fs.rmSync('dist', { recursive: true, force: true })\"",
+    "clean": "node --eval \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean && tsc",
     "build:watch": "tsc --watch",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.tests.json",

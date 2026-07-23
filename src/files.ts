@@ -219,9 +219,16 @@ export function decodeFileText(data: Buffer): FileText {
     bom = true;
     body = data.subarray(3);
   }
-  const text = encoding === "utf16be" ? Buffer.from(body).swap16().toString("utf16le") : body.toString(encoding);
+  const text = encoding === "utf16be" ? decodeUtf16Be(body) : body.toString(encoding);
   const lossless = encodeFileText(text, { encoding, bom }).equals(data);
   return { text, encoding, bom, lossless };
+}
+
+function decodeUtf16Be(body: Buffer): string {
+  // swap16() refuses odd-length buffers; drop the dangling byte the same way
+  // the LE decoder does and let the lossless round-trip flag the truncation.
+  const even = body.length % 2 === 0 ? body : body.subarray(0, body.length - 1);
+  return Buffer.from(even).swap16().toString("utf16le");
 }
 
 /** Re-encodes decoded text in the encoding (and BOM) it was read with. */

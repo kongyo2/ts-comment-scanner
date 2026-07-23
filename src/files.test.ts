@@ -423,6 +423,17 @@ describe("decodeFileText / encodeFileText", () => {
 
     expect(decodeFileText(data).lossless).toBe(false);
   });
+
+  it("marks truncated UTF-16BE as lossy instead of throwing", () => {
+    const body = Buffer.from("ab", "utf16le").swap16();
+    const data = Buffer.concat([Buffer.from([0xfe, 0xff]), body, Buffer.from([0x00])]);
+
+    const decoded = decodeFileText(data);
+
+    expect(decoded.encoding).toBe("utf16be");
+    expect(decoded.text).toBe("ab");
+    expect(decoded.lossless).toBe(false);
+  });
 });
 
 describe("scanFile with encodings", () => {

@@ -423,6 +423,25 @@ describe("run regression fixes", () => {
     expect((await readFile(file)).equals(original)).toBe(true);
   });
 
+  it("reports the same encoding failure during --remove --dry-run", async () => {
+    // The dry run is the preflight for the real removal, so a file the real
+    // run would refuse to modify must fail the dry run too.
+    const file = join(dir, "a.ts");
+    const original = Buffer.concat([
+      Buffer.from('// gone\nconst s = "', "utf8"),
+      Buffer.from([0x80]),
+      Buffer.from('";\n', "utf8"),
+    ]);
+    await writeFile(file, original);
+    const { io, err } = capture();
+
+    const code = await run(["--remove", "--dry-run", file], io);
+
+    expect(code).toBe(2);
+    expect(err()).toContain("not valid UTF-8");
+    expect((await readFile(file)).equals(original)).toBe(true);
+  });
+
   it("reports how many directives --skip-directives left untouched", async () => {
     const file = join(dir, "a.ts");
     await writeFile(file, "// @ts-nocheck\n// gone\nconst x = 1;\n");
