@@ -385,7 +385,7 @@ describe("collectFiles with symlinks", () => {
     expect(files).toHaveLength(1);
   });
 
-  it("collapses a file symlink with its explicitly listed target", async () => {
+  it("collapses a file symlink with its explicitly listed target, keeping the first spelling", async () => {
     const target = join(dir, "target.ts");
     const link = join(dir, "link.ts");
     await writeFile(target, "// once\n");
@@ -393,7 +393,7 @@ describe("collectFiles with symlinks", () => {
 
     const files = await collectFiles([link, target]);
 
-    expect(files).toHaveLength(1);
+    expect(files).toEqual([link]);
   });
 
   it("skips a symlink that points to itself like any other broken link", async () => {

@@ -40,8 +40,13 @@ export async function collectFiles(inputs: string[], options: CollectOptions = {
     if (!found.has(key)) found.set(key, path);
   };
 
+  // Walks remember their discoveries mid-traversal; explicitly listed files
+  // are resolved concurrently but remembered afterwards in input order, so
+  // which spelling of an aliased file gets reported never depends on
+  // filesystem timing.
+  const explicitFiles = new Array<{ path: string; real: string } | undefined>(inputs.length);
   await Promise.all(
-    inputs.map(async (rawInput) => {
+    inputs.map(async (rawInput, index) => {
       if (rawInput === "") {
         // normalize("") would resolve to "." and silently widen the scan.
         throw new Error("empty path is not a valid input");
@@ -56,10 +61,13 @@ export async function collectFiles(inputs: string[], options: CollectOptions = {
           await walk(input, { extensions, ignoreDirs, isIgnored, root: input, visited: new Set() }, remember);
         }
       } else {
-        remember(input, await realpathInput(input));
+        explicitFiles[index] = { path: input, real: await realpathInput(input) };
       }
     }),
   );
+  for (const file of explicitFiles) {
+    if (file !== undefined) remember(file.path, file.real);
+  }
 
   return [...found.values()].sort();
 }

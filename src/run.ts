@@ -139,8 +139,11 @@ async function collectTargets(options: CliOptions, collectOptions: CollectOption
   const changed = new Set((await changedFiles(options.diff, anchor)).map(caseFold));
   // Realpath only the directory part: spellings through symlinked directories
   // then compare equal, while a tracked symlink still matches the path git
-  // reports it at instead of dereferencing to its target.
-  return files.filter((file) => changed.has(caseFold(join(realpathSync(dirname(file)), basename(file)))));
+  // reports it at instead of dereferencing to its target. The native variant,
+  // because changedFiles resolves the repository root with the (native)
+  // promises realpath — on Windows only the native calls expand 8.3 short
+  // names like RUNNER~1, and both sides must expand them the same way.
+  return files.filter((file) => changed.has(caseFold(join(realpathSync.native(dirname(file)), basename(file)))));
 }
 
 /**
