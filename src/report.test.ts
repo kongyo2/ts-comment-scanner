@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { describe, it, expect } from "vitest";
 import { formatText, formatJson, formatGitHub } from "./report.js";
 import type { FileScanResult } from "./types.js";
@@ -136,13 +137,31 @@ describe("formatGitHub", () => {
   it("emits a notice workflow command per comment plus a summary", () => {
     const output = formatGitHub([{ file: "src/a.ts", comments: [comment()] }]);
 
+    // GitHub's endColumn is inclusive, so `// hi` at columns 1-5 (scanner
+    // endColumn 6, exclusive) is annotated endColumn=5.
     expect(output).toBe(
       [
-        "::notice file=src/a.ts,line=1,endLine=1,col=1,endColumn=6,title=line comment::// hi",
+        "::notice file=src/a.ts,line=1,endLine=1,col=1,endColumn=5,title=line comment::// hi",
         "",
         "1 comment across 1 file",
       ].join("\n"),
     );
+  });
+
+  it("truncates oversized messages below GitHub's 64 KiB annotation limit", () => {
+    const huge = `/* ${"あ".repeat(30_000)} */`;
+    const output = formatGitHub([
+      {
+        file: "a.ts",
+        comments: [comment({ kind: "block", text: huge, end: huge.length, endColumn: huge.length + 1 })],
+      },
+    ]);
+
+    const firstLine = output.split("\n")[0] as string;
+    const message = (firstLine.split("::")[2] as string).replaceAll("%25", "%").replaceAll("%0A", "\n");
+    expect(Buffer.byteLength(message, "utf8")).toBeLessThan(64 * 1024);
+    expect(message.endsWith("… (truncated)")).toBe(true);
+    expect(message.startsWith("/* あ")).toBe(true);
   });
 
   it("includes the directive name in the annotation title", () => {

@@ -1,8 +1,18 @@
 import { realpathSync } from "node:fs";
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs, UsageError, type CliOptions, type DirectiveMode } from "./args.js";
-import { collectFiles, isJsxFile, mapLimit, scanFile, FILE_CONCURRENCY, type CollectOptions } from "./files.js";
+import {
+  collectFiles,
+  encodeFileText,
+  isJsxFile,
+  mapLimit,
+  readFileText,
+  scanFile,
+  writeFileAtomic,
+  FILE_CONCURRENCY,
+  type CollectOptions,
+} from "./files.js";
 import { changedFiles } from "./git.js";
 import { removeComments } from "./remove.js";
 import { count, formatGitHub, formatJson, formatText } from "./report.js";
@@ -79,6 +89,13 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
     throw error;
   }
 
+  // A -h/--help the early scan above could not see (e.g. consumed-looking
+  // spots like `--ignore -- --help`) still means help once parsed as a flag.
+  if (options.help) {
+    io.out(HELP_TEXT);
+    return 0;
+  }
+
   try {
     if (options.version) {
       io.out(`${await getVersion()}\n`);
@@ -119,11 +136,20 @@ async function collectTargets(options: CliOptions, collectOptions: CollectOption
 
   const first = resolve(options.paths[0] as string);
   const anchor = (await stat(first)).isDirectory() ? first : dirname(first);
-  const changed = new Set(await changedFiles(options.diff, anchor));
+  const changed = new Set((await changedFiles(options.diff, anchor)).map(caseFold));
   // Realpath only the directory part: spellings through symlinked directories
   // then compare equal, while a tracked symlink still matches the path git
   // reports it at instead of dereferencing to its target.
-  return files.filter((file) => changed.has(join(realpathSync(dirname(file)), basename(file))));
+  return files.filter((file) => changed.has(caseFold(join(realpathSync(dirname(file)), basename(file)))));
+}
+
+/**
+ * Windows paths are case-insensitive, but git reports the case a file was
+ * tracked with; folding both sides keeps `Foo.ts` in the --diff scope when
+ * the scan found it as `foo.ts`.
+ */
+function caseFold(path: string): string {
+  return process.platform === "win32" ? path.toLowerCase() : path;
 }
 
 /** True when -h/--help appears before any `--` separator. */
@@ -159,6 +185,7 @@ interface FileRemoval {
   file: string;
   removed: Comment[];
   kept: Comment[];
+  skipped: Comment[];
 }
 
 async function runRemove(options: CliOptions, collectOptions: CollectOptions, io: CliIO): Promise<number> {
@@ -166,17 +193,23 @@ async function runRemove(options: CliOptions, collectOptions: CollectOptions, io
 
   const outcomes = await mapLimit(files, FILE_CONCURRENCY, async (file) => {
     try {
-      const source = await readFile(file, "utf8");
-      const result = removeComments(source, {
+      const { text, encoding, bom, lossless } = await readFileText(file);
+      const result = removeComments(text, {
         jsx: isJsxFile(file),
         removeDirectives: options.removeDirectives,
         removeLegal: options.removeLegal,
         shouldRemove: (comment) => inScope(comment, options.directives),
       });
       if (result.changed && !options.dryRun) {
-        await writeFile(file, result.code, "utf8");
+        if (!lossless) {
+          // Re-encoding would not reproduce the original bytes (invalid
+          // UTF-8, truncated UTF-16, ...): rewriting the file would corrupt
+          // content outside the comments.
+          throw new Error("file is not valid UTF-8 or UTF-16; refusing to modify it");
+        }
+        await writeFileAtomic(file, encodeFileText(result.code, { encoding, bom }));
       }
-      return { file, removed: result.removed, kept: result.kept };
+      return { file, removed: result.removed, kept: result.kept, skipped: result.skipped };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { file, failure: `${file}: ${message}` };
@@ -188,7 +221,7 @@ async function runRemove(options: CliOptions, collectOptions: CollectOptions, io
   for (const outcome of outcomes) {
     if ("failure" in outcome) {
       failures.push(outcome.failure);
-    } else if (outcome.removed.length > 0 || outcome.kept.length > 0) {
+    } else if (outcome.removed.length > 0 || outcome.kept.length > 0 || outcome.skipped.length > 0) {
       removals.push(outcome);
     }
   }
@@ -203,13 +236,24 @@ async function runRemove(options: CliOptions, collectOptions: CollectOptions, io
 function renderRemoval(removals: FileRemoval[], options: CliOptions): string {
   const totalRemoved = removals.reduce((sum, entry) => sum + entry.removed.length, 0);
   const totalKept = removals.reduce((sum, entry) => sum + entry.kept.length, 0);
+  const totalSkipped = removals.reduce((sum, entry) => sum + entry.skipped.length, 0);
   const changedEntries = removals.filter((entry) => entry.removed.length > 0);
   const keptNote = totalKept > 0 ? ` Kept ${count(totalKept, "protected comment")}.` : "";
+  // Directives held back by --skip-directives are invisible in the removal
+  // counts; say how many were left untouched so "removed N" is not mistaken
+  // for "the files are now comment-free".
+  const skippedNote = totalSkipped > 0 ? ` Skipped ${count(totalSkipped, "comment")} (--skip-directives).` : "";
 
   if (options.format === "json") {
     return JSON.stringify(
       {
-        summary: { files: changedEntries.length, removed: totalRemoved, kept: totalKept, dryRun: options.dryRun },
+        summary: {
+          files: changedEntries.length,
+          removed: totalRemoved,
+          kept: totalKept,
+          skipped: totalSkipped,
+          dryRun: options.dryRun,
+        },
         files: removals,
       },
       null,
@@ -218,7 +262,7 @@ function renderRemoval(removals: FileRemoval[], options: CliOptions): string {
   }
 
   if (totalRemoved === 0) {
-    return `No removable comments found.${keptNote}`;
+    return `No removable comments found.${keptNote}${skippedNote}`;
   }
 
   const verb = options.dryRun ? "would remove" : "removed";
@@ -230,7 +274,7 @@ function renderRemoval(removals: FileRemoval[], options: CliOptions): string {
   const sentenceVerb = verb.charAt(0).toUpperCase() + verb.slice(1);
   lines.push(
     "",
-    `${sentenceVerb} ${count(totalRemoved, "comment")} across ${count(changedEntries.length, "file")}.${keptNote}`,
+    `${sentenceVerb} ${count(totalRemoved, "comment")} across ${count(changedEntries.length, "file")}.${keptNote}${skippedNote}`,
   );
   return lines.join("\n");
 }

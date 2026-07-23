@@ -1,28 +1,10 @@
 import ts from "typescript";
-import { detectDirective } from "./directives.js";
+import { detectDirective, type DirectivePlacement } from "./directives.js";
 import type { Comment, CommentKind } from "./types.js";
 
 export interface ScanOptions {
   jsx?: boolean;
 }
-
-// dprint-ignore-file is deliberately absent: a stray one below the header no
-// longer skips the file, but dprint's node pragma still matches inside it, so
-// the comment stays an active `dprint-ignore` and must keep its tag.
-const HEADER_ONLY_DIRECTIVES = new Set([
-  "@ts-nocheck",
-  "@ts-check",
-  "@format",
-  "@noformat",
-  "@prettier",
-  "@noprettier",
-  "@flow",
-  "@noflow",
-  "@bun",
-  "@ts-self-types",
-  "jslint",
-  "property",
-]);
 
 export function scanComments(source: string, options: ScanOptions = {}): Comment[] {
   const jsx = options.jsx === true;
@@ -43,7 +25,12 @@ export function scanComments(source: string, options: ScanOptions = {}): Comment
     }
   };
 
-  const visit = (node: ts.Node): void => {
+  // Iterative depth-first walk: generated or minified sources nest thousands
+  // of expressions deep, where a recursive visitor overflows the call stack
+  // even though the parse itself succeeded.
+  const pending: ts.Node[] = [sourceFile];
+  while (pending.length > 0) {
+    const node = pending.pop() as ts.Node;
     // JSDoc nodes start inside the comment text itself; descending into them
     // would hide the comment (e.g. a trailing JSDoc attached to the
     // end-of-file token). Treat them as trivia like any other comment.
@@ -54,54 +41,64 @@ export function scanComments(source: string, options: ScanOptions = {}): Comment
       }
       collect(ts.getLeadingCommentRanges(source, node.getFullStart()));
       collect(ts.getTrailingCommentRanges(source, node.getEnd()));
-      return;
+      continue;
     }
-    for (const child of children) {
-      visit(child);
+    for (let index = children.length - 1; index >= 0; index -= 1) {
+      pending.push(children[index] as ts.Node);
     }
+  }
+
+  // JsxText spans never overlap, so a position is inside one exactly when it
+  // is inside the closest span starting at or before it — found by binary
+  // search, keeping comment-dense TSX files out of quadratic time.
+  jsxTextSpans.sort((a, b) => a[0] - b[0]);
+  const insideJsxText = (pos: number): boolean => {
+    let low = 0;
+    let high = jsxTextSpans.length - 1;
+    let candidate = -1;
+    while (low <= high) {
+      const middle = (low + high) >> 1;
+      if ((jsxTextSpans[middle] as [number, number])[0] <= pos) {
+        candidate = middle;
+        low = middle + 1;
+      } else {
+        high = middle - 1;
+      }
+    }
+    return candidate >= 0 && pos < (jsxTextSpans[candidate] as [number, number])[1];
   };
-  visit(sourceFile);
 
-  const insideJsxText = (pos: number): boolean => jsxTextSpans.some(([start, end]) => pos >= start && pos < end);
+  const sorted = ranges.filter((range) => !insideJsxText(range.pos)).sort((a, b) => a.pos - b.pos);
 
-  // File-wide pragmas (check pragmas, triple-slash directives, prettier's
-  // docblock pragma mode, Flow/Bun/JSLint header pragmas, Deno's
-  // *-ignore-file and @ts-self-types forms) only count before the first
-  // token; anywhere later the tools treat them as ordinary text. Coverage
-  // file pragmas (`istanbul ignore file`, `c8/v8 ignore file`) are NOT
-  // gated: istanbul-lib-instrument and Vitest's v8 provider
-  // (ast-v8-to-istanbul) honour them on any comment in the file. Test
-  // environment pragmas are not gated either: Vitest matches them (including
-  // the @jest- spellings) with a regex over the whole file, and neither are
-  // @ts-strict pragmas (typescript-strict-plugin scans every line).
+  // Directive rules with positional requirements (header pragmas, prettier's
+  // first-comment docblock, Bun's file-start marker) get the comment's actual
+  // placement; a shebang does not count as content before the first comment,
+  // matching jest-docblock.
   const firstTokenStart = sourceFile.getStart(sourceFile);
-  const isHeaderOnlyDirective = (directive: string): boolean =>
-    HEADER_ONLY_DIRECTIVES.has(directive) ||
-    (directive.startsWith("deno-") && directive.endsWith("-ignore-file")) ||
-    directive.startsWith("triple-slash-");
-  const isActiveDirective = (directive: string, pos: number): boolean =>
-    !isHeaderOnlyDirective(directive) || pos < firstTokenStart;
+  const shebangEnd = ts.getShebang(source)?.length ?? 0;
+  const firstCommentPos = sorted.length > 0 ? (sorted[0] as ts.CommentRange).pos : -1;
+  const placementOf = (pos: number): DirectivePlacement => ({
+    header: pos < firstTokenStart,
+    firstComment: pos === firstCommentPos && /^\s*$/.test(source.slice(shebangEnd, pos)),
+    fileStart: pos === 0,
+  });
 
-  return ranges
-    .filter((range) => !insideJsxText(range.pos))
-    .sort((a, b) => a.pos - b.pos)
-    .map((range) => {
-      const kind: CommentKind = range.kind === ts.SyntaxKind.SingleLineCommentTrivia ? "line" : "block";
-      const text = source.slice(range.pos, range.end);
-      const startPosition = sourceFile.getLineAndCharacterOfPosition(range.pos);
-      const endPosition = sourceFile.getLineAndCharacterOfPosition(range.end);
-      const detected = detectDirective(kind, text);
-      const directive = detected !== undefined && isActiveDirective(detected, range.pos) ? detected : undefined;
-      return {
-        kind,
-        text,
-        start: range.pos,
-        end: range.end,
-        line: startPosition.line + 1,
-        column: startPosition.character + 1,
-        endLine: endPosition.line + 1,
-        endColumn: endPosition.character + 1,
-        ...(directive === undefined ? {} : { directive }),
-      };
-    });
+  return sorted.map((range) => {
+    const kind: CommentKind = range.kind === ts.SyntaxKind.SingleLineCommentTrivia ? "line" : "block";
+    const text = source.slice(range.pos, range.end);
+    const startPosition = sourceFile.getLineAndCharacterOfPosition(range.pos);
+    const endPosition = sourceFile.getLineAndCharacterOfPosition(range.end);
+    const directive = detectDirective(kind, text, placementOf(range.pos));
+    return {
+      kind,
+      text,
+      start: range.pos,
+      end: range.end,
+      line: startPosition.line + 1,
+      column: startPosition.character + 1,
+      endLine: endPosition.line + 1,
+      endColumn: endPosition.character + 1,
+      ...(directive === undefined ? {} : { directive }),
+    };
+  });
 }

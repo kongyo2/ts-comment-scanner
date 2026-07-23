@@ -226,3 +226,73 @@ describe("scanComments", () => {
     expect(comments[0] && "directive" in comments[0]).toBe(false);
   });
 });
+
+describe("scanComments robustness", () => {
+  it("scans generated sources with very deep expression nesting", () => {
+    // A recursive AST walk overflows the call stack around this depth even
+    // though the parse itself succeeds.
+    const source = `const x=${Array(50_000).fill("a").join("+")}; // tail\n`;
+
+    const comments = scanComments(source);
+
+    expect(comments).toHaveLength(1);
+    expect(comments[0]?.text).toBe("// tail");
+  });
+
+  it("stays fast when JSX text and comments are both plentiful", () => {
+    const jsxText = Array(4_000).fill("t{1}").join("");
+    const comments = Array(4_000).fill("// c").join("\n");
+    const source = `const v = <p>${jsxText}</p>;\n${comments}\nconst w = 1;\n`;
+
+    const found = scanComments(source, { jsx: true });
+
+    expect(found).toHaveLength(4_000);
+    expect(found.every((comment) => comment.text === "// c")).toBe(true);
+  });
+});
+
+describe("scanComments directive fall-through", () => {
+  it("finds a live directive behind a positionally dead one in the same comment", () => {
+    // deno-lint-ignore-file only counts in the header, but semgrep still
+    // honours the nosemgrep suppression on this line.
+    const comments = scanComments("danger(); // deno-lint-ignore-file nosemgrep\n");
+
+    expect(comments[0]?.directive).toBe("nosemgrep");
+  });
+
+  it("finds a live directive behind a mid-file check pragma", () => {
+    const comments = scanComments("danger();\n// @ts-nocheck nosemgrep\n");
+
+    expect(comments[0]?.directive).toBe("nosemgrep");
+  });
+});
+
+describe("scanComments directive placement", () => {
+  it("treats prettier docblock pragmas as directives only in the file's first comment", () => {
+    // jest-docblock (which prettier's pragma modes use) only extracts the
+    // first comment of the file, so an earlier comment disables the pragma.
+    const first = scanComments("/** @format */\nconst x = 1;\n");
+    const second = scanComments("/* first */\n/** @format */\nconst x = 1;\n");
+    const afterLine = scanComments("// lead\n/** @format */\nconst x = 1;\n");
+
+    expect(first[0]?.directive).toBe("@format");
+    expect(second[1]?.directive).toBeUndefined();
+    expect(afterLine[1]?.directive).toBeUndefined();
+  });
+
+  it("still honours a prettier docblock pragma after a shebang", () => {
+    const comments = scanComments("#!/usr/bin/env node\n/** @format */\nconst x = 1;\n");
+
+    expect(comments[0]?.directive).toBe("@format");
+  });
+
+  it("treats // @bun as a directive only at the very start of the file", () => {
+    const atStart = scanComments("// @bun\nconst x = 1;\n");
+    const afterComment = scanComments("// lead\n// @bun\nconst x = 1;\n");
+    const afterShebang = scanComments("#!/usr/bin/env bun\n// @bun\nconst x = 1;\n");
+
+    expect(atStart[0]?.directive).toBe("@bun");
+    expect(afterComment[1]?.directive).toBeUndefined();
+    expect(afterShebang[0]?.directive).toBeUndefined();
+  });
+});

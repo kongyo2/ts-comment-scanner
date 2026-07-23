@@ -28,8 +28,12 @@ interface DirectiveRule {
    * whitespace before their marker, so a leading `*` defeats them.
    */
   notDocblock?: boolean;
-  /** Skip comments spanning lines (CodeQL only reads single-line comments). */
-  singleLine?: boolean;
+  /**
+   * Match content lines verbatim, without stripping JSDoc `*` prefixes, for
+   * tools that compare the literal comment value (prettier/oxfmt compare the
+   * trimmed body, so `/** prettier-ignore *​/` is NOT a suppression to them).
+   */
+  keepStars?: boolean;
 }
 
 const RULES: DirectiveRule[] = [
@@ -82,9 +86,12 @@ const RULES: DirectiveRule[] = [
   // Formatter suppressions (prettier, and oxfmt which mirrors it). Both
   // parsers compare the exact trimmed comment body, so the marker must be the
   // whole comment (joinLines makes `$` span every line): hyphenated
-  // lookalikes (`oxfmt-ignore-more`) and prose stay ordinary.
-  { pattern: /^prettier-ignore(?:-start|-end)?$/, joinLines: true },
-  { pattern: /^oxfmt-ignore$/, joinLines: true },
+  // lookalikes (`oxfmt-ignore-more`) and prose stay ordinary. keepStars,
+  // because the literal comparison also means a JSDoc `*` before the marker
+  // (`/** prettier-ignore *​/`) leaves the comment ordinary — verified against
+  // prettier 3.8.
+  { pattern: /^prettier-ignore(?:-start|-end)?$/, joinLines: true, keepStars: true },
+  { pattern: /^oxfmt-ignore$/, joinLines: true, keepStars: true },
   // dprint. The file pragma is a starts-with check (trailing text allowed) on
   // the file's leading comments, skipping only whitespace — a `/**` docblock
   // star defeats it. The node pragma is a substring bounded by
@@ -175,7 +182,10 @@ const RULES: DirectiveRule[] = [
   // stars break — turbopack magic comments mirror the same `key: value` form.
   { pattern: /^webpack[A-Z][A-Za-z]+:/, name: "webpack-magic-comment", notDocblock: true },
   { pattern: /^turbopack[A-Z][A-Za-z]+:/, name: "turbopack-magic-comment", notDocblock: true },
-  { pattern: /^@vite-ignore\b/ },
+  // Vite matches the literal block comment (`/\/\*\s*@vite-ignore\s*\*\//` in
+  // importAnalysis), so line comments, suffixes and trailing words stay
+  // ordinary.
+  { pattern: /^\/\*\s*@vite-ignore\s*\*\/$/, rawText: true, blockOnly: true, name: "@vite-ignore" },
   // Terser/Rollup annotations: a bare substring search over any comment kind,
   // so leading or trailing words keep the annotation active.
   { pattern: /[#@]__(?:PURE|NO_SIDE_EFFECTS|INLINE|NOINLINE|KEY|MANGLE_PROP)__/, anyLine: true },
@@ -238,12 +248,13 @@ const RULES: DirectiveRule[] = [
   // no trailing boundary; the lookahead just keeps words like `nosemantic`
   // ordinary.
   { pattern: /(?:^|\s)nosem(?:grep)?(?![\w-])/i, name: "nosemgrep", anyLine: true },
-  // CodeQL / LGTM alert suppressions: single-line comments only. `lgtm[...]`
-  // matches anywhere in the comment; bare `lgtm` only at the start or after a
-  // `;`; `codeql[...]` requires the bracketed query id.
-  { pattern: /\blgtm\s*\[[^\]]*\]/i, singleLine: true, name: "lgtm" },
-  { pattern: /(?:^|;)\s*lgtm(?!\w)(?!\s*\[)/i, singleLine: true, name: "lgtm" },
-  { pattern: /\bcodeql\s*\[[^\]]*\]/i, singleLine: true, name: "codeql" },
+  // CodeQL / LGTM alert suppressions: the AlertSuppression queries only read
+  // `//` comments, so block comments — even single-line ones — stay ordinary.
+  // `lgtm[...]` matches anywhere in the comment; bare `lgtm` only at the
+  // start or after a `;`; `codeql[...]` requires the bracketed query id.
+  { pattern: /\blgtm\s*\[[^\]]*\]/i, lineOnly: true, name: "lgtm" },
+  { pattern: /(?:^|;)\s*lgtm(?!\w)(?!\s*\[)/i, lineOnly: true, name: "lgtm" },
+  { pattern: /\bcodeql\s*\[[^\]]*\]/i, lineOnly: true, name: "codeql" },
   // DeepSource: bare `skipcq` or `skipcq: CODE1, CODE2`, on the flagged line
   // or standalone above it (it may trail other comment text).
   { pattern: /\bskipcq(?![\w-])/, name: "skipcq", anyLine: true },
@@ -298,6 +309,68 @@ const RULES: DirectiveRule[] = [
 
 const TRIPLE_SLASH = /^\/\/\/\s*<(reference|amd-dependency|amd-module)\b/;
 
+/**
+ * Where a comment sits in its file, for directives that are only honoured in
+ * particular positions. Omitting the placement treats every position as
+ * valid, which matches how a lone comment string is best interpreted.
+ */
+export interface DirectivePlacement {
+  /** The comment starts before the file's first token. */
+  header: boolean;
+  /** The comment is the file's first comment, preceded only by whitespace (or a shebang). */
+  firstComment: boolean;
+  /** The comment starts at the very first character of the file. */
+  fileStart: boolean;
+}
+
+const ANY_PLACEMENT: DirectivePlacement = { header: true, firstComment: true, fileStart: true };
+
+// File-wide pragmas (check pragmas, triple-slash directives, Flow/JSLint
+// header pragmas, Deno's *-ignore-file and @ts-self-types forms) only count
+// before the first token; anywhere later the tools treat them as ordinary
+// text. dprint-ignore-file is deliberately absent: a stray one below the
+// header no longer skips the file, but dprint's node pragma still matches
+// inside it, so the comment stays an active `dprint-ignore` and must keep its
+// tag. Coverage file pragmas (`istanbul ignore file`, `c8/v8 ignore file`)
+// are NOT gated: istanbul-lib-instrument and Vitest's v8 provider
+// (ast-v8-to-istanbul) honour them on any comment in the file. Test
+// environment pragmas are not gated either: Vitest matches them (including
+// the @jest- spellings) with a regex over the whole file, and neither are
+// @ts-strict pragmas (typescript-strict-plugin scans every line). @jsx
+// pragmas stay ungated too: tsc only reads leading ones, but Babel's JSX
+// transform scans every comment in the file.
+const HEADER_ONLY_DIRECTIVES = new Set([
+  "@ts-nocheck",
+  "@ts-check",
+  "@flow",
+  "@noflow",
+  "@ts-self-types",
+  "jslint",
+  "property",
+]);
+
+// Prettier's pragma mode reads the pragma through jest-docblock, which only
+// ever extracts the file's FIRST comment (a shebang may precede it) — a
+// docblock behind any other comment is ignored. Verified against prettier 3.8.
+const FIRST_COMMENT_ONLY_DIRECTIVES = new Set(["@format", "@noformat", "@prettier", "@noprettier"]);
+
+// Bun treats a file as pre-transpiled only when it literally STARTS with
+// `// @bun`; after a shebang or any other leading content the marker is inert.
+const FILE_START_ONLY_DIRECTIVES = new Set(["@bun"]);
+
+function isActiveAt(name: string, placement: DirectivePlacement): boolean {
+  if (FILE_START_ONLY_DIRECTIVES.has(name)) return placement.fileStart;
+  if (FIRST_COMMENT_ONLY_DIRECTIVES.has(name)) return placement.firstComment;
+  if (
+    HEADER_ONLY_DIRECTIVES.has(name) ||
+    (name.startsWith("deno-") && name.endsWith("-ignore-file")) ||
+    name.startsWith("triple-slash-")
+  ) {
+    return placement.header;
+  }
+  return true;
+}
+
 // Mirrors the TypeScript compiler's own comment-directive matching, verified
 // against tsc: the suppression directives are case-sensitive PREFIX matches
 // (`@ts-ignoreTODO` is active), while the file-wide check pragmas are
@@ -313,12 +386,20 @@ const TS_BLOCK_SUPPRESSION = /^\s*[/*]*\s*@ts-(ignore|expect-error)/;
 /**
  * Returns the canonical name of the compiler/linter/tooling directive the
  * comment represents, or `undefined` when the comment is an ordinary comment.
+ *
+ * When a placement is given, directives that the corresponding tool only
+ * honours in certain positions (header pragmas, prettier's docblock pragma,
+ * `// @bun`) are skipped elsewhere — and the remaining rules still run, so a
+ * live directive later in the same comment (`// deno-lint-ignore-file
+ * nosemgrep` in mid-file) is not masked by a positionally dead one.
  */
-export function detectDirective(kind: CommentKind, text: string): string | undefined {
+export function detectDirective(kind: CommentKind, text: string, placement?: DirectivePlacement): string | undefined {
+  const at = placement ?? ANY_PLACEMENT;
   if (kind === "line") {
     const tripleSlash = TRIPLE_SLASH.exec(text);
     if (tripleSlash) {
-      return `triple-slash-${tripleSlash[1]}`;
+      const name = `triple-slash-${tripleSlash[1]}`;
+      if (isActiveAt(name, at)) return name;
     }
     const suppression = TS_LINE_SUPPRESSION.exec(text);
     if (suppression) {
@@ -326,7 +407,8 @@ export function detectDirective(kind: CommentKind, text: string): string | undef
     }
     const checkPragma = TS_LINE_CHECK_PRAGMA.exec(text);
     if (checkPragma) {
-      return `@ts-${checkPragma[1]?.toLowerCase()}`;
+      const name = `@ts-${checkPragma[1]?.toLowerCase()}`;
+      if (isActiveAt(name, at)) return name;
     }
   } else {
     const suppression = TS_BLOCK_SUPPRESSION.exec(lastLine(text));
@@ -335,26 +417,27 @@ export function detectDirective(kind: CommentKind, text: string): string | undef
     }
   }
 
-  const lines = contentLines(kind, text);
+  const lines = contentLines(kind, text, false);
+  const literalLines = kind === "block" ? contentLines(kind, text, true) : lines;
   for (const rule of RULES) {
     if (rule.blockOnly === true && kind !== "block") continue;
     if (rule.lineOnly === true && kind !== "line") continue;
-    if (rule.singleLine === true && LINE_BREAK.test(text)) continue;
     if (rule.notDocblock === true && kind === "block" && text.startsWith("/**")) continue;
+    const ruleLines = rule.keepStars === true ? literalLines : lines;
     const candidates =
       rule.rawText === true
         ? [text]
         : rule.anyLine === true
-          ? lines
+          ? ruleLines
           : rule.joinLines === true
-            ? [lines.join(" ")]
-            : lines.slice(0, 1);
+            ? [ruleLines.join(" ")]
+            : ruleLines.slice(0, 1);
     for (const line of candidates) {
       const match = rule.pattern.exec(line);
       if (!match) continue;
-      if (typeof rule.name === "string") return rule.name;
-      if (typeof rule.name === "function") return rule.name(match);
-      return match[0];
+      const name =
+        typeof rule.name === "string" ? rule.name : typeof rule.name === "function" ? rule.name(match) : match[0];
+      if (isActiveAt(name, at)) return name;
     }
   }
   return undefined;
@@ -380,13 +463,23 @@ const LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/;
  * Non-empty content lines of the comment, with comment markers stripped.
  * For line comments only the `//` marker itself is removed: extra slashes or
  * stars are content, so `//// @ts-ignore` and `// * prettier-ignore` stay
- * ordinary. JSDoc-style `*` prefixes are stripped for block comments only.
+ * ordinary. JSDoc-style `*` prefixes are stripped for block comments unless
+ * `keepStars` asks for the literal lines (for tools that compare the raw
+ * comment value, where a leading `*` defeats the directive).
  */
-function contentLines(kind: CommentKind, text: string): string[] {
-  const inner = kind === "line" ? text.replace(/^\/\//, "") : text.replace(/^\/\*+/, "").replace(/\*+\/\s*$/, "");
+function contentLines(kind: CommentKind, text: string, keepStars: boolean): string[] {
+  // In keepStars mode only the literal `/*` and `*/` markers go, matching how
+  // prettier/oxfmt read the comment value: the second star of a `/**` opener
+  // is content and defeats their exact comparison.
+  const inner =
+    kind === "line"
+      ? text.replace(/^\/\//, "")
+      : keepStars
+        ? text.replace(/^\/\*/, "").replace(/\*\/\s*$/, "")
+        : text.replace(/^\/\*+/, "").replace(/\*+\/\s*$/, "");
   const lines: string[] = [];
   for (const line of inner.split(LINE_BREAK)) {
-    const stripped = (kind === "block" ? line.replace(/^\s*\*+\s*/, "") : line).trim();
+    const stripped = (kind === "block" && !keepStars ? line.replace(/^\s*\*+\s*/, "") : line).trim();
     if (stripped !== "") lines.push(stripped);
   }
   return lines;

@@ -66,11 +66,22 @@ export function removeComments(source: string, options: RemoveOptions = {}): Rem
 
   const code = bom + splice(body, removed);
 
-  if (scanComments(code, { jsx }).length !== kept.length + skipped.length) {
+  if (!sameCommentTexts(scanComments(code, { jsx }), [...kept, ...skipped])) {
     throw new Error("comment removal produced an unexpected result; refusing to continue");
   }
 
   return { code, removed, kept, skipped, changed: true };
+}
+
+/**
+ * True when both lists contain the same comment texts (as multisets).
+ * Positions shift during removal, so the texts are what must survive intact.
+ */
+function sameCommentTexts(actual: Comment[], expected: Comment[]): boolean {
+  if (actual.length !== expected.length) return false;
+  const actualTexts = actual.map((comment) => comment.text).sort();
+  const expectedTexts = expected.map((comment) => comment.text).sort();
+  return actualTexts.every((text, index) => text === expectedTexts[index]);
 }
 
 function isProtected(comment: Comment, options: RemoveOptions): boolean {
@@ -80,15 +91,31 @@ function isProtected(comment: Comment, options: RemoveOptions): boolean {
 }
 
 /**
- * Re-protects whole-line comments sitting directly below a surviving
- * next-line directive (`@ts-expect-error`, `eslint-disable-next-line`, ...).
- * Dropping such a line would shift the following code up, silently changing
- * which line the directive applies to.
+ * Re-protects comments whose removal would delete a physical line sitting
+ * under a surviving next-line directive (`@ts-expect-error`,
+ * `eslint-disable-next-line`, ...). Dropping such a line would shift the
+ * following code up, silently changing which line the directive applies to —
+ * and with it the compiler or linter behaviour.
+ *
+ * The check works on whole lines, not single comments: a line holding several
+ * removable comments (`/* one *​/ /* two *​/`) vanishes just the same, so every
+ * comment on it has to stay. Runs to a fixpoint because a re-protected
+ * comment can itself be a next-line directive shielding further lines (when
+ * directives are being removed selectively).
  */
 function shieldNextLineDirectives(source: string, removed: Comment[], kept: Comment[], skipped: Comment[]): Comment[] {
+  const lineOffsets = lineStartOffsets(source);
+  const totalLines = lineOffsets.length;
   const shieldedLines = new Set<number>();
-  for (const comment of [...kept, ...skipped]) {
-    if (comment.directive !== undefined && isNextLineDirective(comment.directive)) {
+  const processed = new Set<Comment>();
+  let stillRemoved = removed;
+
+  const collectShields = (): boolean => {
+    let added = false;
+    for (const comment of [...kept, ...skipped]) {
+      if (processed.has(comment)) continue;
+      processed.add(comment);
+      if (comment.directive === undefined || !isNextLineDirective(comment.directive)) continue;
       // A trailing formatter or scanner suppression (`a = [1]; // oxfmt-ignore`,
       // `secret(); // nosemgrep`) targets its own line, so it shields nothing
       // below it.
@@ -96,25 +123,77 @@ function shieldNextLineDirectives(source: string, removed: Comment[], kept: Comm
         continue;
       }
       // Counted pragmas like `c8 ignore next 3` cover several lines.
-      for (let offset = 1; offset <= shieldedLineCount(comment.text); offset += 1) {
-        shieldedLines.add(comment.endLine + offset);
+      for (let offset = 1; offset <= shieldedLineCount(comment); offset += 1) {
+        const line = comment.endLine + offset;
+        if (line > totalLines) break;
+        if (!shieldedLines.has(line)) {
+          shieldedLines.add(line);
+          added = true;
+        }
       }
     }
-  }
-  if (shieldedLines.size === 0) return removed;
+    return added;
+  };
 
-  const stillRemoved: Comment[] = [];
-  for (const comment of removed) {
-    if (shieldedLines.has(comment.line) && occupiesWholeLines(source, comment)) {
-      kept.push(comment);
-    } else {
-      stillRemoved.push(comment);
+  const protectShieldedLines = (): boolean => {
+    let changed = false;
+    for (const line of shieldedLines) {
+      const group = vanishingLineGroup(source, line, lineOffsets, stillRemoved);
+      if (group === undefined) continue;
+      const grouped = new Set(group);
+      stillRemoved = stillRemoved.filter((comment) => !grouped.has(comment));
+      kept.push(...group);
+      changed = true;
     }
+    return changed;
+  };
+
+  collectShields();
+  while (protectShieldedLines()) {
+    if (!collectShields()) break;
   }
   if (stillRemoved.length !== removed.length) {
     kept.sort((a, b) => a.start - b.start);
   }
   return stillRemoved;
+}
+
+/**
+ * The removal candidates that would make the given line disappear: every
+ * non-whitespace character of the line lies inside one of them, so splicing
+ * them out deletes the physical line. Returns undefined when the line
+ * survives (it holds code, a kept comment, or nothing to remove at all).
+ */
+function vanishingLineGroup(
+  source: string,
+  line: number,
+  lineOffsets: readonly number[],
+  removals: readonly Comment[],
+): Comment[] | undefined {
+  const lineStart = lineOffsets[line - 1];
+  if (lineStart === undefined) return undefined;
+  const lineEnd = lineOffsets[line] ?? source.length;
+  const group = removals.filter((comment) => comment.start < lineEnd && comment.end > lineStart);
+  if (group.length === 0) return undefined;
+  for (let index = lineStart; index < lineEnd; index += 1) {
+    if (isBlank(source[index] as string)) continue;
+    if (!group.some((comment) => comment.start <= index && index < comment.end)) return undefined;
+  }
+  return group;
+}
+
+/** Start offset of every line, numbered the way the scanner numbers them. */
+function lineStartOffsets(source: string): number[] {
+  const starts = [0];
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index] as string;
+    if (char === "\r") {
+      starts.push(source[index + 1] === "\n" ? (index += 1) + 1 : index + 1);
+    } else if (char === "\n" || char === "\u2028" || char === "\u2029") {
+      starts.push(index + 1);
+    }
+  }
+  return starts;
 }
 
 // These suppressions only apply to the following node/line when they stand on
@@ -192,9 +271,17 @@ function isNextLineDirective(name: string): boolean {
   );
 }
 
-/** Number of following lines a next-line pragma covers (`ignore next 3` → 3). */
-function shieldedLineCount(text: string): number {
-  const match = /\bignore\s+next\s+(\d{1,4})\b/.exec(text);
+// The coverage pragmas that actually parse a line count after `ignore next`
+// (c8 / v8-to-istanbul, Vitest's ast-v8-to-istanbul, and Node's test-runner
+// coverage). Everything else — `@ts-expect-error`, `eslint-disable-next-line`
+// and friends — covers exactly one line, no matter what prose like
+// "we ignore next 3 legacy calls" appears in the reason text.
+const COUNTED_NEXT_LINE = new Set(["istanbul-ignore-next", "c8-ignore-next", "v8-ignore-next", "node:coverage-ignore"]);
+
+/** Number of following lines a next-line pragma covers (`c8 ignore next 3` → 3). */
+function shieldedLineCount(comment: Comment): number {
+  if (comment.directive === undefined || !COUNTED_NEXT_LINE.has(comment.directive)) return 1;
+  const match = /\bignore\s+next\s+(\d+)\b/.exec(comment.text);
   return match ? Math.max(1, Number(match[1])) : 1;
 }
 
