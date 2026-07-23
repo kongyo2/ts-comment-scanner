@@ -136,14 +136,26 @@ async function collectTargets(options: CliOptions, collectOptions: CollectOption
 
   const first = resolve(options.paths[0] as string);
   const anchor = (await stat(first)).isDirectory() ? first : dirname(first);
-  const changed = new Set((await changedFiles(options.diff, anchor)).map(caseFold));
-  // Realpath only the directory part: spellings through symlinked directories
-  // then compare equal, while a tracked symlink still matches the path git
-  // reports it at instead of dereferencing to its target. The native variant,
-  // because changedFiles resolves the repository root with the (native)
-  // promises realpath — on Windows only the native calls expand 8.3 short
-  // names like RUNNER~1, and both sides must expand them the same way.
-  return files.filter((file) => changed.has(caseFold(join(realpathSync.native(dirname(file)), basename(file)))));
+  // Both the spelling git reports and the real file it refers to count as
+  // changed: the collector keeps one spelling per real file, so a changed
+  // symlink may have been remembered under its target's path (or a scanned
+  // alias may point at the changed file), and either spelling names the same
+  // content. Broken links (a symlink re-pointed at nothing) only match by
+  // their reported spelling.
+  const changed = new Set<string>();
+  for (const path of await changedFiles(options.diff, anchor)) {
+    changed.add(caseFold(path));
+    const real = tryRealpath(path);
+    if (real !== undefined) changed.add(caseFold(real));
+  }
+  // Realpath only the directory part first: spellings through symlinked
+  // directories then compare equal while a tracked symlink still matches the
+  // path git reports it at; the fully dereferenced path is the fallback.
+  return files.filter((file) => {
+    if (changed.has(caseFold(join(realpathSync.native(dirname(file)), basename(file))))) return true;
+    const real = tryRealpath(file);
+    return real !== undefined && changed.has(caseFold(real));
+  });
 }
 
 /**
@@ -153,6 +165,20 @@ async function collectTargets(options: CliOptions, collectOptions: CollectOption
  */
 function caseFold(path: string): string {
   return process.platform === "win32" ? path.toLowerCase() : path;
+}
+
+/**
+ * Native realpath — changedFiles resolves the repository root with the
+ * (native) promises realpath, and on Windows only the native calls expand
+ * 8.3 short names like RUNNER~1, so every path compared against it must be
+ * expanded the same way. Undefined when the path cannot be resolved.
+ */
+function tryRealpath(path: string): string | undefined {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return undefined;
+  }
 }
 
 /** True when -h/--help appears before any `--` separator. */

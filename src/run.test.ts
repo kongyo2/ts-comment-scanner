@@ -381,6 +381,57 @@ describe("run", () => {
     expect(out()).toContain(`${join(dir, "link.ts")}:1:1 [line] // two`);
   });
 
+  it("keeps a changed symlink in the --diff scope when the scan collapsed it with its target", async () => {
+    // The collector keeps one spelling per real file, so the re-pointed
+    // z.ts and its new target a.ts survive as a single entry — under either
+    // name, that entry must still count as changed.
+    await initRepo();
+    await writeFile(join(dir, "a.ts"), "// alias comment\n");
+    await writeFile(join(dir, "b.ts"), "const x = 1;\n");
+    await symlink("b.ts", join(dir, "z.ts"));
+    await commitAll("base");
+    await rm(join(dir, "z.ts"));
+    await symlink("a.ts", join(dir, "z.ts"));
+    const { io, out } = capture();
+
+    const code = await run(["--diff", "HEAD", dir], io);
+
+    expect(code).toBe(0);
+    expect(out()).toContain("// alias comment");
+    expect(out()).not.toContain("b.ts:");
+  });
+
+  it("keeps an explicitly listed alias of a changed file in the --diff scope", async () => {
+    await initRepo();
+    await writeFile(join(dir, "a.ts"), "// base\n");
+    await symlink("a.ts", join(dir, "link.ts"));
+    await commitAll("base");
+    await writeFile(join(dir, "a.ts"), "// edited\n");
+    const { io, out } = capture();
+
+    const code = await run(["--diff", "HEAD", join(dir, "link.ts")], io);
+
+    expect(code).toBe(0);
+    expect(out()).toContain(`${join(dir, "link.ts")}:1:1 [line] // edited`);
+  });
+
+  it("matches a changed broken symlink by its reported path without failing", async () => {
+    // The re-scoped set also realpaths the git-reported paths; a symlink
+    // pointing at nothing cannot be resolved and must simply fall back to
+    // its spelling instead of failing the run.
+    await initRepo();
+    await writeFile(join(dir, "a.ts"), "// base\n");
+    await commitAll("base");
+    await writeFile(join(dir, "a.ts"), "// changed\n");
+    await symlink("missing.ts", join(dir, "broken.ts"));
+    const { io, out } = capture();
+
+    const code = await run(["--diff", "HEAD", dir], io);
+
+    expect(code).toBe(0);
+    expect(out()).toContain("// changed");
+  });
+
   it("anchors --diff on the input path, not on a nested repository's files", async () => {
     const nested = join(dir, "repo");
     await mkdir(nested);

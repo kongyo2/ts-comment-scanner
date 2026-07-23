@@ -5,6 +5,11 @@ on:
     branches: ["**"]
   pull_request:
 
+# Every job only reads the checkout; keep the default GITHUB_TOKEN scopes out
+# of npm scripts and test runs.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
