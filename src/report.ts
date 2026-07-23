@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import type { Comment, FileScanResult } from "./types.js";
 
 /** Formats `3 comments`, `1 file`, ... with naive pluralization. */
@@ -69,10 +70,31 @@ function annotation(file: string, comment: Comment): string {
     comment.directive === undefined ? `${comment.kind} comment` : `${comment.kind} comment (${comment.directive})`;
   const properties = [`file=${escapeProperty(file)}`, `line=${comment.line}`, `endLine=${comment.endLine}`];
   if (comment.line === comment.endLine) {
-    properties.push(`col=${comment.column}`, `endColumn=${comment.endColumn}`);
+    // The scanner's endColumn is exclusive, GitHub's annotation columns are
+    // inclusive (a 6-character token at columns 5–10 is reported end_column
+    // 10 by the Checks API), so the last covered column is endColumn - 1.
+    properties.push(`col=${comment.column}`, `endColumn=${comment.endColumn - 1}`);
   }
   properties.push(`title=${escapeProperty(title)}`);
-  return `::notice ${properties.join(",")}::${escapeData(comment.text)}`;
+  return `::notice ${properties.join(",")}::${escapeData(truncateAnnotationMessage(comment.text))}`;
+}
+
+// GitHub rejects annotation messages over 64 KiB; truncate on a code-point
+// boundary with room to spare so huge comments still annotate.
+const MAX_ANNOTATION_MESSAGE_BYTES = 60_000;
+const TRUNCATION_SUFFIX = "… (truncated)";
+
+function truncateAnnotationMessage(text: string): string {
+  if (Buffer.byteLength(text, "utf8") <= MAX_ANNOTATION_MESSAGE_BYTES) return text;
+  let bytes = 0;
+  let end = 0;
+  for (const char of text) {
+    const size = Buffer.byteLength(char, "utf8");
+    if (bytes + size > MAX_ANNOTATION_MESSAGE_BYTES) break;
+    bytes += size;
+    end += char.length;
+  }
+  return `${text.slice(0, end)}${TRUNCATION_SUFFIX}`;
 }
 
 function escapeData(value: string): string {

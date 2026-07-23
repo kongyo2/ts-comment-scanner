@@ -14,11 +14,12 @@ TypeScript プロジェクト内のコメントを検出・一覧・集計し、
 
 ## 特徴
 
-- `.ts` `.tsx` `.mts` `.cts` を再帰的にスキャン(`node_modules` と `.git` は除外)
+- `.ts` `.tsx` `.mts` `.cts` を再帰的にスキャン(`node_modules` と `.git` は除外)。シンボリックリンクは明示指定時と同様に走査中も追跡し、循環は自動検知して停止
 - 行コメント (`//`) とブロックコメント (`/* */`) を位置情報つきで報告
 - テキスト / JSON / **GitHub Actions アノテーション**の 3 形式で出力
 - `@ts-ignore` や `eslint-disable` などの**コンパイラ・リンター指示子(ディレクティブ)を自動判別**し、絞り込み・除外が可能
 - **安全なコメント削除**(コードクリーンアップ): ディレクティブとライセンスヘッダーはデフォルトで保持
+- UTF-8(BOM 付き可)と BOM 付き UTF-16(LE/BE)に対応。削除時もエンコーディングと BOM を保持し、不正なエンコーディングのファイルは**変更せずに**エラー報告
 - Glob による**カスタム無視パターン** (`--ignore`)、対象拡張子の変更 (`--ext`)
 - **git 連携 (`--diff`)**: 特定コミット間や未コミットの変更で触れられたファイルだけに対象を絞り込み
 - CI 向けの `--fail-on-comment`(コメント検出時に終了コード 1)
@@ -119,8 +120,10 @@ $ ts-comment-scanner --json src
 ```
 
 ```
-::notice file=src/index.ts,line=1,endLine=1,col=1,endColumn=13,title=line comment::// エントリーポイント
+::notice file=src/index.ts,line=1,endLine=1,col=1,endColumn=12,title=line comment::// エントリーポイント
 ```
+
+JSON 出力の `endColumn` が排他的(コメント末尾の次の桁)なのに対し、GitHub アノテーションの列は両端含みのため、ここでは最後の文字の桁(この例では 12)が出力されます。64 KiB を超える巨大なコメントは、GitHub の上限に収まるよう安全に切り詰められます。
 
 ### コメントの一括削除(コードクリーンアップ)
 
@@ -139,9 +142,11 @@ ts-comment-scanner --remove --remove-directives --remove-legal src
 
 - `@ts-expect-error` / `eslint-disable` などの指示子は、削除するとビルドやリントが壊れるため**デフォルトで保持**
 - `/*! ... */` や `@license` / `@preserve` / `@copyright`、`SPDX-License-Identifier:` / `SPDX-FileCopyrightText:` タグを含む法的コメントも**デフォルトで保持**
+- `@ts-expect-error` や `eslint-disable-next-line` など**次行を対象にする指示子の直下の行構造を保持**: 削除すると行が消えて指示子の適用先がずれる場合(コメントだけの行など)、その行のコメントは削除せずに保持
 - ブロックコメント除去でトークンが結合してしまう位置には空白を挿入(`a/* x */b` → `a b`)
 - コメントだけの行は行ごと削除、行末コメントは手前の空白ごと削除
-- 削除後のソースを再スキャンして検証し、想定外の結果になる場合はファイルを変更せずエラー報告
+- 削除後のソースを再スキャンし、残ったコメントが保持対象と一致することを検証。想定外の結果になる場合はファイルを変更せずエラー報告
+- 書き込みは一時ファイル経由のアトミック置換(書き込み失敗やディスクフルで元ファイルが壊れない)
 
 ### 変更されたファイルだけを対象にする(`--diff`)
 
@@ -202,11 +207,13 @@ const changed = await changedFiles("main..HEAD");
 | `collectFiles(inputs, options?)` | 対象ファイルのパス一覧を収集 |
 | `changedFiles(range, cwd?)` | git のリビジョン範囲で変更された作業ツリーのファイルを絶対パスで返す |
 | `removeComments(source, options?)` | コメントを安全に削除(`removeDirectives` / `removeLegal` / `shouldRemove`) |
-| `detectDirective(kind, text)` | コメントがディレクティブなら正規化した名前を返す |
+| `detectDirective(kind, text, placement?)` | コメントがディレクティブなら正規化した名前を返す(`placement` で位置依存の判定が可能) |
 | `isLegalComment(text)` | ライセンス・法的コメントかどうかを判定 |
 | `formatText(results)` / `formatJson(results)` / `formatGitHub(results)` | スキャン結果を整形 |
+| `readFileText(file)` / `decodeFileText(data)` / `encodeFileText(text, target)` | UTF-8 / UTF-16 と BOM を保持するファイル読み書きヘルパー |
+| `writeFileAtomic(file, data)` | 一時ファイル経由でファイルをアトミックに置換 |
 
-型: `Comment` / `CommentKind` / `FileScanResult` / `ScanOptions` / `CollectOptions` / `RemoveOptions` / `RemoveResult`
+型: `Comment` / `CommentKind` / `FileScanResult` / `ScanOptions` / `CollectOptions` / `RemoveOptions` / `RemoveResult` / `FileText` / `FileEncoding` / `DirectivePlacement`
 
 ## 必要環境
 

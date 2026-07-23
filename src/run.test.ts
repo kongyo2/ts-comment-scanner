@@ -72,10 +72,11 @@ describe("run", () => {
 
     const code = await run(["--format", "github", dir], io);
 
+    // The file property is escaped like the formatter escapes it (`:` →
+    // %3A, ...), so the expectation also holds for Windows drive letters.
+    const file = join(dir, "a.ts").replaceAll("%", "%25").replaceAll(":", "%3A").replaceAll(",", "%2C");
     expect(code).toBe(0);
-    expect(out()).toContain(
-      `::notice file=${join(dir, "a.ts")},line=1,endLine=1,col=1,endColumn=6,title=line comment::// hi`,
-    );
+    expect(out()).toContain(`::notice file=${file},line=1,endLine=1,col=1,endColumn=5,title=line comment::// hi`);
   });
 
   it("prints help and returns 0 without scanning", async () => {
@@ -380,5 +381,113 @@ describe("run", () => {
 
     expect(code).toBe(2);
     expect(err()).toContain("not a git repository");
+  });
+});
+
+describe("run regression fixes", () => {
+  it("prints help when --help hides behind an option that consumed --", async () => {
+    const { io, out } = capture();
+
+    const code = await run(["--ignore", "--", "--help", "--ext", ".zzz", "."], io);
+
+    expect(code).toBe(0);
+    expect(out()).toContain("Usage: ts-comment-scanner");
+  });
+
+  it("removes comments from a UTF-16LE file and keeps its encoding", async () => {
+    const file = join(dir, "a.ts");
+    const encode = (text: string): Buffer => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")]);
+    await writeFile(file, encode("// gone\nconst x = 1;\n"));
+    const { io } = capture();
+
+    const code = await run(["--remove", file], io);
+
+    expect(code).toBe(0);
+    expect((await readFile(file)).equals(encode("const x = 1;\n"))).toBe(true);
+  });
+
+  it("refuses to rewrite a file that is not valid UTF-8", async () => {
+    const file = join(dir, "a.ts");
+    const original = Buffer.concat([
+      Buffer.from('// gone\nconst s = "', "utf8"),
+      Buffer.from([0x80]),
+      Buffer.from('";\n', "utf8"),
+    ]);
+    await writeFile(file, original);
+    const { io, err } = capture();
+
+    const code = await run(["--remove", file], io);
+
+    expect(code).toBe(2);
+    expect(err()).toContain("not valid UTF-8");
+    expect((await readFile(file)).equals(original)).toBe(true);
+  });
+
+  it("reports the same encoding failure during --remove --dry-run", async () => {
+    // The dry run is the preflight for the real removal, so a file the real
+    // run would refuse to modify must fail the dry run too.
+    const file = join(dir, "a.ts");
+    const original = Buffer.concat([
+      Buffer.from('// gone\nconst s = "', "utf8"),
+      Buffer.from([0x80]),
+      Buffer.from('";\n', "utf8"),
+    ]);
+    await writeFile(file, original);
+    const { io, err } = capture();
+
+    const code = await run(["--remove", "--dry-run", file], io);
+
+    expect(code).toBe(2);
+    expect(err()).toContain("not valid UTF-8");
+    expect((await readFile(file)).equals(original)).toBe(true);
+  });
+
+  it("reports how many directives --skip-directives left untouched", async () => {
+    const file = join(dir, "a.ts");
+    await writeFile(file, "// @ts-nocheck\n// gone\nconst x = 1;\n");
+    const { io, out } = capture();
+
+    const code = await run(["--remove", "--skip-directives", dir], io);
+
+    expect(code).toBe(0);
+    expect(out()).toContain("Removed 1 comment across 1 file.");
+    expect(out()).toContain("Skipped 1 comment (--skip-directives).");
+  });
+
+  it("counts skipped directives in the JSON removal summary", async () => {
+    const file = join(dir, "a.ts");
+    await writeFile(file, "// @ts-nocheck\n// gone\nconst x = 1;\n");
+    const { io, out } = capture();
+
+    const code = await run(["--remove", "--skip-directives", "--json", dir], io);
+
+    expect(code).toBe(0);
+    expect(JSON.parse(out())).toMatchObject({
+      summary: { files: 1, removed: 1, kept: 0, skipped: 1, dryRun: false },
+    });
+  });
+
+  it("scans files reached through directory symlinks", async () => {
+    const real = join(dir, "real");
+    const scan = join(dir, "scan");
+    await mkdir(real);
+    await mkdir(scan);
+    await writeFile(join(real, "source.ts"), "// linked comment\n");
+    await symlink(real, join(scan, "linked"));
+    const { io, out } = capture();
+
+    const code = await run([scan], io);
+
+    expect(code).toBe(0);
+    expect(out()).toContain(`${join(scan, "linked", "source.ts")}:1:1 [line] // linked comment`);
+  });
+
+  it("reports a friendly error for a missing path", async () => {
+    const { io, err } = capture();
+
+    const code = await run([join(dir, "missing.ts")], io);
+
+    expect(code).toBe(2);
+    expect(err()).toContain("path not found");
   });
 });

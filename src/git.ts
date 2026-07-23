@@ -36,15 +36,15 @@ export async function changedFiles(range: string, cwd: string = process.cwd()): 
 }
 
 /**
- * `git diff` compares the working tree only against a lone positive revision;
- * every other shape (`a..b`, `a...b`, `HEAD^!`, multi-parent `HEAD^@`)
- * compares commits. String sniffing cannot tell these apart — `HEAD^!`
- * contains no ".." yet excludes the working tree — so ask rev-parse for the
- * expansion and check for exactly one non-negated revision.
+ * `git diff` compares the working tree only against a lone revision — negated
+ * (`^HEAD`) or not; every other shape (`a..b`, `a...b`, `HEAD^!`,
+ * multi-parent `HEAD^@`) compares commits. String sniffing cannot tell these
+ * apart — `HEAD^!` contains no ".." yet excludes the working tree — so ask
+ * rev-parse for the expansion and check for exactly one revision.
  */
 async function comparesWorkingTree(range: string, cwd: string): Promise<boolean> {
   const revs = (await git(["rev-parse", "--revs-only", range, "--"], cwd)).split("\n").filter((line) => line !== "");
-  return revs.length === 1 && !(revs[0] as string).startsWith("^");
+  return revs.length === 1;
 }
 
 function split(listing: string): string[] {

@@ -1,8 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { Buffer } from "node:buffer";
+import { chmod, lstat, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { collectFiles, isJsxFile, scanFile, scanPaths } from "./files.js";
+import {
+  collectFiles,
+  decodeFileText,
+  encodeFileText,
+  isJsxFile,
+  scanFile,
+  scanPaths,
+  writeFileAtomic,
+} from "./files.js";
 
 let dir: string;
 
@@ -279,5 +288,199 @@ describe("scanPaths", () => {
     const results = await scanPaths([dir], { ignore: ["*.test.ts"] });
 
     expect(results.map((result) => result.file)).toEqual([join(dir, "a.ts")]);
+  });
+});
+
+describe("collectFiles with symlinks", () => {
+  it("follows a symlinked file found during a directory walk", async () => {
+    const real = join(dir, "real");
+    const scan = join(dir, "scan");
+    await mkdir(real);
+    await mkdir(scan);
+    await writeFile(join(real, "source.ts"), "// linked\n");
+    await symlink(join(real, "source.ts"), join(scan, "link.ts"));
+
+    const files = await collectFiles([scan]);
+
+    expect(files).toEqual([join(scan, "link.ts")]);
+  });
+
+  it("follows a symlinked directory found during a directory walk", async () => {
+    const real = join(dir, "real");
+    const scan = join(dir, "scan");
+    await mkdir(real);
+    await mkdir(scan);
+    await writeFile(join(real, "source.ts"), "// linked\n");
+    await symlink(real, join(scan, "linked-dir"));
+
+    const files = await collectFiles([scan]);
+
+    expect(files).toEqual([join(scan, "linked-dir", "source.ts")]);
+  });
+
+  it("terminates on circular directory symlinks", async () => {
+    await writeFile(join(dir, "a.ts"), "// a\n");
+    await symlink(dir, join(dir, "loop"));
+
+    const files = await collectFiles([dir]);
+
+    expect(files).toEqual([join(dir, "a.ts")]);
+  });
+
+  it("silently skips broken symlinks during a walk", async () => {
+    await writeFile(join(dir, "a.ts"), "// a\n");
+    await symlink(join(dir, "gone.ts"), join(dir, "broken.ts"));
+
+    const files = await collectFiles([dir]);
+
+    expect(files).toEqual([join(dir, "a.ts")]);
+  });
+
+  it("does not report a directory reached through two symlinks twice", async () => {
+    const real = join(dir, "real");
+    const scan = join(dir, "scan");
+    await mkdir(real);
+    await mkdir(scan);
+    await writeFile(join(real, "source.ts"), "// linked\n");
+    await symlink(real, join(scan, "one"));
+    await symlink(real, join(scan, "two"));
+
+    const files = await collectFiles([scan]);
+
+    expect(files).toHaveLength(1);
+  });
+});
+
+describe("collectFiles path identity", () => {
+  it("collapses relative and absolute spellings of the same file", async () => {
+    const file = join(dir, "a.ts");
+    await writeFile(file, "// a\n");
+    const previousCwd = process.cwd();
+    process.chdir(dir);
+    try {
+      const files = await collectFiles(["a.ts", file]);
+      expect(files).toHaveLength(1);
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+
+  it("applies ignore patterns to directories that merely start with two dots", async () => {
+    await mkdir(join(dir, "..hidden"));
+    await writeFile(join(dir, "..hidden", "x.ts"), "// hidden\n");
+    await writeFile(join(dir, "ok.ts"), "// ok\n");
+
+    const files = await collectFiles([dir], { ignore: ["..hidden/**"] });
+
+    expect(files).toEqual([join(dir, "ok.ts")]);
+  });
+
+  it("reports a friendly error for a missing input path", async () => {
+    await expect(collectFiles([join(dir, "missing.ts")])).rejects.toThrow(/path not found: .*missing\.ts/);
+  });
+});
+
+describe("decodeFileText / encodeFileText", () => {
+  it("decodes plain UTF-8 losslessly", () => {
+    const decoded = decodeFileText(Buffer.from("// hi\n", "utf8"));
+
+    expect(decoded).toMatchObject({ text: "// hi\n", encoding: "utf8", bom: false, lossless: true });
+  });
+
+  it("decodes UTF-8 with a byte-order mark and re-encodes it byte-identically", () => {
+    const data = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("// hi\n", "utf8")]);
+    const decoded = decodeFileText(data);
+
+    expect(decoded).toMatchObject({ text: "// hi\n", encoding: "utf8", bom: true, lossless: true });
+    expect(encodeFileText(decoded.text, decoded).equals(data)).toBe(true);
+  });
+
+  it("decodes UTF-16LE and re-encodes it byte-identically", () => {
+    const data = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("// こんにちは\n", "utf16le")]);
+    const decoded = decodeFileText(data);
+
+    expect(decoded).toMatchObject({ text: "// こんにちは\n", encoding: "utf16le", bom: true, lossless: true });
+    expect(encodeFileText(decoded.text, decoded).equals(data)).toBe(true);
+  });
+
+  it("decodes UTF-16BE and re-encodes it byte-identically", () => {
+    const body = Buffer.from("// hi\n", "utf16le").swap16();
+    const data = Buffer.concat([Buffer.from([0xfe, 0xff]), body]);
+    const decoded = decodeFileText(data);
+
+    expect(decoded).toMatchObject({ text: "// hi\n", encoding: "utf16be", bom: true, lossless: true });
+    expect(encodeFileText(decoded.text, decoded).equals(data)).toBe(true);
+  });
+
+  it("marks invalid UTF-8 as lossy", () => {
+    const data = Buffer.concat([Buffer.from('const s = "', "utf8"), Buffer.from([0x80]), Buffer.from('";\n', "utf8")]);
+
+    expect(decodeFileText(data).lossless).toBe(false);
+  });
+
+  it("marks UTF-16 with a truncated code unit as lossy", () => {
+    const data = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("ab", "utf16le"), Buffer.from([0x41])]);
+
+    expect(decodeFileText(data).lossless).toBe(false);
+  });
+
+  it("marks truncated UTF-16BE as lossy instead of throwing", () => {
+    const body = Buffer.from("ab", "utf16le").swap16();
+    const data = Buffer.concat([Buffer.from([0xfe, 0xff]), body, Buffer.from([0x00])]);
+
+    const decoded = decodeFileText(data);
+
+    expect(decoded.encoding).toBe("utf16be");
+    expect(decoded.text).toBe("ab");
+    expect(decoded.lossless).toBe(false);
+  });
+});
+
+describe("scanFile with encodings", () => {
+  it("finds comments in a UTF-16LE file", async () => {
+    const file = join(dir, "u16.ts");
+    await writeFile(
+      file,
+      Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("// note\nconst x = 1;\n", "utf16le")]),
+    );
+
+    const result = await scanFile(file);
+
+    expect(result.comments).toHaveLength(1);
+    expect(result.comments[0]).toMatchObject({ text: "// note", start: 0, line: 1, column: 1 });
+  });
+});
+
+describe("writeFileAtomic", () => {
+  it("replaces the content and leaves no temporary files behind", async () => {
+    const file = join(dir, "a.ts");
+    await writeFile(file, "old");
+
+    await writeFileAtomic(file, Buffer.from("new"));
+
+    expect(await readFile(file, "utf8")).toBe("new");
+    expect((await readdir(dir)).sort()).toEqual(["a.ts"]);
+  });
+
+  it("preserves the file mode", async () => {
+    const file = join(dir, "a.ts");
+    await writeFile(file, "old");
+    await chmod(file, 0o640);
+
+    await writeFileAtomic(file, Buffer.from("new"));
+
+    expect(((await stat(file)).mode & 0o777).toString(8)).toBe("640");
+  });
+
+  it("writes through a symlink instead of replacing the link", async () => {
+    const target = join(dir, "target.ts");
+    const link = join(dir, "link.ts");
+    await writeFile(target, "old");
+    await symlink(target, link);
+
+    await writeFileAtomic(link, Buffer.from("new"));
+
+    expect(await readFile(target, "utf8")).toBe("new");
+    expect((await lstat(link)).isSymbolicLink()).toBe(true);
   });
 });

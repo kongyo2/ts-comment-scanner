@@ -17,6 +17,8 @@ jobs:
         node-version: [20, 24]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: Install Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -40,3 +42,35 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Pack
+        run: npm pack
+
+      # Install the tarball into a scratch project and use it like a consumer
+      # would, so a pack that ships without dist (or with broken bin/exports)
+      # fails CI instead of reaching the registry.
+      - name: Smoke test the tarball
+        run: |
+          tarball="$(ls "$GITHUB_WORKSPACE"/kongyo2-ts-comment-scanner-*.tgz)"
+          mkdir /tmp/smoke && cd /tmp/smoke
+          npm init -y > /dev/null
+          npm install "$tarball"
+          npx ts-comment-scanner --version
+          printf '// hello\nconst x = 1;\n' > sample.ts
+          npx ts-comment-scanner sample.ts | grep -q '1 comment across 1 file'
+          node --input-type=module --eval "const m = await import('@kongyo2/ts-comment-scanner'); if (m.scanComments('// hi').length !== 1) { throw new Error('library import failed'); }"

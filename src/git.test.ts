@@ -137,6 +137,18 @@ describe("changedFiles", () => {
     expect(await changedFiles("HEAD^!", dir)).toEqual([join(dir, "a.ts")]);
   });
 
+  it("treats a lone negated revision like ^HEAD as a working-tree comparison", async () => {
+    // `git diff ^HEAD` diffs the working tree against HEAD just like
+    // `git diff HEAD`, so brand-new files count as changed here too.
+    await initRepo();
+    await writeFile(join(dir, "a.ts"), "// a\n");
+    await commitAll("base");
+    await writeFile(join(dir, "a.ts"), "// a2\n");
+    await writeFile(join(dir, "b.ts"), "// untracked\n");
+
+    expect(await changedFiles("^HEAD", dir)).toEqual([join(dir, "a.ts"), join(dir, "b.ts")]);
+  });
+
   it("honours .gitignore for untracked files", async () => {
     await initRepo();
     await writeFile(join(dir, ".gitignore"), "ignored.ts\n");

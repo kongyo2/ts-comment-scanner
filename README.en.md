@@ -14,11 +14,12 @@ A CLI / library that detects, lists, and summarizes comments in a TypeScript pro
 
 ## Features
 
-- Recursively scans `.ts` `.tsx` `.mts` `.cts` (excluding `node_modules` and `.git`)
+- Recursively scans `.ts` `.tsx` `.mts` `.cts` (excluding `node_modules` and `.git`); symlinks are followed during the walk just like explicit inputs, with cycles detected automatically
 - Reports line comments (`//`) and block comments (`/* */`) with position information
 - Outputs in three formats: text / JSON / **GitHub Actions annotations**
 - **Automatically identifies compiler and linter directives** such as `@ts-ignore` and `eslint-disable`, so you can filter them in or out
 - **Safe comment removal** (code cleanup): directives and license headers are kept by default
+- Handles UTF-8 (with or without BOM) and BOM-marked UTF-16 (LE/BE); removal preserves the encoding and BOM, and files with a broken encoding are reported as errors **without being modified**
 - **Custom ignore patterns** via glob (`--ignore`) and configurable target extensions (`--ext`)
 - **git integration (`--diff`)**: narrow the scan to files touched between specific commits or in uncommitted work
 - `--fail-on-comment` for CI (exit code 1 when comments are detected)
@@ -95,11 +96,11 @@ $ ts-comment-scanner --json src
           "kind": "line",
           "text": "// entry point",
           "start": 0,
-          "end": 12,
+          "end": 14,
           "line": 1,
           "column": 1,
           "endLine": 1,
-          "endColumn": 13
+          "endColumn": 15
         }
       ]
     }
@@ -119,8 +120,10 @@ Comments identified as directives get a name attached, such as `"directive": "@t
 ```
 
 ```
-::notice file=src/index.ts,line=1,endLine=1,col=1,endColumn=13,title=line comment::// entry point
+::notice file=src/index.ts,line=1,endLine=1,col=1,endColumn=14,title=line comment::// entry point
 ```
+
+While the JSON output's `endColumn` is exclusive (the column after the comment), GitHub annotation columns are inclusive, so the annotation reports the column of the last character (14 in this example). Comments larger than GitHub's 64 KiB annotation limit are truncated safely.
 
 ### Bulk comment removal (code cleanup)
 
@@ -139,9 +142,11 @@ Removal is driven by the AST's comment ranges, so it never touches strings or co
 
 - Directives such as `@ts-expect-error` / `eslint-disable` are **kept by default**, because removing them would break the build or the linter
 - Legal comments — `/*! ... */` or those containing `@license` / `@preserve` / `@copyright` or the `SPDX-License-Identifier:` / `SPDX-FileCopyrightText:` tags — are also **kept by default**
+- **The line structure below next-line directives** (`@ts-expect-error`, `eslint-disable-next-line`, ...) **is preserved**: when removing comments would delete a line and shift the directive's target (e.g. a comment-only line), those comments are kept instead
 - Whitespace is inserted where removing a block comment would otherwise join tokens together (`a/* x */b` → `a b`)
 - Comment-only lines are removed entirely, and trailing comments are removed together with the preceding whitespace
-- The result is re-scanned to verify it, and if the outcome is unexpected the file is left unchanged and an error is reported
+- The result is re-scanned to verify that the surviving comments match the protected set; if the outcome is unexpected the file is left unchanged and an error is reported
+- Writes go through a temporary file and an atomic rename, so a failed write or a full disk can never truncate the original
 
 ### Scanning only changed files (`--diff`)
 
@@ -202,11 +207,13 @@ const changed = await changedFiles("main..HEAD");
 | `collectFiles(inputs, options?)` | Collect the list of target file paths |
 | `changedFiles(range, cwd?)` | Absolute paths of working-tree files changed in a git revision range |
 | `removeComments(source, options?)` | Remove comments safely (`removeDirectives` / `removeLegal` / `shouldRemove`) |
-| `detectDirective(kind, text)` | Return a normalized name if the comment is a directive |
+| `detectDirective(kind, text, placement?)` | Return a normalized name if the comment is a directive (`placement` enables position-sensitive rules) |
 | `isLegalComment(text)` | Determine whether a comment is a license/legal comment |
 | `formatText(results)` / `formatJson(results)` / `formatGitHub(results)` | Format scan results |
+| `readFileText(file)` / `decodeFileText(data)` / `encodeFileText(text, target)` | Read/decode/encode helpers that preserve UTF-8 / UTF-16 and BOMs |
+| `writeFileAtomic(file, data)` | Replace a file atomically through a temporary sibling |
 
-Types: `Comment` / `CommentKind` / `FileScanResult` / `ScanOptions` / `CollectOptions` / `RemoveOptions` / `RemoveResult`
+Types: `Comment` / `CommentKind` / `FileScanResult` / `ScanOptions` / `CollectOptions` / `RemoveOptions` / `RemoveResult` / `FileText` / `FileEncoding` / `DirectivePlacement`
 
 ## Requirements
 

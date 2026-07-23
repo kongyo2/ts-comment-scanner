@@ -395,3 +395,74 @@ describe("removeComments", () => {
     expect(result.removed).toHaveLength(7);
   });
 });
+
+describe("removeComments next-line shielding by whole lines", () => {
+  it("keeps every comment of a comment-only line under @ts-expect-error", () => {
+    // Removing both block comments would delete the physical line and move
+    // the suppression onto the code below, silently masking its type error.
+    const source = '// @ts-expect-error\n/* one */ /* two */\nconst x: number = "bad";\n';
+
+    const result = removeComments(source);
+
+    expect(result.changed).toBe(false);
+    expect(result.code).toBe(source);
+    expect(result.kept.map((comment) => comment.text)).toEqual(["// @ts-expect-error", "/* one */", "/* two */"]);
+  });
+
+  it("keeps a multi-line block comment whose first line is shielded", () => {
+    const source = "// @ts-expect-error\n/* multi\nline */\nconst x: number = null;\n// gone\n";
+
+    const result = removeComments(source);
+
+    expect(result.code).toBe("// @ts-expect-error\n/* multi\nline */\nconst x: number = null;\n");
+  });
+
+  it("still removes a comment on a shielded line that also holds code", () => {
+    const source = "// @ts-expect-error\n/* gone */ const x: number = null;\n";
+
+    const result = removeComments(source);
+
+    expect(result.code).toBe("// @ts-expect-error\nconst x: number = null;\n");
+  });
+
+  it("still removes a comment when a kept comment holds the shielded line open", () => {
+    const source = "// @ts-expect-error\n/*! legal */ /* gone */\nconst x: number = null;\n";
+
+    const result = removeComments(source);
+
+    expect(result.code).toBe("// @ts-expect-error\n/*! legal */\nconst x: number = null;\n");
+    expect(result.removed.map((comment) => comment.text)).toEqual(["/* gone */"]);
+  });
+
+  it("chains shields through comments that were re-protected", () => {
+    // The skipped @ts-expect-error shields the @ts-ignore line; the kept
+    // @ts-ignore then shields the plain comment, so nothing may be removed.
+    const source = "// @ts-expect-error\n// @ts-ignore\n// plain\nbroken();\n";
+
+    const result = removeComments(source, {
+      removeDirectives: true,
+      shouldRemove: (comment) => comment.directive !== "@ts-expect-error",
+    });
+
+    expect(result.changed).toBe(false);
+    expect(result.code).toBe(source);
+  });
+
+  it("does not treat prose like 'ignore next 3' in a directive reason as a counted shield", () => {
+    const source = "// @ts-expect-error we ignore next 3 legacy calls\nconst x: number = null;\n// A\n// B\n// C\n";
+
+    const result = removeComments(source);
+
+    expect(result.code).toBe("// @ts-expect-error we ignore next 3 legacy calls\nconst x: number = null;\n");
+    expect(result.removed.map((comment) => comment.text)).toEqual(["// A", "// B", "// C"]);
+  });
+
+  it("honours counted coverage pragmas with five or more digits", () => {
+    const source = "/* c8 ignore next 10000 */\nconst a = 1;\n// A\n// B\n";
+
+    const result = removeComments(source);
+
+    expect(result.changed).toBe(false);
+    expect(result.kept.map((comment) => comment.text)).toEqual(["/* c8 ignore next 10000 */", "// A", "// B"]);
+  });
+});

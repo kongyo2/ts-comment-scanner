@@ -572,3 +572,63 @@ describe("isLegalComment", () => {
     expect(isLegalComment("/* block */")).toBe(false);
   });
 });
+
+describe("detectDirective tool-faithful boundaries", () => {
+  it("matches @vite-ignore only as the exact block comment Vite matches", () => {
+    // Vite's importAnalysis regex is /\/\*\s*@vite-ignore\s*\*\//: block
+    // comments only, nothing but whitespace around the marker.
+    expect(detectDirective("block", "/* @vite-ignore */")).toBe("@vite-ignore");
+    expect(detectDirective("block", "/*@vite-ignore*/")).toBe("@vite-ignore");
+    expect(detectDirective("line", "// @vite-ignore")).toBeUndefined();
+    expect(detectDirective("block", "/* @vite-ignore reason */")).toBeUndefined();
+    expect(detectDirective("block", "/* @vite-ignore-more */")).toBeUndefined();
+  });
+
+  it("matches CodeQL and LGTM suppressions in line comments only", () => {
+    // The AlertSuppression queries only read `//` comments.
+    expect(detectDirective("line", "// codeql[js/xss]")).toBe("codeql");
+    expect(detectDirective("line", "// lgtm[js/xss]")).toBe("lgtm");
+    expect(detectDirective("block", "/* codeql[js/xss] */")).toBeUndefined();
+    expect(detectDirective("block", "/* lgtm[js/xss] */")).toBeUndefined();
+    expect(detectDirective("block", "/* lgtm */")).toBeUndefined();
+  });
+
+  it("keeps prettier/oxfmt suppressions ordinary when a JSDoc star precedes them", () => {
+    // prettier and oxfmt compare the literal trimmed comment value, so the
+    // second star of `/**` (or a stray `*`) defeats the suppression —
+    // verified against prettier 3.8.
+    expect(detectDirective("block", "/** prettier-ignore */")).toBeUndefined();
+    expect(detectDirective("block", "/* * prettier-ignore */")).toBeUndefined();
+    expect(detectDirective("block", "/** oxfmt-ignore */")).toBeUndefined();
+    expect(detectDirective("block", "/* prettier-ignore */")).toBe("prettier-ignore");
+    expect(detectDirective("block", "/* oxfmt-ignore */")).toBe("oxfmt-ignore");
+  });
+});
+
+describe("detectDirective placement", () => {
+  const midFile = { header: false, firstComment: false, fileStart: false };
+  const header = { header: true, firstComment: false, fileStart: false };
+
+  it("defaults to treating every position as active", () => {
+    expect(detectDirective("line", "// @ts-nocheck")).toBe("@ts-nocheck");
+    expect(detectDirective("block", "/** @format */")).toBe("@format");
+    expect(detectDirective("line", "// @bun")).toBe("@bun");
+  });
+
+  it("suppresses header-only directives outside the header", () => {
+    expect(detectDirective("line", "// @ts-nocheck", midFile)).toBeUndefined();
+    expect(detectDirective("line", "// deno-lint-ignore-file", midFile)).toBeUndefined();
+    expect(detectDirective("line", '/// <reference path="./a.d.ts" />', midFile)).toBeUndefined();
+  });
+
+  it("keeps scanning after a positionally dead candidate", () => {
+    expect(detectDirective("line", "// deno-lint-ignore-file nosemgrep", midFile)).toBe("nosemgrep");
+  });
+
+  it("requires the first comment for prettier pragmas and byte zero for @bun", () => {
+    expect(detectDirective("block", "/** @format */", header)).toBeUndefined();
+    expect(detectDirective("line", "// @bun", header)).toBeUndefined();
+    expect(detectDirective("block", "/** @format */", { ...header, firstComment: true })).toBe("@format");
+    expect(detectDirective("line", "// @bun", { ...header, firstComment: true, fileStart: true })).toBe("@bun");
+  });
+});

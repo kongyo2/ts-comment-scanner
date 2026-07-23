@@ -1,6 +1,6 @@
 {
   "name": "@kongyo2/ts-comment-scanner",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "CLI to detect, report and safely remove comments across a TypeScript project.",
   "keywords": [
     "typescript",
@@ -39,12 +39,15 @@
   },
   "sideEffects": false,
   "files": [
-    "dist"
+    "dist",
+    "src",
+    "!src/*.test.ts"
   ],
   "scripts": {
-    "build": "tsc",
+    "clean": "node --eval \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc",
     "build:watch": "tsc --watch",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.tests.json",
     "typecheck:watch": "tsc --noEmit --watch",
     "start": "node dist/cli.js",
     "test": "vitest run",
@@ -54,7 +57,7 @@
     "lint:strict": "oxlint --deny-warnings",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "prepublishOnly": "npm run build"
+    "prepare": "npm run build"
   },
   "publishConfig": {
     "access": "public"
