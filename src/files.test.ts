@@ -378,6 +378,13 @@ describe("collectFiles path identity", () => {
   it("reports a friendly error for a missing input path", async () => {
     await expect(collectFiles([join(dir, "missing.ts")])).rejects.toThrow(/path not found: .*missing\.ts/);
   });
+
+  it("propagates stat errors other than a missing path unchanged", async () => {
+    const file = join(dir, "a.ts");
+    await writeFile(file, "// a\n");
+
+    await expect(collectFiles([join(file, "child.ts")])).rejects.toThrow(/ENOTDIR/);
+  });
 });
 
 describe("decodeFileText / encodeFileText", () => {

@@ -465,4 +465,14 @@ describe("removeComments next-line shielding by whole lines", () => {
     expect(result.changed).toBe(false);
     expect(result.kept.map((comment) => comment.text)).toEqual(["/* c8 ignore next 10000 */", "// A", "// B"]);
   });
+
+  it("shields a line targeted by two directives sharing the line above it only once", () => {
+    const source = "/* @ts-ignore */ /* @ts-expect-error */\nconst x = 1; // gone\n";
+
+    const result = removeComments(source);
+
+    expect(result.code).toBe("/* @ts-ignore */ /* @ts-expect-error */\nconst x = 1;\n");
+    expect(result.kept.map((comment) => comment.text)).toEqual(["/* @ts-ignore */", "/* @ts-expect-error */"]);
+    expect(result.removed.map((comment) => comment.text)).toEqual(["// gone"]);
+  });
 });

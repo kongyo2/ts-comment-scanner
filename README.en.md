@@ -1,14 +1,19 @@
+<p align="center">
+  <a href="https://kongyo2.github.io/ts-comment-scanner/"><img src="https://raw.githubusercontent.com/kongyo2/ts-comment-scanner/main/assets/logo.svg" width="96" height="96" alt="ts-comment-scanner logo"></a>
+</p>
+
 # ts-comment-scanner
 
 [![npm version](https://img.shields.io/npm/v/@kongyo2/ts-comment-scanner.svg)](https://www.npmjs.com/package/@kongyo2/ts-comment-scanner)
 [![npm downloads](https://img.shields.io/npm/dm/@kongyo2/ts-comment-scanner.svg)](https://www.npmjs.com/package/@kongyo2/ts-comment-scanner)
 [![CI](https://github.com/kongyo2/ts-comment-scanner/actions/workflows/ci.yml/badge.svg)](https://github.com/kongyo2/ts-comment-scanner/actions/workflows/ci.yml)
+[![coverage](https://img.shields.io/badge/coverage-100%25-3178C6)](https://kongyo2.github.io/ts-comment-scanner/)
 ![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/kongyo2/ts-comment-scanner?utm_source=oss&utm_medium=github&utm_campaign=kongyo2%2Fts-comment-scanner&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
 [![node](https://img.shields.io/node/v/@kongyo2/ts-comment-scanner.svg)](https://nodejs.org)
 [![license](https://img.shields.io/npm/l/@kongyo2/ts-comment-scanner.svg)](./LICENSE)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/kongyo2/ts-comment-scanner)
 
-[日本語](./README.md) | **English**
+[日本語](./README.md) | **English** | 📘 [Project site](https://kongyo2.github.io/ts-comment-scanner/?lang=en)
 
 A CLI / library that detects, lists, and summarizes comments in a TypeScript project — and can also remove them safely. It analyzes code through the TypeScript AST, so it never mistakes strings, template literals, regular expressions, or JSX text for comments.
 
