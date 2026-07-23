@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { collectFiles } from "./files.js";
@@ -48,5 +48,26 @@ describe("collectFiles on Windows-like platforms", () => {
     const files = await collectFiles([dir], { ignore: ["*.skip.ts"] });
 
     expect(files).toEqual([join(dir, "a.ts")]);
+  });
+
+  it("skips ignored directories regardless of their name casing", async () => {
+    // Windows treats NODE_MODULES and node_modules as the same directory, so
+    // the always-ignored names have to match case-insensitively there.
+    await mkdir(join(dir, "NODE_MODULES"));
+    await writeFile(join(dir, "NODE_MODULES", "dep.ts"), "// dep\n");
+    await writeFile(join(dir, "source.ts"), "// source\n");
+
+    const files = await onWin32(() => collectFiles([dir]));
+
+    expect(files).toEqual([join(dir, "source.ts")]);
+  });
+
+  it("refuses to traverse an ignored input root regardless of its casing", async () => {
+    await mkdir(join(dir, ".GIT"));
+    await writeFile(join(dir, ".GIT", "internal.ts"), "// internal\n");
+
+    const files = await onWin32(() => collectFiles([join(dir, ".GIT")]));
+
+    expect(files).toEqual([]);
   });
 });

@@ -130,6 +130,27 @@ describe("collectFiles", () => {
     expect(files).toEqual([join(dir, "src", "kept.ts")]);
   });
 
+  it("does not traverse an ignored directory passed as an input root", async () => {
+    await mkdir(join(dir, "node_modules"), { recursive: true });
+    await writeFile(join(dir, "node_modules", "dep.ts"), "// dep\n");
+
+    const files = await collectFiles([join(dir, "node_modules")]);
+
+    expect(files).toEqual([]);
+  });
+
+  it("still returns an explicitly listed file inside an ignored directory", async () => {
+    // Like the ignore globs, the ignored directory names only guard
+    // traversal; naming a file directly is explicit enough.
+    await mkdir(join(dir, ".git"), { recursive: true });
+    const file = join(dir, ".git", "hook.ts");
+    await writeFile(file, "// hook\n");
+
+    const files = await collectFiles([file]);
+
+    expect(files).toEqual([file]);
+  });
+
   it("returns sorted, de-duplicated paths", async () => {
     await writeFile(join(dir, "b.ts"), "// b");
     await writeFile(join(dir, "a.ts"), "// a");
@@ -349,6 +370,40 @@ describe("collectFiles with symlinks", () => {
 
     expect(files).toHaveLength(1);
   });
+
+  it("collapses two file symlinks to one target into a single entry", async () => {
+    const real = join(dir, "real");
+    const scan = join(dir, "scan");
+    await mkdir(real);
+    await mkdir(scan);
+    await writeFile(join(real, "source.ts"), "// linked\n");
+    await symlink(join(real, "source.ts"), join(scan, "a.ts"));
+    await symlink(join(real, "source.ts"), join(scan, "b.ts"));
+
+    const files = await collectFiles([scan]);
+
+    expect(files).toHaveLength(1);
+  });
+
+  it("collapses a file symlink with its explicitly listed target, keeping the first spelling", async () => {
+    const target = join(dir, "target.ts");
+    const link = join(dir, "link.ts");
+    await writeFile(target, "// once\n");
+    await symlink(target, link);
+
+    const files = await collectFiles([link, target]);
+
+    expect(files).toEqual([link]);
+  });
+
+  it("skips a symlink that points to itself like any other broken link", async () => {
+    await writeFile(join(dir, "a.ts"), "// a\n");
+    await symlink(join(dir, "self.ts"), join(dir, "self.ts"));
+
+    const files = await collectFiles([dir]);
+
+    expect(files).toEqual([join(dir, "a.ts")]);
+  });
 });
 
 describe("collectFiles path identity", () => {
@@ -383,7 +438,10 @@ describe("collectFiles path identity", () => {
     const file = join(dir, "a.ts");
     await writeFile(file, "// a\n");
 
-    await expect(collectFiles([join(file, "child.ts")])).rejects.toThrow(/ENOTDIR/);
+    // Windows reports ENOENT (not ENOTDIR) for traversing through a file, so
+    // the friendly missing-path message applies there instead.
+    const expected = process.platform === "win32" ? /path not found/ : /ENOTDIR/;
+    await expect(collectFiles([join(file, "child.ts")])).rejects.toThrow(expected);
   });
 });
 
@@ -441,6 +499,18 @@ describe("decodeFileText / encodeFileText", () => {
     expect(decoded.text).toBe("ab");
     expect(decoded.lossless).toBe(false);
   });
+
+  it("omits the byte-order mark when encoding with bom: false", () => {
+    expect(encodeFileText("A", { encoding: "utf16le", bom: false }).toString("hex")).toBe("4100");
+    expect(encodeFileText("A", { encoding: "utf16be", bom: false }).toString("hex")).toBe("0041");
+    expect(encodeFileText("A", { encoding: "utf8", bom: false }).toString("hex")).toBe("41");
+  });
+
+  it("emits the byte-order mark when encoding with bom: true", () => {
+    expect(encodeFileText("A", { encoding: "utf16le", bom: true }).toString("hex")).toBe("fffe4100");
+    expect(encodeFileText("A", { encoding: "utf16be", bom: true }).toString("hex")).toBe("feff0041");
+    expect(encodeFileText("A", { encoding: "utf8", bom: true }).toString("hex")).toBe("efbbbf41");
+  });
 });
 
 describe("scanFile with encodings", () => {
@@ -469,7 +539,9 @@ describe("writeFileAtomic", () => {
     expect((await readdir(dir)).sort()).toEqual(["a.ts"]);
   });
 
-  it("preserves the file mode", async () => {
+  // POSIX permission bits do not round-trip through Windows ACLs, so the
+  // assertion only holds on POSIX platforms.
+  it.skipIf(process.platform === "win32")("preserves the file mode", async () => {
     const file = join(dir, "a.ts");
     await writeFile(file, "old");
     await chmod(file, 0o640);

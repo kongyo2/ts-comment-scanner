@@ -1,6 +1,6 @@
 {
   "name": "@kongyo2/ts-comment-scanner",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "CLI to detect, report and safely remove comments across a TypeScript project.",
   "keywords": [
     "typescript",

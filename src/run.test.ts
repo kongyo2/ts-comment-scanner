@@ -381,6 +381,57 @@ describe("run", () => {
     expect(out()).toContain(`${join(dir, "link.ts")}:1:1 [line] // two`);
   });
 
+  it("keeps a changed symlink in the --diff scope when the scan collapsed it with its target", async () => {
+    // The collector keeps one spelling per real file, so the re-pointed
+    // z.ts and its new target a.ts survive as a single entry — under either
+    // name, that entry must still count as changed.
+    await initRepo();
+    await writeFile(join(dir, "a.ts"), "// alias comment\n");
+    await writeFile(join(dir, "b.ts"), "const x = 1;\n");
+    await symlink("b.ts", join(dir, "z.ts"));
+    await commitAll("base");
+    await rm(join(dir, "z.ts"));
+    await symlink("a.ts", join(dir, "z.ts"));
+    const { io, out } = capture();
+
+    const code = await run(["--diff", "HEAD", dir], io);
+
+    expect(code).toBe(0);
+    expect(out()).toContain("// alias comment");
+    expect(out()).not.toContain("b.ts:");
+  });
+
+  it("keeps an explicitly listed alias of a changed file in the --diff scope", async () => {
+    await initRepo();
+    await writeFile(join(dir, "a.ts"), "// base\n");
+    await symlink("a.ts", join(dir, "link.ts"));
+    await commitAll("base");
+    await writeFile(join(dir, "a.ts"), "// edited\n");
+    const { io, out } = capture();
+
+    const code = await run(["--diff", "HEAD", join(dir, "link.ts")], io);
+
+    expect(code).toBe(0);
+    expect(out()).toContain(`${join(dir, "link.ts")}:1:1 [line] // edited`);
+  });
+
+  it("matches a changed broken symlink by its reported path without failing", async () => {
+    // The re-scoped set also realpaths the git-reported paths; a symlink
+    // pointing at nothing cannot be resolved and must simply fall back to
+    // its spelling instead of failing the run.
+    await initRepo();
+    await writeFile(join(dir, "a.ts"), "// base\n");
+    await commitAll("base");
+    await writeFile(join(dir, "a.ts"), "// changed\n");
+    await symlink("missing.ts", join(dir, "broken.ts"));
+    const { io, out } = capture();
+
+    const code = await run(["--diff", "HEAD", dir], io);
+
+    expect(code).toBe(0);
+    expect(out()).toContain("// changed");
+  });
+
   it("anchors --diff on the input path, not on a nested repository's files", async () => {
     const nested = join(dir, "repo");
     await mkdir(nested);
@@ -484,6 +535,74 @@ describe("run regression fixes", () => {
     expect(code).toBe(0);
     expect(out()).toContain("Removed 1 comment across 1 file.");
     expect(out()).toContain("Skipped 1 comment (--skip-directives).");
+  });
+
+  it("attributes comments skipped by --only-directives to that flag, not --skip-directives", async () => {
+    const file = join(dir, "a.ts");
+    await writeFile(file, "// @ts-nocheck\n// ordinary\nconst x = 1;\n");
+    const { io, out } = capture();
+
+    const code = await run(["--remove", "--only-directives", "--remove-directives", dir], io);
+
+    expect(code).toBe(0);
+    expect(out()).toContain("Removed 1 comment across 1 file.");
+    expect(out()).toContain("Skipped 1 comment (outside --only-directives).");
+  });
+
+  it("counts every reported file in the JSON removal summary, changed ones separately", async () => {
+    const file = join(dir, "a.ts");
+    await writeFile(file, "/*! legal */\nconst x = 1;\n");
+    const { io, out } = capture();
+
+    const code = await run(["--remove", "--json", dir], io);
+
+    expect(code).toBe(0);
+    const report = JSON.parse(out()) as { summary: object; files: unknown[] };
+    expect(report.summary).toMatchObject({ files: 1, changedFiles: 0, removed: 0, kept: 1 });
+    expect(report.files).toHaveLength(1);
+  });
+
+  it("removes a comment reached through two symlinks only once", async () => {
+    const real = join(dir, "real");
+    const scan = join(dir, "scan");
+    await mkdir(real);
+    await mkdir(scan);
+    await writeFile(join(real, "source.ts"), "// gone\nconst x = 1;\n");
+    await symlink(join(real, "source.ts"), join(scan, "a.ts"));
+    await symlink(join(real, "source.ts"), join(scan, "b.ts"));
+    const { io, out } = capture();
+
+    const code = await run(["--remove", scan], io);
+
+    expect(code).toBe(0);
+    expect(out()).toContain("Removed 1 comment across 1 file.");
+    expect(await readFile(join(real, "source.ts"), "utf8")).toBe("const x = 1;\n");
+  });
+
+  it("refuses to activate a prettier pragma by removing the comment before it", async () => {
+    const file = join(dir, "a.ts");
+    const source = "/* lead */\n/**\n * @format\n * @license\n */\nconst x = 1;\n";
+    await writeFile(file, source);
+    const { io, out } = capture();
+
+    const code = await run(["--remove", dir], io);
+
+    expect(code).toBe(0);
+    expect(await readFile(file, "utf8")).toBe(source);
+    expect(out()).toContain("No removable comments found. Kept 2 protected comments.");
+  });
+
+  it("previews the same pragma protection under --remove --dry-run", async () => {
+    const file = join(dir, "a.ts");
+    const source = "/* lead */\n/**\n * @format\n * @license\n */\nconst x = 1;\n";
+    await writeFile(file, source);
+    const { io, out } = capture();
+
+    const code = await run(["--remove", "--dry-run", dir], io);
+
+    expect(code).toBe(0);
+    expect(await readFile(file, "utf8")).toBe(source);
+    expect(out()).toContain("No removable comments found. Kept 2 protected comments.");
   });
 
   it("counts skipped directives in the JSON removal summary", async () => {

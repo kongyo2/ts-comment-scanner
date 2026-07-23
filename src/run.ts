@@ -136,11 +136,26 @@ async function collectTargets(options: CliOptions, collectOptions: CollectOption
 
   const first = resolve(options.paths[0] as string);
   const anchor = (await stat(first)).isDirectory() ? first : dirname(first);
-  const changed = new Set((await changedFiles(options.diff, anchor)).map(caseFold));
-  // Realpath only the directory part: spellings through symlinked directories
-  // then compare equal, while a tracked symlink still matches the path git
-  // reports it at instead of dereferencing to its target.
-  return files.filter((file) => changed.has(caseFold(join(realpathSync(dirname(file)), basename(file)))));
+  // Both the spelling git reports and the real file it refers to count as
+  // changed: the collector keeps one spelling per real file, so a changed
+  // symlink may have been remembered under its target's path (or a scanned
+  // alias may point at the changed file), and either spelling names the same
+  // content. Broken links (a symlink re-pointed at nothing) only match by
+  // their reported spelling.
+  const changed = new Set<string>();
+  for (const path of await changedFiles(options.diff, anchor)) {
+    changed.add(caseFold(path));
+    const real = tryRealpath(path);
+    if (real !== undefined) changed.add(caseFold(real));
+  }
+  // Realpath only the directory part first: spellings through symlinked
+  // directories then compare equal while a tracked symlink still matches the
+  // path git reports it at; the fully dereferenced path is the fallback.
+  return files.filter((file) => {
+    if (changed.has(caseFold(join(realpathSync.native(dirname(file)), basename(file))))) return true;
+    const real = tryRealpath(file);
+    return real !== undefined && changed.has(caseFold(real));
+  });
 }
 
 /**
@@ -150,6 +165,20 @@ async function collectTargets(options: CliOptions, collectOptions: CollectOption
  */
 function caseFold(path: string): string {
   return process.platform === "win32" ? path.toLowerCase() : path;
+}
+
+/**
+ * Native realpath — changedFiles resolves the repository root with the
+ * (native) promises realpath, and on Windows only the native calls expand
+ * 8.3 short names like RUNNER~1, so every path compared against it must be
+ * expanded the same way. Undefined when the path cannot be resolved.
+ */
+function tryRealpath(path: string): string | undefined {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return undefined;
+  }
 }
 
 /** True when -h/--help appears before any `--` separator. */
@@ -242,16 +271,21 @@ function renderRemoval(removals: FileRemoval[], options: CliOptions): string {
   const totalSkipped = removals.reduce((sum, entry) => sum + entry.skipped.length, 0);
   const changedEntries = removals.filter((entry) => entry.removed.length > 0);
   const keptNote = totalKept > 0 ? ` Kept ${count(totalKept, "protected comment")}.` : "";
-  // Directives held back by --skip-directives are invisible in the removal
-  // counts; say how many were left untouched so "removed N" is not mistaken
-  // for "the files are now comment-free".
-  const skippedNote = totalSkipped > 0 ? ` Skipped ${count(totalSkipped, "comment")} (--skip-directives).` : "";
+  // Comments held out of scope by --skip-directives / --only-directives are
+  // invisible in the removal counts; say how many were left untouched, naming
+  // the flag actually responsible, so "removed N" is not mistaken for "the
+  // files are now comment-free".
+  const skippedReason = options.directives === "only" ? "outside --only-directives" : "--skip-directives";
+  const skippedNote = totalSkipped > 0 ? ` Skipped ${count(totalSkipped, "comment")} (${skippedReason}).` : "";
 
   if (options.format === "json") {
     return JSON.stringify(
       {
         summary: {
-          files: changedEntries.length,
+          // `files` counts the entries of `files` below, like the scan JSON;
+          // `changedFiles` is how many of them actually had comments removed.
+          files: removals.length,
+          changedFiles: changedEntries.length,
           removed: totalRemoved,
           kept: totalKept,
           skipped: totalSkipped,

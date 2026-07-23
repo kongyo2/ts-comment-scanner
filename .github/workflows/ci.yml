@@ -5,6 +5,11 @@ on:
     branches: ["**"]
   pull_request:
 
+# Every job only reads the checkout; keep the default GITHUB_TOKEN scopes out
+# of npm scripts and test runs.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -39,6 +44,31 @@ jobs:
 
       - name: Test (100% coverage enforced)
         run: npm run test:coverage
+
+      - name: Build
+        run: npm run build
+
+  # Real-OS verification for the path, permission and rename behaviour the
+  # Linux job cannot exercise. Coverage thresholds stay on the Linux job:
+  # platform-specific branches (win32 path folding, POSIX-only mode
+  # assertions) cannot all execute on a single OS.
+  check-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Test
+        run: npm test
 
       - name: Build
         run: npm run build

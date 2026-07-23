@@ -148,10 +148,13 @@ Removal is driven by the AST's comment ranges, so it never touches strings or co
 - Directives such as `@ts-expect-error` / `eslint-disable` are **kept by default**, because removing them would break the build or the linter
 - Legal comments — `/*! ... */` or those containing `@license` / `@preserve` / `@copyright` or the `SPDX-License-Identifier:` / `SPDX-FileCopyrightText:` tags — are also **kept by default**
 - **The line structure below next-line directives** (`@ts-expect-error`, `eslint-disable-next-line`, ...) **is preserved**: when removing comments would delete a line and shift the directive's target (e.g. a comment-only line), those comments are kept instead
+- **Position-dependent directives are never activated by a removal**: when deleting a leading comment would make prettier's `@format`/`@prettier` pragma (honoured only in the file's first comment) or Bun's `// @bun` marker (honoured only at the very start of the file) newly take effect in a kept comment, the leading comment is kept as well
 - Whitespace is inserted where removing a block comment would otherwise join tokens together (`a/* x */b` → `a b`)
 - Comment-only lines are removed entirely, and trailing comments are removed together with the preceding whitespace
-- The result is re-scanned to verify that the surviving comments match the protected set; if the outcome is unexpected the file is left unchanged and an error is reported
+- The result is re-scanned to verify that the surviving comments match the protected set, directive meaning included; if the outcome is unexpected the file is left unchanged and an error is reported
 - Writes go through a temporary file and an atomic rename, so a failed write or a full disk can never truncate the original
+
+With `--remove --json`, `summary.files` counts the entries of the `files` array (every file with removed, kept or skipped comments) and `summary.changedFiles` counts the files that actually had comments removed.
 
 ### Scanning only changed files (`--diff`)
 
