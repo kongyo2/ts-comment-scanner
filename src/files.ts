@@ -12,7 +12,10 @@ const DEFAULT_IGNORE_DIRS = ["node_modules", ".git"];
 export interface CollectOptions {
   /** File extensions to include (with or without a leading dot, case-insensitive). */
   extensions?: string[];
-  /** Directory names that are never traversed. Default: node_modules, .git */
+  /**
+   * Directory names that are never traversed, input directories included
+   * (case-insensitively on Windows). Default: node_modules, .git
+   */
   ignoreDirs?: string[];
   /**
    * Glob patterns for files and directories to skip (picomatch syntax).
@@ -26,14 +29,14 @@ type IgnoreMatcher = (path: string, root: string) => boolean;
 
 export async function collectFiles(inputs: string[], options: CollectOptions = {}): Promise<string[]> {
   const extensions = normalizeExtensions(options.extensions ?? DEFAULT_EXTENSIONS);
-  const ignoreDirs = new Set(options.ignoreDirs ?? DEFAULT_IGNORE_DIRS);
+  const ignoreDirs = new Set((options.ignoreDirs ?? DEFAULT_IGNORE_DIRS).map(foldName));
   const isIgnored = buildIgnoreMatcher(options.ignore ?? []);
-  // Keyed by the resolved path so different spellings of one file (relative vs
-  // absolute, `.` segments, case on Windows) collapse into a single entry; the
-  // first spelling seen is the one reported.
+  // Keyed by the real path so different spellings of one file (relative vs
+  // absolute, `.` segments, case on Windows, symlink aliases) collapse into a
+  // single entry; the first spelling seen is the one reported.
   const found = new Map<string, string>();
-  const remember = (path: string): void => {
-    const key = canonicalKey(path);
+  const remember = (path: string, realPath: string): void => {
+    const key = canonicalKey(realPath);
     if (!found.has(key)) found.set(key, path);
   };
 
@@ -46,13 +49,14 @@ export async function collectFiles(inputs: string[], options: CollectOptions = {
       const input = normalize(rawInput);
       const info = await statInput(input);
       if (info.isDirectory()) {
-        // Directory inputs are themselves subject to the ignore patterns;
-        // only explicitly listed files bypass them.
-        if (!isIgnored(input, input)) {
+        // Directory inputs are themselves subject to the ignored directory
+        // names and the ignore patterns; only explicitly listed files bypass
+        // them.
+        if (!ignoreDirs.has(foldName(basename(input))) && !isIgnored(input, input)) {
           await walk(input, { extensions, ignoreDirs, isIgnored, root: input, visited: new Set() }, remember);
         }
       } else {
-        remember(input);
+        remember(input, await realpathInput(input));
       }
     }),
   );
@@ -67,6 +71,11 @@ function canonicalKey(path: string): string {
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
+/** Folds directory names the way the platform compares them, matching canonicalKey. */
+function foldName(name: string): string {
+  return process.platform === "win32" ? name.toLowerCase() : name;
+}
+
 async function statInput(input: string): Promise<Stats> {
   try {
     return await stat(input);
@@ -76,6 +85,29 @@ async function statInput(input: string): Promise<Stats> {
     }
     throw error;
   }
+}
+
+/** Real path of an explicit input, with the same friendly error statInput gives. */
+async function realpathInput(input: string): Promise<string> {
+  try {
+    return await realpath(input);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`path not found: ${input}`, { cause: error });
+    }
+    throw error;
+  }
+}
+
+/**
+ * True for the errors a walk may step over: entries that vanished mid-walk
+ * (ENOENT, ENOTDIR after a directory was replaced) and symlinks that do not
+ * resolve (broken targets, ELOOP cycles). Anything else — permissions, I/O
+ * failures — propagates, so a partial scan cannot masquerade as a clean one.
+ */
+function isSkippableWalkError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP";
 }
 
 interface WalkContext {
@@ -88,12 +120,17 @@ interface WalkContext {
   visited: Set<string>;
 }
 
-async function walk(dir: string, context: WalkContext, remember: (path: string) => void): Promise<void> {
+async function walk(
+  dir: string,
+  context: WalkContext,
+  remember: (path: string, realPath: string) => void,
+): Promise<void> {
   let real: string;
   try {
     real = await realpath(dir);
-  } catch {
-    return; // the directory vanished mid-walk
+  } catch (error) {
+    if (isSkippableWalkError(error)) return; // the directory vanished mid-walk
+    throw error;
   }
   if (context.visited.has(real)) return;
   context.visited.add(real);
@@ -112,16 +149,26 @@ async function walk(dir: string, context: WalkContext, remember: (path: string) 
           const info = await stat(full);
           isDirectory = info.isDirectory();
           isFile = info.isFile();
-        } catch {
-          return; // broken symlink
+        } catch (error) {
+          if (isSkippableWalkError(error)) return; // broken symlink
+          throw error;
         }
       }
       if (isDirectory) {
-        if (!context.ignoreDirs.has(entry.name) && !context.isIgnored(full, context.root)) {
+        if (!context.ignoreDirs.has(foldName(entry.name)) && !context.isIgnored(full, context.root)) {
           await walk(full, context, remember);
         }
       } else if (isFile && hasExtension(entry.name, context.extensions) && !context.isIgnored(full, context.root)) {
-        remember(full);
+        // Remembered under its real path, so several symlinks to one target
+        // (or a link plus the target itself) count — and get rewritten — once.
+        let realFile: string;
+        try {
+          realFile = await realpath(full);
+        } catch (error) {
+          if (isSkippableWalkError(error)) return; // the file vanished mid-walk
+          throw error;
+        }
+        remember(full, realFile);
       }
     }),
   );
@@ -231,16 +278,27 @@ function decodeUtf16Be(body: Buffer): string {
   return Buffer.from(even).swap16().toString("utf16le");
 }
 
-/** Re-encodes decoded text in the encoding (and BOM) it was read with. */
+/**
+ * Re-encodes decoded text in the encoding (and BOM) it was read with. Note
+ * that `bom: false` UTF-16 output cannot be recognised by decodeFileText,
+ * which identifies UTF-16 by its byte-order mark — request it only for
+ * consumers that expect mark-less UTF-16.
+ */
 export function encodeFileText(text: string, target: { encoding: FileEncoding; bom: boolean }): Buffer {
-  if (target.encoding === "utf16le") {
-    return Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")]);
-  }
-  if (target.encoding === "utf16be") {
-    return Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(text, "utf16le").swap16()]);
-  }
-  const bom = target.bom ? Buffer.from([0xef, 0xbb, 0xbf]) : Buffer.alloc(0);
-  return Buffer.concat([bom, Buffer.from(text, "utf8")]);
+  const body =
+    target.encoding === "utf16le"
+      ? Buffer.from(text, "utf16le")
+      : target.encoding === "utf16be"
+        ? Buffer.from(text, "utf16le").swap16()
+        : Buffer.from(text, "utf8");
+  if (!target.bom) return body;
+  const bom =
+    target.encoding === "utf16le"
+      ? Buffer.from([0xff, 0xfe])
+      : target.encoding === "utf16be"
+        ? Buffer.from([0xfe, 0xff])
+        : Buffer.from([0xef, 0xbb, 0xbf]);
+  return Buffer.concat([bom, body]);
 }
 
 export async function readFileText(file: string): Promise<FileText> {

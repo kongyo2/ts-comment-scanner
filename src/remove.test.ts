@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { removeComments } from "./remove.js";
+import { scanComments } from "./scanner.js";
 
 describe("removeComments", () => {
   it("removes a whole-line comment including its line", () => {
@@ -320,14 +321,14 @@ describe("removeComments", () => {
     expect(removeComments(crlf).code).toBe(crlf);
   });
 
-  it("excises removable comments intact on exotic line terminators", () => {
-    // Lone-CR / U+2028 / U+2029 sources: the comment range is always spliced
-    // out and the code kept byte-for-byte (guarded by the re-scan check);
-    // only the blank-line/gap tidying stays best-effort on these terminators.
-    expect(removeComments("// gone\rconst b = 2;\r").code).toBe("\rconst b = 2;\r");
-    expect(removeComments("const a = 1; // gone\rconst b = 2;\r").code).toBe("const a = 1; \rconst b = 2;\r");
-    expect(removeComments("// gone\u2028const b = 2;\u2028").code).toBe("\u2028const b = 2;\u2028");
-    expect(removeComments("// gone\u2029const b = 2;\u2029").code).toBe("\u2029const b = 2;\u2029");
+  it("tidies lines on exotic line terminators the same way as on LF", () => {
+    // Lone-CR / U+2028 / U+2029 sources get the same treatment as \n and
+    // \r\n ones: a comment-only line vanishes with its terminator, and the
+    // gap before a trailing comment is trimmed.
+    expect(removeComments("// gone\rconst b = 2;\r").code).toBe("const b = 2;\r");
+    expect(removeComments("const a = 1; // gone\rconst b = 2;\r").code).toBe("const a = 1;\rconst b = 2;\r");
+    expect(removeComments("// gone\u2028const b = 2;\u2028").code).toBe("const b = 2;\u2028");
+    expect(removeComments("// gone\u2029const b = 2;\u2029").code).toBe("const b = 2;\u2029");
   });
 
   it("shields below node:coverage ignore next but not below its range forms", () => {
@@ -364,6 +365,40 @@ describe("removeComments", () => {
     const result = removeComments("\uFEFF// gone\nconst x = 1;\n");
 
     expect(result.code).toBe("\uFEFFconst x = 1;\n");
+  });
+
+  it("reports ranges that index into the given source, byte-order mark included", () => {
+    // The string APIs agree with each other: removeComments sees the same
+    // comments (positions, columns, directives) scanComments reports for the
+    // very same string, so slicing the input with a reported range always
+    // yields the comment text.
+    const source = "\uFEFF// gone\nconst x = 1;\n";
+    const result = removeComments(source);
+
+    expect(result.removed).toEqual(scanComments(source));
+    expect(result.removed[0]?.start).toBe(1);
+    expect(source.slice(result.removed[0]?.start, result.removed[0]?.end)).toBe("// gone");
+  });
+
+  it("passes source-indexed comments to shouldRemove for a source with a byte-order mark", () => {
+    const source = "\uFEFF// a\n// b\nconst x = 1;\n";
+    const result = removeComments(source, {
+      shouldRemove: (comment) => source.slice(comment.start, comment.end) === comment.text,
+    });
+
+    expect(result.skipped).toEqual([]);
+    expect(result.code).toBe("\uFEFFconst x = 1;\n");
+  });
+
+  it("treats // @bun behind a byte-order mark as inert, matching scanComments", () => {
+    // The string does not start with `// @bun` (its first character is the
+    // mark), so the marker is no directive here, and Bun itself would not
+    // treat such file bytes as pre-transpiled either. File scans see the
+    // decoded, BOM-stripped text instead, where the marker does count.
+    const source = "\uFEFF// @bun\nconst x = 1;\n";
+
+    expect(scanComments(source)[0]?.directive).toBeUndefined();
+    expect(removeComments(source).code).toBe("\uFEFFconst x = 1;\n");
   });
 
   it("survives a stress mix of comments and code", () => {
@@ -474,5 +509,86 @@ describe("removeComments next-line shielding by whole lines", () => {
     expect(result.code).toBe("/* @ts-ignore */ /* @ts-expect-error */\nconst x = 1;\n");
     expect(result.kept.map((comment) => comment.text)).toEqual(["/* @ts-ignore */", "/* @ts-expect-error */"]);
     expect(result.removed.map((comment) => comment.text)).toEqual(["// gone"]);
+  });
+});
+
+describe("removeComments position-dependent directive protection", () => {
+  it("keeps a leading comment whose removal would activate an inert @format pragma", () => {
+    // The docblock is kept for its @license, and its @format is inert because
+    // prettier's pragma mode only reads the file's FIRST comment. Deleting
+    // `/* lead */` would promote the docblock to first comment and turn
+    // --require-pragma formatting on for the whole file.
+    const source = "/* lead */\n/**\n * @format\n * @license\n */\nconst x={a:1}\n";
+
+    const result = removeComments(source);
+
+    expect(result.changed).toBe(false);
+    expect(result.code).toBe(source);
+    expect(result.removed).toEqual([]);
+    expect(result.kept.map((comment) => comment.text)).toEqual(["/* lead */", "/**\n * @format\n * @license\n */"]);
+  });
+
+  it("keeps a leading comment whose removal would move // @bun to the file start", () => {
+    // Bun treats a file as pre-transpiled only when it literally starts with
+    // `// @bun`; deleting the lead line would move the kept legal comment to
+    // byte zero and activate the marker.
+    const source = "// lead\n// @bun @license\nconst x = 1;\n";
+
+    const result = removeComments(source);
+
+    expect(result.changed).toBe(false);
+    expect(result.code).toBe(source);
+  });
+
+  it("keeps a kept comment's directive name stable instead of trading nosemgrep for @format", () => {
+    const source = "/* lead */\n/** @format nosemgrep */\ndanger();\n";
+
+    expect(scanComments(source).map((comment) => comment.directive)).toEqual([undefined, "nosemgrep"]);
+
+    const result = removeComments(source);
+
+    expect(result.changed).toBe(false);
+    expect(result.code).toBe(source);
+  });
+
+  it("still removes leading comments that are not needed to keep the pragma inert", () => {
+    // Keeping `/* ordinary */` is enough to hold the docblock away from the
+    // first-comment position; the line before it can still go.
+    const source = "// lead\n/* ordinary */\n/** @format @license */\nconst x = 1;\n";
+
+    const result = removeComments(source);
+
+    expect(result.code).toBe("/* ordinary */\n/** @format @license */\nconst x = 1;\n");
+    expect(result.removed.map((comment) => comment.text)).toEqual(["// lead"]);
+    expect(result.kept.map((comment) => comment.text)).toEqual(["/* ordinary */", "/** @format @license */"]);
+  });
+
+  it("applies the same protection when shouldRemove selects only the leading comment", () => {
+    const source = "/* lead */\n/** @format @license */\nconst x = 1;\n";
+
+    const result = removeComments(source, { shouldRemove: (comment) => comment.text === "/* lead */" });
+
+    expect(result.changed).toBe(false);
+    expect(result.code).toBe(source);
+    expect(result.skipped.map((comment) => comment.text)).toEqual(["/** @format @license */"]);
+    expect(result.kept.map((comment) => comment.text)).toEqual(["/* lead */"]);
+  });
+
+  it("still removes ordinary comments behind an already active first-comment pragma", () => {
+    const source = "/** @format */\n// gone\nconst x = 1;\n";
+
+    const result = removeComments(source);
+
+    expect(result.code).toBe("/** @format */\nconst x = 1;\n");
+    expect(result.kept.map((comment) => comment.directive)).toEqual(["@format"]);
+  });
+
+  it("removes the pragma holder and its lead together when removeLegal consents", () => {
+    const source = "/* lead */\n/** @format @license */\nconst x = 1;\n";
+
+    const result = removeComments(source, { removeLegal: true });
+
+    expect(result.code).toBe("const x = 1;\n");
+    expect(result.removed).toHaveLength(2);
   });
 });

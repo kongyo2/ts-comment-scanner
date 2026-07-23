@@ -242,16 +242,21 @@ function renderRemoval(removals: FileRemoval[], options: CliOptions): string {
   const totalSkipped = removals.reduce((sum, entry) => sum + entry.skipped.length, 0);
   const changedEntries = removals.filter((entry) => entry.removed.length > 0);
   const keptNote = totalKept > 0 ? ` Kept ${count(totalKept, "protected comment")}.` : "";
-  // Directives held back by --skip-directives are invisible in the removal
-  // counts; say how many were left untouched so "removed N" is not mistaken
-  // for "the files are now comment-free".
-  const skippedNote = totalSkipped > 0 ? ` Skipped ${count(totalSkipped, "comment")} (--skip-directives).` : "";
+  // Comments held out of scope by --skip-directives / --only-directives are
+  // invisible in the removal counts; say how many were left untouched, naming
+  // the flag actually responsible, so "removed N" is not mistaken for "the
+  // files are now comment-free".
+  const skippedReason = options.directives === "only" ? "outside --only-directives" : "--skip-directives";
+  const skippedNote = totalSkipped > 0 ? ` Skipped ${count(totalSkipped, "comment")} (${skippedReason}).` : "";
 
   if (options.format === "json") {
     return JSON.stringify(
       {
         summary: {
-          files: changedEntries.length,
+          // `files` counts the entries of `files` below, like the scan JSON;
+          // `changedFiles` is how many of them actually had comments removed.
+          files: removals.length,
+          changedFiles: changedEntries.length,
           removed: totalRemoved,
           kept: totalKept,
           skipped: totalSkipped,

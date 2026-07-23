@@ -486,6 +486,74 @@ describe("run regression fixes", () => {
     expect(out()).toContain("Skipped 1 comment (--skip-directives).");
   });
 
+  it("attributes comments skipped by --only-directives to that flag, not --skip-directives", async () => {
+    const file = join(dir, "a.ts");
+    await writeFile(file, "// @ts-nocheck\n// ordinary\nconst x = 1;\n");
+    const { io, out } = capture();
+
+    const code = await run(["--remove", "--only-directives", "--remove-directives", dir], io);
+
+    expect(code).toBe(0);
+    expect(out()).toContain("Removed 1 comment across 1 file.");
+    expect(out()).toContain("Skipped 1 comment (outside --only-directives).");
+  });
+
+  it("counts every reported file in the JSON removal summary, changed ones separately", async () => {
+    const file = join(dir, "a.ts");
+    await writeFile(file, "/*! legal */\nconst x = 1;\n");
+    const { io, out } = capture();
+
+    const code = await run(["--remove", "--json", dir], io);
+
+    expect(code).toBe(0);
+    const report = JSON.parse(out()) as { summary: object; files: unknown[] };
+    expect(report.summary).toMatchObject({ files: 1, changedFiles: 0, removed: 0, kept: 1 });
+    expect(report.files).toHaveLength(1);
+  });
+
+  it("removes a comment reached through two symlinks only once", async () => {
+    const real = join(dir, "real");
+    const scan = join(dir, "scan");
+    await mkdir(real);
+    await mkdir(scan);
+    await writeFile(join(real, "source.ts"), "// gone\nconst x = 1;\n");
+    await symlink(join(real, "source.ts"), join(scan, "a.ts"));
+    await symlink(join(real, "source.ts"), join(scan, "b.ts"));
+    const { io, out } = capture();
+
+    const code = await run(["--remove", scan], io);
+
+    expect(code).toBe(0);
+    expect(out()).toContain("Removed 1 comment across 1 file.");
+    expect(await readFile(join(real, "source.ts"), "utf8")).toBe("const x = 1;\n");
+  });
+
+  it("refuses to activate a prettier pragma by removing the comment before it", async () => {
+    const file = join(dir, "a.ts");
+    const source = "/* lead */\n/**\n * @format\n * @license\n */\nconst x = 1;\n";
+    await writeFile(file, source);
+    const { io, out } = capture();
+
+    const code = await run(["--remove", dir], io);
+
+    expect(code).toBe(0);
+    expect(await readFile(file, "utf8")).toBe(source);
+    expect(out()).toContain("No removable comments found. Kept 2 protected comments.");
+  });
+
+  it("previews the same pragma protection under --remove --dry-run", async () => {
+    const file = join(dir, "a.ts");
+    const source = "/* lead */\n/**\n * @format\n * @license\n */\nconst x = 1;\n";
+    await writeFile(file, source);
+    const { io, out } = capture();
+
+    const code = await run(["--remove", "--dry-run", dir], io);
+
+    expect(code).toBe(0);
+    expect(await readFile(file, "utf8")).toBe(source);
+    expect(out()).toContain("No removable comments found. Kept 2 protected comments.");
+  });
+
   it("counts skipped directives in the JSON removal summary", async () => {
     const file = join(dir, "a.ts");
     await writeFile(file, "// @ts-nocheck\n// gone\nconst x = 1;\n");
