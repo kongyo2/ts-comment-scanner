@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 96" role="img" aria-label="ts-comment-scanner">
+  <!-- Lockup for light backgrounds. The struck word performs the product. -->
+  <g transform="scale(0.375)">
+    <rect width="256" height="256" rx="56" fill="#0F2237"/>
+    <g stroke-linecap="round" fill="none">
+      <path d="M74 190 L130 68" stroke="#F5F8FB" stroke-width="26"/>
+      <path d="M128 190 L163 114" stroke="#F5F8FB" stroke-width="26"/>
+      <path d="M180 78 L194 46" stroke="#E5484D" stroke-width="26"/>
+    </g>
+  </g>
+  <text font-family="ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="42" font-weight="600" y="63">
+    <tspan x="128" textLength="75.6" lengthAdjust="spacingAndGlyphs" fill="#1F2328">ts-</tspan>
+    <tspan x="203.6" textLength="176.4" lengthAdjust="spacingAndGlyphs" fill="#7A8691">comment</tspan>
+    <tspan x="380" textLength="201.6" lengthAdjust="spacingAndGlyphs" fill="#1F2328">-scanner</tspan>
+  </text>
+  <line x1="206" y1="51" x2="378" y2="51" stroke="#E5484D" stroke-width="5" stroke-linecap="round"/>
+</svg>

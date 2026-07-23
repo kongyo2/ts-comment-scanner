@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="ts-comment-scanner logo">
+  <!--
+    The mark is the TypeScript line-comment marker itself: one slash intact,
+    the second snapped, its excised tip drifting away in deletion red.
+  -->
+  <rect width="256" height="256" rx="56" fill="#0F2237"/>
+  <g stroke-linecap="round" fill="none">
+    <!-- solid slash: what stays -->
+    <path d="M74 190 L130 68" stroke="#F5F8FB" stroke-width="26"/>
+    <!-- snapped slash: what is being removed -->
+    <path d="M128 190 L163 114" stroke="#F5F8FB" stroke-width="26"/>
+    <!-- the excised tip, drifting off along the slash axis -->
+    <path d="M180 78 L194 46" stroke="#E5484D" stroke-width="26"/>
+  </g>
+</svg>

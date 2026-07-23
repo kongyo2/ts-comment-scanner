@@ -1,0 +1,594 @@
+<!doctype html>
+<html lang="ja" data-lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ts-comment-scanner — TypeScript のコメントを検出・集計し、安全に削除する CLI</title>
+    <meta
+      name="description"
+      content="コーディングエージェントが焼き込む“経緯コメント”を TypeScript の AST で安全に掃除する CLI。78 種のディレクティブを保持し、--diff でエージェントが触ったファイルだけを対象にできます。/ A CLI that detects, reports and safely removes comments across a TypeScript project."
+    />
+    <link rel="canonical" href="https://kongyo2.github.io/ts-comment-scanner/" />
+    <link rel="icon" type="image/svg+xml" href="./assets/logo.svg" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="ts-comment-scanner" />
+    <meta
+      property="og:description"
+      content="「レビューで直しました」は、コードに書かない。エージェントの経緯コメントを AST で安全に掃除する TypeScript CLI。"
+    />
+    <meta property="og:url" content="https://kongyo2.github.io/ts-comment-scanner/" />
+    <meta property="og:image" content="https://kongyo2.github.io/ts-comment-scanner/assets/og.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Sans+JP:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./style.css" />
+    <script>
+      document.documentElement.classList.add("js");
+    </script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main"><span class="ja">本文へスキップ</span><span class="en">Skip to content</span></a>
+
+    <header class="site-head">
+      <div class="wrap">
+        <a class="brand" href="./">
+          <img src="./assets/logo.svg" alt="" width="28" height="28" />
+          <span aria-label="ts-comment-scanner">ts-<span class="comment-word">comment</span>-scanner</span>
+        </a>
+        <nav class="head-nav" aria-label="site">
+          <a class="gh-only" href="https://github.com/kongyo2/ts-comment-scanner">GitHub</a>
+          <a class="gh-only" href="https://www.npmjs.com/package/@kongyo2/ts-comment-scanner">npm</a>
+          <div class="lang-switch" role="group" aria-label="Language">
+            <button type="button" data-set-lang="ja" aria-pressed="true">日本語</button>
+            <button type="button" data-set-lang="en" aria-pressed="false">EN</button>
+          </div>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main" class="wrap">
+      <!-- ============================================================ hero -->
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">
+            <span class="ja">// TypeScript のコメントを検出・集計・安全に削除する CLI</span>
+            <span class="en">// detect, report and safely remove TypeScript comments</span>
+          </p>
+          <h1>
+            <span class="ja">「レビューで直しました」は、<br />コードに<span class="accent">書かない</span>。</span>
+            <span class="en">Fixes go in code.<br />Stories go in <span class="accent">git</span>.</span>
+          </h1>
+          <p class="lede">
+            <span class="ja">
+              コーディングエージェントが焼き込む“開発の経緯”コメントを、TypeScript の AST で検出して安全に削除する
+              CLI。ビルドを支える 78 種類のディレクティブは残したまま、
+              <code>--diff</code> でエージェントが触ったファイルだけを掃除します。
+            </span>
+            <span class="en">
+              A CLI that detects and safely removes the narration comments coding agents bake into TypeScript — via the
+              AST. It keeps all 78 directive kinds your build depends on, and
+              <code>--diff</code> scopes the sweep to the files the agent just touched.
+            </span>
+          </p>
+          <div class="cta-row">
+            <div class="cmd">
+              <span class="ps1">$</span>
+              <span id="hero-cmd"
+                >npx @kongyo2/ts-comment-scanner <span class="flag">--remove --dry-run --diff</span> HEAD</span
+              >
+              <button
+                type="button"
+                class="copy-btn"
+                data-copy="npx @kongyo2/ts-comment-scanner --remove --dry-run --diff HEAD"
+              >
+                copy
+              </button>
+            </div>
+          </div>
+          <p class="hero-links">
+            <a href="https://github.com/kongyo2/ts-comment-scanner">GitHub&nbsp;↗</a>
+            <a href="https://www.npmjs.com/package/@kongyo2/ts-comment-scanner">npm&nbsp;↗</a>
+            <a href="https://zenn.dev/kongyokongyo/articles/1071c392d6c620"
+              ><span class="ja">解説記事&nbsp;↗</span><span class="en">the story (JA)&nbsp;↗</span></a
+            >
+          </p>
+        </div>
+
+        <figure class="demo" aria-label="ts-comment-scanner demo">
+          <div class="demo-bar" aria-hidden="true">
+            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+            <span class="demo-title">src/range.ts — ts-comment-scanner --remove --diff HEAD</span>
+          </div>
+          <pre
+            class="demo-code"
+            aria-hidden="true"
+          ><div class="line"><span class="ln">1</span><span class="code-text"><span class="kw">export function</span> resolveRange(input: <span class="kw">string</span>) {</span></div><div class="line del"><span class="ln">2</span><span class="code-text"><span class="cmt-noise">  // Note: Codex review flagged that an empty</span></span></div><div class="line del"><span class="ln">3</span><span class="code-text"><span class="cmt-noise">  // string slips through when --diff is given</span></span></div><div class="line del"><span class="ln">4</span><span class="code-text"><span class="cmt-noise">  // no value; per that feedback we guard it.</span></span></div><div class="line"><span class="ln">5</span><span class="code-text">  <span class="kw">if</span> (input === <span class="str">""</span>) <span class="kw">return</span> <span class="str">"HEAD"</span>;</span></div><div class="line keep"><span class="ln">6</span><span class="code-text"><span class="cmt">  // @ts-expect-error upstream may pass null</span></span><span class="keep-chip">kept: directive</span></div><div class="line"><span class="ln">7</span><span class="code-text">  <span class="kw">return</span> normalize(input);</span></div><div class="line"><span class="ln">8</span><span class="code-text">}</span></div></pre>
+          <div class="scanline" aria-hidden="true"></div>
+          <figcaption class="demo-status">
+            <span class="typed">✓ removed 3 comments · kept 1 directive</span>
+          </figcaption>
+        </figure>
+      </section>
+
+      <!-- ========================================================= problem -->
+      <section id="problem">
+        <p class="sec-eyebrow"><span class="ja">// なぜ要るのか</span><span class="en">// why this exists</span></p>
+        <h2>
+          <span class="ja">エージェントは“経緯”をコードに焼き込む</span>
+          <span class="en">Agents bake the meeting minutes into the code</span>
+        </h2>
+        <p class="sec-intro">
+          <span class="ja">
+            エージェントにレビュー往復をさせると、修正のたびに「指摘に従って直した」という報告文が
+            コメントとして積まれていきます。CLAUDE.md やフックで指示しても止まらないことは公式 issue
+            でも報告されている挙動です。コードの制約を書くコメントは資産ですが、開発の出来事を
+            引用形式で語るコメントは、半年後の読者には何の情報でもありません。経緯なら git blame と PR
+            スレッドが持っています。
+          </span>
+          <span class="en">
+            Send an agent through a review loop and every round deposits another “per the review feedback, we now …”
+            into your source. Instructions in CLAUDE.md or hooks don't reliably stop it — there are open issues about
+            exactly this. A comment that states a constraint is an asset; a comment that narrates what happened during
+            development tells a reader six months from now nothing. git blame and the PR thread already keep the story.
+          </span>
+        </p>
+
+        <div class="species">
+          <div class="specimen good">
+            <div class="specimen-head">
+              <span class="verdict"><span class="ja">残る</span><span class="en">keeps</span></span>
+              <span class="why">
+                <span class="ja">コードの制約 — 将来の読者に有用</span>
+                <span class="en">a constraint of the code — useful forever</span>
+              </span>
+            </div>
+            <pre><span class="cmt">// Empty string means "--diff with no value":</span>
+<span class="cmt">// fall back to comparing against HEAD.</span>
+<span class="kw">if</span> (input === <span class="str">""</span>) <span class="kw">return</span> <span class="str">"HEAD"</span>;</pre>
+            <div class="specimen-foot">
+              <span class="ja">主語がコード。書き直させてでも残す価値がある。</span>
+              <span class="en">The subject is the code. Worth keeping — or rewriting into this form.</span>
+            </div>
+          </div>
+          <div class="specimen bad">
+            <div class="specimen-head">
+              <span class="verdict"><span class="ja">消す</span><span class="en">goes</span></span>
+              <span class="why">
+                <span class="ja">開発の経緯 — コミットメッセージに書くべき</span>
+                <span class="en">a development event — belongs in the commit</span>
+              </span>
+            </div>
+            <pre><span class="cmt">// Note: Codex review flagged this case.</span>
+<span class="cmt">// Per that feedback, we now guard it.</span>
+<span class="kw">if</span> (input === <span class="str">""</span>) <span class="kw">return</span> <span class="str">"HEAD"</span>;</pre>
+            <div class="specimen-foot">
+              <span class="ja">主語がレビューの議事録。diff レビューをすり抜けやすい。</span>
+              <span class="en">The subject is the review log — and it slips through diff review easily.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======================================================== features -->
+      <section id="features">
+        <p class="sec-eyebrow"><span class="ja">// できること</span><span class="en">// what it does</span></p>
+        <h2>
+          <span class="ja">検出・集計から、壊さない削除まで</span>
+          <span class="en">From detection to deletion that doesn't break</span>
+        </h2>
+        <div class="feature-grid">
+          <div class="feature">
+            <span class="flag-chip">scan</span>
+            <h3><span class="ja">検出と集計</span><span class="en">Detect &amp; report</span></h3>
+            <p>
+              <span class="ja"
+                >.ts / .tsx / .mts / .cts を再帰的にスキャンし、行・ブロックコメントを位置情報つきで text / json /
+                github の 3 形式で出力。</span
+              >
+              <span class="en"
+                >Recursively scans .ts / .tsx / .mts / .cts and reports line and block comments with positions, as text,
+                JSON or GitHub annotations.</span
+              >
+            </p>
+          </div>
+          <div class="feature">
+            <span class="flag-chip">--remove</span>
+            <h3><span class="ja">安全な削除</span><span class="en">Safe removal</span></h3>
+            <p>
+              <span class="ja"
+                >AST のコメント範囲だけを削除。ディレクティブとライセンスヘッダーはデフォルトで保持し、
+                削除後は再スキャンで検証。</span
+              >
+              <span class="en"
+                >Splices only AST comment ranges. Directives and license headers are kept by default, and the result is
+                re-scanned to verify.</span
+              >
+            </p>
+          </div>
+          <div class="feature">
+            <span class="flag-chip">--diff &lt;range&gt;</span>
+            <h3>
+              <span class="ja">エージェントの作業範囲だけ</span><span class="en">Only what the agent touched</span>
+            </h3>
+            <p>
+              <span class="ja"
+                >git が変更ありと報告するファイルだけに絞り込み。未追跡の新規ファイルも含み、 .gitignore は尊重。</span
+              >
+              <span class="en"
+                >Narrows the sweep to files git reports as changed — untracked files included, .gitignore
+                respected.</span
+              >
+            </p>
+          </div>
+          <div class="feature">
+            <span class="flag-chip">78 rules</span>
+            <h3><span class="ja">ディレクティブを知っている</span><span class="en">Knows the directives</span></h3>
+            <p>
+              <span class="ja"
+                >@ts-expect-error から webpackChunkName: まで、消すと挙動が変わるコメントを 78 本のルールで判定。</span
+              >
+              <span class="en"
+                >From @ts-expect-error to webpackChunkName:, 78 rules identify the comments whose removal would change
+                behaviour.</span
+              >
+            </p>
+          </div>
+          <div class="feature">
+            <span class="flag-chip">--fail-on-comment</span>
+            <h3><span class="ja">CI ゲート</span><span class="en">A gate for CI</span></h3>
+            <p>
+              <span class="ja"
+                >コメント検出時に終了コード 1。--format github なら PR の該当行にアノテーションが出ます。</span
+              >
+              <span class="en"
+                >Exit code 1 when comments are reported; with --format github the offending lines are annotated right in
+                the PR.</span
+              >
+            </p>
+          </div>
+          <div class="feature">
+            <span class="flag-chip">import { … }</span>
+            <h3><span class="ja">ライブラリとしても</span><span class="en">Also a library</span></h3>
+            <p>
+              <span class="ja"
+                >scanComments / removeComments / changedFiles などを TypeScript API として利用可能。</span
+              >
+              <span class="en"
+                >scanComments, removeComments, changedFiles and friends are available as a typed API.</span
+              >
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================================== safety -->
+      <section id="safety">
+        <p class="sec-eyebrow"><span class="ja">// 安全装置</span><span class="en">// the guard rails</span></p>
+        <h2>
+          <span class="ja">「壊れないコメント削除」を、真面目にやる</span>
+          <span class="en">Comment removal that refuses to break your build</span>
+        </h2>
+        <p class="sec-intro">
+          <span class="ja"
+            >正規表現でコメントを消すと、文字列の中の // やテンプレートリテラル、JSX
+            を平気で壊します。削除を真面目にやると意外と深い — このツールが踏んでいる地雷の一部:</span
+          >
+          <span class="en"
+            >Regex-based stripping happily corrupts strings, template literals and JSX. Done properly, removal turns out
+            to be deep — a sample of the mines this tool steps around:</span
+          >
+        </p>
+        <div class="guards">
+          <div class="guard">
+            <div class="danger">
+              <span class="ja">文字列・テンプレート・正規表現・JSX の中の “//”</span>
+              <span class="en">“//” inside strings, templates, regexes, JSX text</span>
+            </div>
+            <div class="fix">
+              <span class="ja">AST のコメントトリビアだけを扱うので誤爆しない</span>
+              <span class="en">only AST comment trivia is touched — no false positives</span>
+            </div>
+          </div>
+          <div class="guard">
+            <div class="danger">
+              <span class="ja"><code>a/* x */b</code> はトークンが結合してしまう</span>
+              <span class="en"><code>a/* x */b</code> would merge two tokens</span>
+            </div>
+            <div class="fix">
+              <span class="ja">結合する位置には空白を挿入(→ <code>a b</code>)</span>
+              <span class="en">a space is inserted where they would join (→ <code>a b</code>)</span>
+            </div>
+          </div>
+          <div class="guard">
+            <div class="danger">
+              <span class="ja">コードに挟まれた複数行ブロックコメントは ECMA-262 上「行終端子」(ASI に効く)</span>
+              <span class="en">a multi-line block comment between code acts as a line terminator (ASI)</span>
+            </div>
+            <div class="fix">
+              <span class="ja">消さずに改行へ置換して文の切れ目を保つ</span>
+              <span class="en">replaced with a real line break so statements stay separated</span>
+            </div>
+          </div>
+          <div class="guard">
+            <div class="danger">
+              <span class="ja"><code>@ts-expect-error</code> 直下の行が消えると適用先がズレる</span>
+              <span class="en">deleting the line under <code>@ts-expect-error</code> shifts its target</span>
+            </div>
+            <div class="fix">
+              <span class="ja">次行指示子の直下にあるコメント行は削除しない</span>
+              <span class="en">comment lines shielded by next-line directives are kept</span>
+            </div>
+          </div>
+          <div class="guard">
+            <div class="danger">
+              <span class="ja">削除処理そのものの想定外</span>
+              <span class="en">the remover itself misbehaving</span>
+            </div>
+            <div class="fix">
+              <span class="ja">削除後のソースを再スキャンして検証。想定外ならファイルを書き換えずエラー</span>
+              <span class="en">output is re-scanned and verified; on mismatch the file is left untouched</span>
+            </div>
+          </div>
+          <div class="guard">
+            <div class="danger">
+              <span class="ja">書き込み中のクラッシュやディスクフル</span>
+              <span class="en">a crash or full disk mid-write</span>
+            </div>
+            <div class="fix">
+              <span class="ja">一時ファイル経由のアトミック置換で元ファイルは壊れない</span>
+              <span class="en">atomic replace through a temp file — the original can't be truncated</span>
+            </div>
+          </div>
+          <div class="guard">
+            <div class="danger">
+              <span class="ja">UTF-16 や BOM、不正なエンコーディング</span>
+              <span class="en">UTF-16, BOMs, invalid encodings</span>
+            </div>
+            <div class="fix">
+              <span class="ja">エンコーディングと BOM を保持。復元不能なファイルは変更せず報告</span>
+              <span class="en">encoding and BOM preserved; undecodable files are reported, never rewritten</span>
+            </div>
+          </div>
+        </div>
+        <p class="proof-line">
+          <span class="ja"
+            >// この挙動は <strong>415 本のテスト</strong>と <strong>100% カバレッジ</strong>(statements / branches /
+            functions / lines)で固定しています</span
+          >
+          <span class="en"
+            >// pinned by <strong>415 tests</strong> at <strong>100% coverage</strong> — statements, branches, functions
+            and lines</span
+          >
+        </p>
+      </section>
+
+      <!-- ====================================================== directives -->
+      <section id="directives">
+        <p class="sec-eyebrow">
+          <span class="ja">// 78 のディレクティブ</span><span class="en">// the 78 directives</span>
+        </p>
+        <h2>
+          <span class="ja">消すとビルドが壊れるコメントを、知っている</span>
+          <span class="en">It knows which comments your build depends on</span>
+        </h2>
+        <p class="sec-intro">
+          <span class="ja"
+            >判定は「それっぽい文字列を含むか」ではなく、各ツールの実際のパーサー実装(正規表現・文字列比較)に合わせてあります。</span
+          >
+          <span class="en"
+            >Detection is not “contains a similar-looking string” — each rule mirrors the actual parser implementation
+            of the tool it protects.</span
+          >
+        </p>
+        <div class="ticker" aria-hidden="true">
+          <div class="ticker-track">
+            <span class="chip">@ts-expect-error</span><span class="chip">@ts-ignore</span
+            ><span class="chip">@ts-nocheck</span><span class="chip">/// &lt;reference&gt;</span
+            ><span class="chip">eslint-disable-next-line</span><span class="chip">eslint-env</span
+            ><span class="chip">oxlint-disable</span><span class="chip">biome-ignore</span
+            ><span class="chip">deno-lint-ignore-file</span><span class="chip">rome-ignore</span
+            ><span class="chip">@flow</span><span class="chip">$FlowFixMe</span><span class="chip">flowlint</span
+            ><span class="chip">tslint:disable</span><span class="chip">jshint esversion:6</span
+            ><span class="chip">jscs:ignore</span><span class="chip">/*jslint*/</span
+            ><span class="chip">prettier-ignore</span><span class="chip">@noformat</span
+            ><span class="chip">oxfmt-ignore</span><span class="chip">dprint-ignore-file</span
+            ><span class="chip">organize-imports-ignore</span><span class="chip">istanbul ignore next</span
+            ><span class="chip">c8 ignore start</span><span class="chip">v8 ignore file</span
+            ><span class="chip">node:coverage disable</span><span class="chip">@vitest-environment</span
+            ><span class="chip">Stryker disable</span><span class="chip">type-coverage:ignore-line</span
+            ><span class="chip">ts-prune-ignore-next</span><span class="chip">@ts-strict-ignore</span>
+          </div>
+          <div class="ticker-track reverse">
+            <span class="chip">webpackChunkName:</span><span class="chip">turbopackIgnore:</span
+            ><span class="chip">@vite-ignore</span><span class="chip">#__PURE__</span
+            ><span class="chip">@__NO_SIDE_EFFECTS__</span><span class="chip">// @bun</span
+            ><span class="chip">@refresh reset</span><span class="chip">million-ignore</span
+            ><span class="chip">nx-ignore-next-line</span><span class="chip">@unocss-include</span
+            ><span class="chip">@next-codemod-error</span><span class="chip">/* GraphQL */</span
+            ><span class="chip">sourceMappingURL=</span><span class="chip">@jsxImportSource</span
+            ><span class="chip">NOSONAR</span><span class="chip">nosemgrep</span
+            ><span class="chip">lgtm[js/sql-injection]</span><span class="chip">codeql[js/unused-variable]</span
+            ><span class="chip">skipcq: JS-0002</span><span class="chip">deepcode ignore</span
+            ><span class="chip">no-dd-sa</span><span class="chip">gitleaks:allow</span
+            ><span class="chip">trufflehog:ignore</span><span class="chip">pragma: allowlist secret</span
+            ><span class="chip">cspell:disable</span><span class="chip">LocalWords:</span
+            ><span class="chip">codespell:ignore</span><span class="chip">noinspection</span
+            ><span class="chip">&lt;editor-fold&gt;</span><span class="chip">ReSharper disable</span
+            ><span class="chip">#region</span><span class="chip">@deno-types=</span
+            ><span class="chip">language=SQL</span>
+          </div>
+        </div>
+        <ul class="parser-notes">
+          <li>
+            <span class="rule-name">webpackChunkName:</span>
+            <span class="ja"
+              >/** 始まりの docblock では判定しない — webpack
+              はコメント本体をオブジェクトリテラルとして評価するため、JSDoc の * が壊すから。</span
+            >
+            <span class="en"
+              >Not detected in /** docblocks — webpack evaluates the comment body as an object literal, and JSDoc stars
+              break it.</span
+            >
+          </li>
+          <li>
+            <span class="rule-name">codeql[...]</span>
+            <span class="ja"
+              >単一行コメントのみ — CodeQL の AlertSuppression クエリは //
+              しか読まないため、ブロックコメントは普通のコメント扱い。</span
+            >
+            <span class="en"
+              >Line comments only — CodeQL's AlertSuppression queries never read block comments, so those stay
+              ordinary.</span
+            >
+          </li>
+          <li>
+            <span class="rule-name">/*jslint</span>
+            <span class="ja"
+              >マーカー直後に空白があると無効 — JSLint
+              はコメント開始直後の文字列しか見ないため、空白ありは普通のコメント扱い。</span
+            >
+            <span class="en"
+              >Void if a space follows the marker — JSLint only honours the pragma glued to the comment opener.</span
+            >
+          </li>
+        </ul>
+      </section>
+
+      <!-- =========================================================== usage -->
+      <section id="usage">
+        <p class="sec-eyebrow"><span class="ja">// 使い方</span><span class="en">// how to use it</span></p>
+        <h2>
+          <span class="ja">まず見る、それから消す</span>
+          <span class="en">Look first, then delete</span>
+        </h2>
+        <div class="recipes">
+          <div class="recipe">
+            <p class="recipe-note">
+              <span class="ja"># 何がどこにあるかを見る</span>
+              <span class="en"># see what is where</span>
+            </p>
+            <div class="recipe-cmd">
+              <span class="grow">npx @kongyo2/ts-comment-scanner src</span>
+              <button type="button" class="copy-btn" data-copy="npx @kongyo2/ts-comment-scanner src">copy</button>
+            </div>
+          </div>
+          <div class="recipe">
+            <p class="recipe-note">
+              <span class="ja"># エージェントが触ったファイルだけ、まず削除対象を確認</span>
+              <span class="en"># preview the sweep, scoped to files the agent touched</span>
+            </p>
+            <div class="recipe-cmd">
+              <span class="grow"
+                >npx @kongyo2/ts-comment-scanner <span class="flag">--remove --dry-run --diff</span> HEAD</span
+              >
+              <button
+                type="button"
+                class="copy-btn"
+                data-copy="npx @kongyo2/ts-comment-scanner --remove --dry-run --diff HEAD"
+              >
+                copy
+              </button>
+            </div>
+          </div>
+          <div class="recipe">
+            <p class="recipe-note">
+              <span class="ja"># 問題なければ削除(ディレクティブとライセンスは保持される)</span>
+              <span class="en"># then delete — directives and license headers survive</span>
+            </p>
+            <div class="recipe-cmd">
+              <span class="grow"
+                >npx @kongyo2/ts-comment-scanner <span class="flag">--remove --diff</span> main...HEAD</span
+              >
+              <button
+                type="button"
+                class="copy-btn"
+                data-copy="npx @kongyo2/ts-comment-scanner --remove --diff main...HEAD"
+              >
+                copy
+              </button>
+            </div>
+          </div>
+          <div class="recipe">
+            <p class="recipe-note">
+              <span class="ja"># CI で経緯コメントの混入を止める(PR の該当行に注釈が出る)</span>
+              <span class="en"># gate CI — offending lines get annotated in the PR</span>
+            </p>
+            <div class="recipe-cmd">
+              <span class="grow"
+                >npx @kongyo2/ts-comment-scanner
+                <span class="flag">--format github --skip-directives --fail-on-comment</span> src</span
+              >
+              <button
+                type="button"
+                class="copy-btn"
+                data-copy="npx @kongyo2/ts-comment-scanner --format github --skip-directives --fail-on-comment src"
+              >
+                copy
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <ol class="steps">
+          <li>
+            <strong><span class="ja">絞る</span><span class="en">Scope</span></strong>
+            <span class="ja"><code>--diff HEAD</code> でエージェントが直近触った範囲だけを対象にする。</span>
+            <span class="en"><code>--diff HEAD</code> narrows the target to what the agent just touched.</span>
+          </li>
+          <li>
+            <strong><span class="ja">確かめる</span><span class="en">Preview</span></strong>
+            <span class="ja"
+              ><code>--dry-run</code> で削除対象を人間が最終確認する。元からあった資産コメントを守るのはここ。</span
+            >
+            <span class="en"
+              ><code>--dry-run</code> puts a human in the loop — this is where pre-existing comment assets get
+              protected.</span
+            >
+          </li>
+          <li>
+            <strong><span class="ja">掃除する</span><span class="en">Sweep</span></strong>
+            <span class="ja">削除して、本当に必要な知見は経緯抜きの Why コメントとして書き直させる。</span>
+            <span class="en">Delete, and have real insights rewritten as Why comments — without the narration.</span>
+          </li>
+        </ol>
+
+        <p class="exit-codes">
+          <span class="ja"
+            >終了コード: <b>0</b> 成功 · <b>1</b> --fail-on-comment でコメント検出 · <b>2</b> 引数・実行時エラー /
+            Node.js ≥ 20 / MIT</span
+          >
+          <span class="en"
+            >Exit codes: <b>0</b> success · <b>1</b> comments found with --fail-on-comment · <b>2</b> usage or runtime
+            error / Node.js ≥ 20 / MIT</span
+          >
+        </p>
+      </section>
+    </main>
+
+    <footer class="site-foot">
+      <div class="wrap">
+        <picture>
+          <source srcset="./assets/wordmark-dark.svg" media="(prefers-color-scheme: dark)" />
+          <img src="./assets/wordmark.svg" alt="ts-comment-scanner" />
+        </picture>
+        <p class="foot-thesis">
+          <span class="ja">// lint と formatter が人間にしてきたことを、エージェントにも。</span>
+          <span class="en">// what lint and formatters did for humans, done for agents.</span>
+        </p>
+        <nav class="foot-links" aria-label="footer">
+          <a href="https://github.com/kongyo2/ts-comment-scanner">GitHub</a>
+          <a href="https://www.npmjs.com/package/@kongyo2/ts-comment-scanner">npm</a>
+          <a href="https://zenn.dev/kongyokongyo/articles/1071c392d6c620">Zenn</a>
+          <a href="https://github.com/kongyo2/ts-comment-scanner#readme">README</a>
+        </nav>
+        <p class="foot-meta">MIT License © kongyo2</p>
+      </div>
+    </footer>
+
+    <script src="./script.js" defer></script>
+  </body>
+</html>

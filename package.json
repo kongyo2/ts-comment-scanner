@@ -17,6 +17,7 @@
   ],
   "license": "MIT",
   "author": "kongyo2",
+  "homepage": "https://kongyo2.github.io/ts-comment-scanner/",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kongyo2/ts-comment-scanner.git"
