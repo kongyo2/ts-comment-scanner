@@ -157,6 +157,18 @@ describe("run", () => {
     expect(out()).not.toContain("a.test.ts");
   });
 
+  it("scans only the extensions listed in --ext", async () => {
+    await writeFile(join(dir, "a.mjs"), "// module\n");
+    await writeFile(join(dir, "b.ts"), "// typescript\n");
+    const { io, out } = capture();
+
+    const code = await run(["--ext", "mjs", dir], io);
+
+    expect(code).toBe(0);
+    expect(out()).toContain("a.mjs:1:1");
+    expect(out()).not.toContain("b.ts");
+  });
+
   it("filters directives with --skip-directives", async () => {
     await writeFile(join(dir, "a.ts"), "// @ts-nocheck\n// note\nconst x = 1;\n");
     const { io, out } = capture();
@@ -381,6 +393,26 @@ describe("run", () => {
 
     expect(code).toBe(2);
     expect(err()).toContain("not a git repository");
+  });
+
+  it("matches --diff files case-insensitively on Windows-like platforms", async () => {
+    await initRepo();
+    await writeFile(join(dir, "a.ts"), "// base\n");
+    await commitAll("base");
+    await writeFile(join(dir, "a.ts"), "// changed\n");
+    const { io, out } = capture();
+
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform") as PropertyDescriptor;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    let code: number;
+    try {
+      code = await run(["--diff", "HEAD", dir], io);
+    } finally {
+      Object.defineProperty(process, "platform", descriptor);
+    }
+
+    expect(code).toBe(0);
+    expect(out()).toContain("// changed");
   });
 });
 

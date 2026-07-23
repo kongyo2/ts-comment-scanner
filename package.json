@@ -51,6 +51,7 @@
     "typecheck:watch": "tsc --noEmit --watch",
     "start": "node dist/cli.js",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "lint": "oxlint --format agent",
     "lint:fix": "oxlint --fix",
@@ -69,6 +70,7 @@
   "devDependencies": {
     "@types/node": "^25.9.3",
     "@types/picomatch": "^4.0.3",
+    "@vitest/coverage-v8": "^4.1.10",
     "oxlint": "^1.70.0",
     "prettier": "^3.8.4",
     "vitest": "^4.1.9"

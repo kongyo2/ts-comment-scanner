@@ -43,7 +43,7 @@ const RULES: DirectiveRule[] = [
   { pattern: /^eslint\s+\S/, name: "eslint", blockOnly: true, joinLines: true },
   {
     pattern: /^(globals?|exported)\s+\S/,
-    name: (match) => match[1] ?? "global",
+    name: (match) => match[1] as string,
     blockOnly: true,
     joinLines: true,
   },
@@ -60,7 +60,7 @@ const RULES: DirectiveRule[] = [
   // comment marker with no space (`/*jslint devel*/` works, `/* jslint */`
   // does not) and needs a body, so these match the raw text. The whole-line
   // pragmas (`/*jslint-disable*/`, `//jslint-ignore-line`) are exact strings.
-  { pattern: /^\/[/*](jslint|property)\s+\S/, rawText: true, name: (match) => match[1] ?? "jslint" },
+  { pattern: /^\/[/*](jslint|property)\s+\S/, rawText: true, name: (match) => match[1] as string },
   { pattern: /^\/\*jslint-(disable|enable)\*\/$/, rawText: true, name: (match) => `jslint-${match[1]}` },
   { pattern: /^\/\/jslint-(ignore-line|quiet)$/, rawText: true, name: (match) => `jslint-${match[1]}` },
   // oxlint
@@ -220,7 +220,7 @@ const RULES: DirectiveRule[] = [
   { pattern: /^graphql$/i, joinLines: true, name: "GraphQL" },
   { pattern: /^\/\* HTML \*\/$/, rawText: true, blockOnly: true, name: "HTML" },
   // Source maps (`//# sourceMappingURL=`, legacy `//@`, and the block form)
-  { pattern: /^[#@]\s*(source(?:Mapping)?URL)=/, name: (match) => match[1] ?? "sourceMappingURL" },
+  { pattern: /^[#@]\s*(source(?:Mapping)?URL)=/, name: (match) => match[1] as string },
   // JSX pragmas (docblock pragmas: block comments only, honoured on any line)
   { pattern: /^@jsx(?:Runtime|ImportSource|Frag)?\b/, blockOnly: true, anyLine: true },
   // Test runners. Jest reads these from the file's leading docblock, but
@@ -264,7 +264,7 @@ const RULES: DirectiveRule[] = [
   // Datadog static analysis: the keyword must directly follow the comment
   // opener (whitespace aside); a `/**` star defeats it. Applies to the next
   // line, or the whole file from line 1.
-  { pattern: /^(no-dd-sa|datadog-disable)/, notDocblock: true, name: (match) => match[1] ?? "no-dd-sa" },
+  { pattern: /^(no-dd-sa|datadog-disable)/, notDocblock: true, name: (match) => match[1] as string },
   // Secret scanners: raw substring checks on the finding line.
   { pattern: /gitleaks:allow/, name: "gitleaks:allow", anyLine: true },
   { pattern: /trufflehog:ignore/, name: "trufflehog:ignore", anyLine: true },
@@ -278,7 +278,7 @@ const RULES: DirectiveRule[] = [
   {
     pattern:
       /\b(?:c?spell|spell-?checker)::?\s*(disable(?:-line|-next(?:-line)?)?|enable|ignore(?:-?words?)?|words?|(?:flag|forbid)(?:-?words?)?|ignore_?reg_?exp|include_?reg_?exp|dictionar(?:y|ies)|locale?|language|(?:enable|disable)(?:allow)?compoundwords|(?:enable|disable)casesensitive)\b(?!-)/i,
-    name: (match) => `cspell:${(match[1] ?? "").toLowerCase()}`,
+    name: (match) => `cspell:${(match[1] as string).toLowerCase()}`,
     anyLine: true,
   },
   // cspell's legacy emacs-style word list (case-sensitive, colon optional).

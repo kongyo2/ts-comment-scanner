@@ -84,6 +84,7 @@ describe("parseArgs", () => {
 
   it("rejects combining --skip-directives with --only-directives", () => {
     expect(() => parseArgs(["--skip-directives", "--only-directives"])).toThrow(UsageError);
+    expect(() => parseArgs(["--only-directives", "--skip-directives"])).toThrow(UsageError);
   });
 
   it("parses removal flags", () => {

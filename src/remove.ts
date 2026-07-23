@@ -170,8 +170,8 @@ function vanishingLineGroup(
   lineOffsets: readonly number[],
   removals: readonly Comment[],
 ): Comment[] | undefined {
-  const lineStart = lineOffsets[line - 1];
-  if (lineStart === undefined) return undefined;
+  // collectShields never shields a line beyond the last one, so the offset exists.
+  const lineStart = lineOffsets[line - 1] as number;
   const lineEnd = lineOffsets[line] ?? source.length;
   const group = removals.filter((comment) => comment.start < lineEnd && comment.end > lineStart);
   if (group.length === 0) return undefined;
