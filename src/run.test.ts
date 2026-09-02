@@ -169,6 +169,39 @@ describe("run", () => {
     expect(out()).not.toContain("b.ts");
   });
 
+  it("does not mistake JSX text in a .js file for comments when --ext adds JavaScript", async () => {
+    await writeFile(join(dir, "app.js"), "const e = <a>http://example.com</a>; // link\n");
+    const { io, out } = capture();
+
+    const code = await run(["--ext", "js", dir], io);
+
+    expect(code).toBe(0);
+    expect(out()).toContain("app.js:1:38 [line] // link");
+    expect(out()).toContain("1 comment across 1 file");
+  });
+
+  it("prunes directories named by a trailing-slash ignore pattern", async () => {
+    await mkdir(join(dir, "dist"));
+    await writeFile(join(dir, "dist", "bundle.ts"), "// built\n");
+    await writeFile(join(dir, "a.ts"), "// source\n");
+    const { io, out } = capture();
+
+    const code = await run(["--ignore", "dist/", dir], io);
+
+    expect(code).toBe(0);
+    expect(out()).toContain("a.ts:1:1");
+    expect(out()).not.toContain("bundle.ts");
+  });
+
+  it("returns 2 with a usage error for an empty --ignore pattern", async () => {
+    const { io, err } = capture();
+
+    const code = await run(["--ignore", "", dir], io);
+
+    expect(code).toBe(2);
+    expect(err()).toContain("--ignore requires a glob pattern");
+  });
+
   it("filters directives with --skip-directives", async () => {
     await writeFile(join(dir, "a.ts"), "// @ts-nocheck\n// note\nconst x = 1;\n");
     const { io, out } = capture();

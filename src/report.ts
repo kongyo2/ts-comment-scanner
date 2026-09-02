@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { splitLines } from "./lines.js";
 import type { Comment, FileScanResult } from "./types.js";
 
 /** Formats `3 comments`, `1 file`, ... with naive pluralization. */
@@ -38,8 +39,7 @@ export function formatText(results: FileScanResult[]): string {
 function preview(text: string): string {
   // Split on every ECMAScript line terminator so exotic breaks (lone \r,
   // U+2028/U+2029) cannot leak raw control characters into terminal output.
-  return text
-    .split(/\r\n|[\n\r\u2028\u2029]/)
+  return splitLines(text)
     .map((line) => line.trim())
     .join(" ")
     .trim();

@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
@@ -56,13 +57,16 @@ async function git(args: string[], cwd: string): Promise<string> {
     const { stdout } = await execFileAsync("git", args, { cwd, maxBuffer: MAX_OUTPUT_BYTES });
     return stdout;
   } catch (error) {
-    throw new Error(describeFailure(args[0] as string, error), { cause: error });
+    throw new Error(describeFailure(args[0] as string, cwd, error), { cause: error });
   }
 }
 
-function describeFailure(subcommand: string, error: unknown): string {
+function describeFailure(subcommand: string, cwd: string, error: unknown): string {
   const failure = error as { code?: unknown; stderr?: unknown; message?: unknown };
   if (failure.code === "ENOENT") {
+    // spawn reports a missing working directory with the very same error as
+    // a missing executable; only the directory check tells them apart.
+    if (!existsSync(cwd)) return `directory not found: ${cwd}`;
     return "git executable not found (is git installed and on PATH?)";
   }
   const stderr = typeof failure.stderr === "string" ? failure.stderr.trim() : "";

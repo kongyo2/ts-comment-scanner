@@ -129,6 +129,15 @@ describe("detectDirective", () => {
     expect(detectDirective("line", "// @ts-nocheck extra words")).toBe("@ts-nocheck");
   });
 
+  it("ends check pragma names where tsc's pragma parser does: at whitespace or a colon", () => {
+    // The parser reads the name as `[^\s:]+`, so a hyphen or dot extends it
+    // into an unknown pragma, while `:` starts the argument text.
+    expect(detectDirective("line", "// @ts-nocheck:reason")).toBe("@ts-nocheck");
+    expect(detectDirective("line", "// @ts-check\tstrict")).toBe("@ts-check");
+    expect(detectDirective("line", "// @ts-nocheck-foo")).toBeUndefined();
+    expect(detectDirective("line", "// @ts-nocheck.")).toBeUndefined();
+  });
+
   it("honours block @ts directives only on the block's last line, like TypeScript", () => {
     expect(detectDirective("block", "/* @ts-ignore */")).toBe("@ts-ignore");
     expect(detectDirective("block", "/* note\n@ts-expect-error */")).toBe("@ts-expect-error");
@@ -187,6 +196,21 @@ describe("detectDirective", () => {
     expect(detectDirective("line", '/// <reference path="./a.d.ts" />')).toBe("triple-slash-reference");
     expect(detectDirective("line", '/// <amd-module name="m" />')).toBe("triple-slash-amd-module");
     expect(detectDirective("line", "/// just a heavy comment")).toBeUndefined();
+  });
+
+  it("requires the tag shape tsc parses: a case-insensitive name, whitespace, then a closing />", () => {
+    expect(detectDirective("line", '/// <REFERENCE types="node" />')).toBe("triple-slash-reference");
+    expect(detectDirective("line", '///<reference lib="dom"/>')).toBe("triple-slash-reference");
+    expect(detectDirective("line", "/// <reference>")).toBeUndefined();
+    expect(detectDirective("line", '/// <reference types="node">')).toBeUndefined();
+    expect(detectDirective("line", '/// <references path="./a.d.ts" />')).toBeUndefined();
+  });
+
+  it("drops AMD directives that lack the argument tsc requires", () => {
+    expect(detectDirective("line", '/// <amd-dependency path="./legacy" />')).toBe("triple-slash-amd-dependency");
+    expect(detectDirective("line", '/// <amd-dependency name="legacy" />')).toBeUndefined();
+    expect(detectDirective("line", "/// <amd-module />")).toBeUndefined();
+    expect(detectDirective("line", "/// <amd-module name=unquoted />")).toBeUndefined();
   });
 
   it("detects editor folding regions", () => {

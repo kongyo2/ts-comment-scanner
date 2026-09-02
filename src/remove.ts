@@ -1,4 +1,5 @@
 import { activePositionalDirectives, isLegalComment, type DirectivePlacement } from "./directives.js";
+import { LINE_BREAK, LINE_TERMINATOR, isBlank, lineStartOffsets } from "./lines.js";
 import { scanComments } from "./scanner.js";
 import type { Comment } from "./types.js";
 
@@ -275,20 +276,6 @@ function vanishingLineGroup(
   return group;
 }
 
-/** Start offset of every line, numbered the way the scanner numbers them. */
-function lineStartOffsets(source: string): number[] {
-  const starts = [0];
-  for (let index = 0; index < source.length; index += 1) {
-    const char = source[index] as string;
-    if (char === "\r") {
-      starts.push(source[index + 1] === "\n" ? (index += 1) + 1 : index + 1);
-    } else if (char === "\n" || char === "\u2028" || char === "\u2029") {
-      starts.push(index + 1);
-    }
-  }
-  return starts;
-}
-
 // These suppressions only apply to the following node/line when they stand on
 // their own line — trailing after code they target (at most) their own line.
 // Other next-line directives (`@ts-ignore`, `no-dd-sa`, ...) target the next
@@ -303,65 +290,65 @@ const TRAILING_TARGETS_OWN_LINE = new Set([
   "nosemgrep",
 ]);
 
-// File- and range-scoped pragmas (`c8 ignore start`, `istanbul ignore file`,
-// ...) do not target the following line, so they never shield it.
+// Directives that target the line or node directly below them. File- and
+// range-scoped pragmas (`c8 ignore start`, `istanbul ignore file`, ...) are
+// absent: they do not target the following line, so they never shield it.
+const NEXT_LINE_DIRECTIVES = new Set([
+  "@ts-ignore",
+  "@ts-expect-error",
+  "biome-ignore",
+  "deno-lint-ignore",
+  "deno-fmt-ignore",
+  "deno-coverage-ignore",
+  "prettier-ignore",
+  "oxfmt-ignore",
+  "dprint-ignore",
+  "rome-ignore",
+  "istanbul-ignore",
+  "istanbul-ignore-next",
+  "istanbul-ignore-if",
+  "istanbul-ignore-else",
+  "c8-ignore",
+  "c8-ignore-next",
+  "c8-ignore-if",
+  "c8-ignore-else",
+  "v8-ignore",
+  "v8-ignore-next",
+  "v8-ignore-if",
+  "v8-ignore-else",
+  "node:coverage-ignore",
+  // Directives that hang off the node or line directly below them: a
+  // whole-line comment between them and their target would change what
+  // they apply to, so the line below stays shielded.
+  "ts-prune-ignore-next",
+  "million-ignore",
+  "@million-skip",
+  "@million-jsx-skip",
+  "@deno-types",
+  "@ts-types",
+  "deepcode-ignore",
+  "skipcq",
+  "lgtm",
+  "codeql",
+  "nosemgrep",
+  "no-dd-sa",
+  "datadog-disable",
+  "noinspection",
+  "language-injection",
+  "@next-codemod-error",
+  "@next-codemod-ignore",
+  "$FlowFixMe",
+  "$FlowExpectedError",
+  "$FlowIssue",
+  "$FlowIgnore",
+  "pragma-allowlist-nextline-secret",
+  "cspell:disable-next",
+  "GraphQL",
+  "HTML",
+]);
+
 function isNextLineDirective(name: string): boolean {
-  return (
-    name.endsWith("-next-line") ||
-    [
-      "@ts-ignore",
-      "@ts-expect-error",
-      "biome-ignore",
-      "deno-lint-ignore",
-      "deno-fmt-ignore",
-      "deno-coverage-ignore",
-      "prettier-ignore",
-      "oxfmt-ignore",
-      "dprint-ignore",
-      "rome-ignore",
-      "istanbul-ignore",
-      "istanbul-ignore-next",
-      "istanbul-ignore-if",
-      "istanbul-ignore-else",
-      "c8-ignore",
-      "c8-ignore-next",
-      "c8-ignore-if",
-      "c8-ignore-else",
-      "v8-ignore",
-      "v8-ignore-next",
-      "v8-ignore-if",
-      "v8-ignore-else",
-      "node:coverage-ignore",
-      // Directives that hang off the node or line directly below them: a
-      // whole-line comment between them and their target would change what
-      // they apply to, so the line below stays shielded.
-      "ts-prune-ignore-next",
-      "million-ignore",
-      "@million-skip",
-      "@million-jsx-skip",
-      "@deno-types",
-      "@ts-types",
-      "deepcode-ignore",
-      "skipcq",
-      "lgtm",
-      "codeql",
-      "nosemgrep",
-      "no-dd-sa",
-      "datadog-disable",
-      "noinspection",
-      "language-injection",
-      "@next-codemod-error",
-      "@next-codemod-ignore",
-      "$FlowFixMe",
-      "$FlowExpectedError",
-      "$FlowIssue",
-      "$FlowIgnore",
-      "pragma-allowlist-nextline-secret",
-      "cspell:disable-next",
-      "GraphQL",
-      "HTML",
-    ].includes(name)
-  );
+  return name.endsWith("-next-line") || NEXT_LINE_DIRECTIVES.has(name);
 }
 
 // The coverage pragmas that actually parse a line count after `ignore next`
@@ -397,15 +384,10 @@ function occupiesWholeLines(source: string, comment: Comment): boolean {
   return true;
 }
 
-const isBlank = (text: string): boolean => /^\s*$/.test(text);
-
 const isHorizontalSpace = (char: string | undefined): boolean => char === " " || char === "\t";
 
-const LINE_TERMINATOR = /[\n\r\u2028\u2029]/;
-
-// Every ECMAScript line break the way the scanner counts them: CRLF as one
-// break, then lone LF / CR and the U+2028/U+2029 separators.
-const NEXT_LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/g;
+// A global copy of the line-break matcher, so exec() can resume from a removal's end offset.
+const NEXT_LINE_BREAK = new RegExp(LINE_BREAK.source, "g");
 
 /** End offset (exclusive) of the last line break in the chunk, or -1 when it has none. */
 function lastLineBreakEnd(chunk: string): number {
