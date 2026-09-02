@@ -25,7 +25,7 @@ A CLI / library that detects, lists, and summarizes comments in a TypeScript pro
 - **Automatically identifies compiler and linter directives** such as `@ts-ignore` and `eslint-disable`, so you can filter them in or out
 - **Safe comment removal** (code cleanup): directives and license headers are kept by default
 - Handles UTF-8 (with or without BOM) and BOM-marked UTF-16 (LE/BE); removal preserves the encoding and BOM, and files with a broken encoding are reported as errors **without being modified**
-- **Custom ignore patterns** via glob (`--ignore`) and configurable target extensions (`--ext`)
+- **Custom ignore patterns** via glob (`--ignore`, with a trailing slash such as `dist/` restricting a pattern to directories) and configurable target extensions (`--ext`, parsing JavaScript with JSX enabled)
 - **git integration (`--diff`)**: narrow the scan to files touched between specific commits or in uncommitted work
 - `--fail-on-comment` for CI (exit code 1 when comments are detected)
 - Usable both as a CLI and as a library
@@ -72,7 +72,9 @@ Other:
   -v, --version        Show version
 ```
 
-If no paths are given, the current directory is used. A glob without a slash (e.g. `*.test.ts`) matches against file names, while one that contains a slash (e.g. `src/legacy/**`) matches against paths. Files passed explicitly are never subject to `--ignore`.
+If no paths are given, the current directory is used. A glob without a slash (e.g. `*.test.ts`) matches against file names, while one that contains a slash (e.g. `src/legacy/**`) matches against paths. As in `.gitignore`, a pattern ending in a slash (e.g. `dist/`) matches directories only. Files passed explicitly are never subject to `--ignore`.
+
+JavaScript files added through `--ext` (`.js`, `.jsx`, `.mjs`, `.cjs`) are parsed with JSX enabled, just as TypeScript itself parses them, so text such as `<div>http://…</div>` inside a React component is never mistaken for a comment.
 
 **Exit codes**: `0` success / `1` comments detected when `--fail-on-comment` is set / `2` argument or runtime error
 

@@ -61,6 +61,17 @@ describe("scanFile", () => {
 
     expect(result.comments[0]).toMatchObject({ start: 0, line: 1, column: 1 });
   });
+
+  it("parses plain JavaScript with JSX enabled, like TypeScript itself does", async () => {
+    // Read as TS instead, `<div>` would be a type assertion and the URL's
+    // `//example.com</div>;` a phantom line comment.
+    const file = join(dir, "component.js");
+    await writeFile(file, "const e = <div>http://example.com</div>; // real\n");
+
+    const result = await scanFile(file);
+
+    expect(result.comments.map((comment) => comment.text)).toEqual(["// real"]);
+  });
 });
 
 describe("isJsxFile", () => {
@@ -69,6 +80,13 @@ describe("isJsxFile", () => {
     expect(isJsxFile("a.JSX")).toBe(true);
     expect(isJsxFile("a.ts")).toBe(false);
     expect(isJsxFile("a.mts")).toBe(false);
+    expect(isJsxFile("a.cts")).toBe(false);
+  });
+
+  it("treats plain JavaScript as JSX-capable, matching TypeScript's language variant", () => {
+    expect(isJsxFile("a.js")).toBe(true);
+    expect(isJsxFile("a.mjs")).toBe(true);
+    expect(isJsxFile("a.CJS")).toBe(true);
   });
 });
 
@@ -264,6 +282,39 @@ describe("collectFiles", () => {
     const files = await collectFiles([join(dir, "generated")], { ignore: ["generated"] });
 
     expect(files).toEqual([]);
+  });
+
+  it("restricts a pattern ending in a slash to directories, like .gitignore", async () => {
+    await mkdir(join(dir, "legacy.ts"));
+    await writeFile(join(dir, "legacy.ts", "old.ts"), "// old");
+    await writeFile(join(dir, "a.ts"), "// a");
+
+    // `*.ts/` names directories only: the file a.ts matches the glob but
+    // stays, while the oddly named directory is pruned.
+    const files = await collectFiles([dir], { ignore: ["*.ts/"] });
+
+    expect(files).toEqual([join(dir, "a.ts")]);
+  });
+
+  it("keeps files matched by a directory-only path pattern", async () => {
+    await mkdir(join(dir, "sub", "inner"), { recursive: true });
+    await writeFile(join(dir, "sub", "a.ts"), "// a");
+    await writeFile(join(dir, "sub", "inner", "b.ts"), "// b");
+
+    expect(await collectFiles([dir], { ignore: ["sub/*/"] })).toEqual([join(dir, "sub", "a.ts")]);
+    expect(await collectFiles([dir], { ignore: ["sub/*"] })).toEqual([]);
+  });
+
+  it("prunes an ignored directory-only pattern passed as an input root", async () => {
+    await mkdir(join(dir, "dist"));
+    await writeFile(join(dir, "dist", "bundle.ts"), "// built");
+
+    expect(await collectFiles([join(dir, "dist")], { ignore: ["dist/"] })).toEqual([]);
+  });
+
+  it("rejects ignore patterns that name nothing", async () => {
+    await expect(collectFiles([dir], { ignore: [""] })).rejects.toThrow(/invalid ignore pattern: ""/);
+    await expect(collectFiles([dir], { ignore: ["/"] })).rejects.toThrow(/invalid ignore pattern/);
   });
 
   it("rejects an empty input path instead of widening it to the current directory", async () => {

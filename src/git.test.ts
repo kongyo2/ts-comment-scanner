@@ -187,4 +187,9 @@ describe("changedFiles", () => {
   it("rejects a directory that is not inside a git repository", async () => {
     await expect(changedFiles("HEAD", dir)).rejects.toThrow(/not a git repository/);
   });
+
+  it("names a missing working directory instead of blaming the git executable", async () => {
+    // spawn reports a missing cwd with the same ENOENT a missing binary gets.
+    await expect(changedFiles("HEAD", join(dir, "missing"))).rejects.toThrow(/directory not found: .*missing/);
+  });
 });

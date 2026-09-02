@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Stats } from "node:fs";
+import type { Dirent, Stats } from "node:fs";
 import { chmod, open, readFile, readdir, realpath, rename, rm, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import picomatch from "picomatch";
@@ -19,17 +19,19 @@ export interface CollectOptions {
   ignoreDirs?: string[];
   /**
    * Glob patterns for files and directories to skip (picomatch syntax).
-   * Patterns without a slash match against base names, e.g. `*.test.ts`.
-   * Explicitly listed input files bypass these patterns.
+   * Patterns without a slash match against base names, e.g. `*.test.ts`;
+   * a trailing slash restricts a pattern to directories, e.g. `dist/`, like
+   * in .gitignore. Explicitly listed input files bypass these patterns.
    */
   ignore?: string[];
 }
 
-type IgnoreMatcher = (path: string, root: string) => boolean;
+/** Whether the path (a directory when `isDirectory`) is excluded by the ignore patterns. */
+type IgnoreMatcher = (path: string, root: string, isDirectory: boolean) => boolean;
 
 export async function collectFiles(inputs: string[], options: CollectOptions = {}): Promise<string[]> {
   const extensions = normalizeExtensions(options.extensions ?? DEFAULT_EXTENSIONS);
-  const ignoreDirs = new Set((options.ignoreDirs ?? DEFAULT_IGNORE_DIRS).map(foldName));
+  const ignoreDirs = new Set((options.ignoreDirs ?? DEFAULT_IGNORE_DIRS).map(foldPathCase));
   const isIgnored = buildIgnoreMatcher(options.ignore ?? []);
   // Keyed by the real path so different spellings of one file (relative vs
   // absolute, `.` segments, case on Windows, symlink aliases) collapse into a
@@ -57,7 +59,7 @@ export async function collectFiles(inputs: string[], options: CollectOptions = {
         // Directory inputs are themselves subject to the ignored directory
         // names and the ignore patterns; only explicitly listed files bypass
         // them.
-        if (!ignoreDirs.has(foldName(basename(input))) && !isIgnored(input, input)) {
+        if (!ignoreDirs.has(foldPathCase(basename(input))) && !isIgnored(input, input, true)) {
           await walk(input, { extensions, ignoreDirs, isIgnored, root: input, visited: new Set() }, remember);
         }
       } else {
@@ -72,33 +74,33 @@ export async function collectFiles(inputs: string[], options: CollectOptions = {
   return [...found.values()].sort();
 }
 
+/** Identity key of a file: its absolute path, case-folded where the platform compares paths that way. */
 function canonicalKey(path: string): string {
-  const resolved = resolve(path);
-  // Windows paths are case-insensitive; a case-folded key keeps `Foo.ts` and
-  // `foo.ts` from being treated as two files.
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  return foldPathCase(resolve(path));
 }
 
-/** Folds directory names the way the platform compares them, matching canonicalKey. */
-function foldName(name: string): string {
-  return process.platform === "win32" ? name.toLowerCase() : name;
+/**
+ * Folds a path or name the way the platform compares it: Windows paths are
+ * case-insensitive (`Foo.ts` and `foo.ts` are one file), everywhere else the
+ * spelling is exact.
+ */
+export function foldPathCase(path: string): string {
+  return process.platform === "win32" ? path.toLowerCase() : path;
 }
 
 async function statInput(input: string): Promise<Stats> {
-  try {
-    return await stat(input);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new Error(`path not found: ${input}`, { cause: error });
-    }
-    throw error;
-  }
+  return withFriendlyNotFound(input, () => stat(input));
 }
 
 /** Real path of an explicit input, with the same friendly error statInput gives. */
 async function realpathInput(input: string): Promise<string> {
+  return withFriendlyNotFound(input, () => realpath(input));
+}
+
+/** Runs the lookup, reporting a missing path under the name the user spelled it with. */
+async function withFriendlyNotFound<T>(input: string, lookup: () => Promise<T>): Promise<T> {
   try {
-    return await realpath(input);
+    return await lookup();
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       throw new Error(`path not found: ${input}`, { cause: error });
@@ -143,7 +145,13 @@ async function walk(
   if (context.visited.has(real)) return;
   context.visited.add(real);
 
-  const entries = await readdir(dir, { withFileTypes: true });
+  let entries: Dirent[];
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    if (isSkippableWalkError(error)) return; // the directory vanished after it resolved
+    throw error;
+  }
 
   await Promise.all(
     entries.map(async (entry) => {
@@ -163,10 +171,14 @@ async function walk(
         }
       }
       if (isDirectory) {
-        if (!context.ignoreDirs.has(foldName(entry.name)) && !context.isIgnored(full, context.root)) {
+        if (!context.ignoreDirs.has(foldPathCase(entry.name)) && !context.isIgnored(full, context.root, true)) {
           await walk(full, context, remember);
         }
-      } else if (isFile && hasExtension(entry.name, context.extensions) && !context.isIgnored(full, context.root)) {
+      } else if (
+        isFile &&
+        hasExtension(entry.name, context.extensions) &&
+        !context.isIgnored(full, context.root, false)
+      ) {
         // Remembered under its real path, so several symlinks to one target
         // (or a link plus the target itself) count — and get rewritten — once.
         let realFile: string;
@@ -195,26 +207,55 @@ function hasExtension(name: string, extensions: string[]): boolean {
   return extensions.some((extension) => lower.endsWith(extension));
 }
 
-function buildIgnoreMatcher(patterns: string[]): IgnoreMatcher {
-  if (patterns.length === 0) return () => false;
+interface IgnorePattern {
+  glob: string;
+  /** The pattern ended in a slash, so it only excludes directories (`dist/`). */
+  directoriesOnly: boolean;
+}
 
-  // Gitignore-like split: patterns without a slash match base names, patterns
-  // with a slash match whole paths. (picomatch's `basename` option would apply
-  // to every pattern, breaking path globs, so two matchers are needed.)
-  const matchers: Array<(path: string) => boolean> = [];
-  const byBasename = patterns.filter((pattern) => !pattern.includes("/"));
-  const byPath = patterns.filter((pattern) => pattern.includes("/"));
-  if (byBasename.length > 0) matchers.push(picomatch(byBasename, { dot: true, basename: true }));
-  if (byPath.length > 0) matchers.push(picomatch(byPath, { dot: true }));
-  const match = (path: string): boolean => matchers.some((matcher) => matcher(path));
+function parseIgnorePattern(pattern: string): IgnorePattern {
+  const glob = pattern.replace(/\/+$/, "");
+  if (glob === "") {
+    // picomatch would reject it with an internal-sounding error; name the input instead.
+    throw new Error(`invalid ignore pattern: ${JSON.stringify(pattern)}`);
+  }
+  return { glob, directoriesOnly: glob !== pattern };
+}
+
+function buildIgnoreMatcher(patterns: string[]): IgnoreMatcher {
+  const parsed = patterns.map(parseIgnorePattern);
+  if (parsed.length === 0) return () => false;
+
+  const matchesAny = compileGlobs(parsed.filter((pattern) => !pattern.directoriesOnly).map((pattern) => pattern.glob));
+  const matchesDirectory = compileGlobs(
+    parsed.filter((pattern) => pattern.directoriesOnly).map((pattern) => pattern.glob),
+  );
+  const match = (path: string, isDirectory: boolean): boolean =>
+    matchesAny(path) || (isDirectory && matchesDirectory(path));
 
   // Anchored patterns like `src/legacy/**` are tried against the path as
   // spelled, relative to the scanned root, and relative to the working
   // directory, so they work regardless of where the scan was started from.
-  return (path, root) => {
-    if (match(toPosix(path))) return true;
-    return relativeMatches(root, path, match) || relativeMatches(process.cwd(), path, match);
+  return (path, root, isDirectory) => {
+    const matches = (candidate: string): boolean => match(candidate, isDirectory);
+    if (matches(toPosix(path))) return true;
+    return relativeMatches(root, path, matches) || relativeMatches(process.cwd(), path, matches);
   };
+}
+
+/**
+ * One predicate over gitignore-like globs: patterns without a slash match
+ * base names, patterns with a slash match whole paths. (picomatch's
+ * `basename` option would apply to every pattern, breaking path globs, so
+ * the two groups get separate matchers.)
+ */
+function compileGlobs(globs: string[]): (path: string) => boolean {
+  const matchers: Array<(path: string) => boolean> = [];
+  const byBasename = globs.filter((glob) => !glob.includes("/"));
+  const byPath = globs.filter((glob) => glob.includes("/"));
+  if (byBasename.length > 0) matchers.push(picomatch(byBasename, { dot: true, basename: true }));
+  if (byPath.length > 0) matchers.push(picomatch(byPath, { dot: true }));
+  return (path) => matchers.some((matcher) => matcher(path));
 }
 
 function relativeMatches(base: string, path: string, match: (path: string) => boolean): boolean {
@@ -231,9 +272,14 @@ function toPosix(path: string): string {
   return sep === "/" ? path : path.split(sep).join("/");
 }
 
+// TypeScript parses plain JavaScript with the JSX language variant, so `.js`
+// belongs here: read as TS instead, `<div>http://x</div>` in a React file
+// becomes a type assertion followed by a phantom `//x` comment.
+const JSX_EXTENSIONS = [".tsx", ".jsx", ".js", ".mjs", ".cjs"];
+
+/** True for files whose syntax admits JSX (`.tsx`, `.jsx` and plain JavaScript), case-insensitively. */
 export function isJsxFile(file: string): boolean {
-  const lower = file.toLowerCase();
-  return lower.endsWith(".tsx") || lower.endsWith(".jsx");
+  return hasExtension(file, JSX_EXTENSIONS);
 }
 
 export type FileEncoding = "utf8" | "utf16le" | "utf16be";
@@ -259,24 +305,27 @@ export interface FileText {
  * editors, GitHub annotations and the removal report.
  */
 export function decodeFileText(data: Buffer): FileText {
-  let encoding: FileEncoding = "utf8";
-  let bom = false;
-  let body = data;
-  if (data.length >= 2 && data[0] === 0xff && data[1] === 0xfe) {
-    encoding = "utf16le";
-    bom = true;
-    body = data.subarray(2);
-  } else if (data.length >= 2 && data[0] === 0xfe && data[1] === 0xff) {
-    encoding = "utf16be";
-    bom = true;
-    body = data.subarray(2);
-  } else if (data.length >= 3 && data[0] === 0xef && data[1] === 0xbb && data[2] === 0xbf) {
-    bom = true;
-    body = data.subarray(3);
-  }
+  const marked = detectByteOrderMark(data);
+  const encoding = marked ?? "utf8";
+  const bom = marked !== undefined;
+  const body = bom ? data.subarray(BYTE_ORDER_MARKS[encoding].length) : data;
   const text = encoding === "utf16be" ? decodeUtf16Be(body) : body.toString(encoding);
   const lossless = encodeFileText(text, { encoding, bom }).equals(data);
   return { text, encoding, bom, lossless };
+}
+
+const BYTE_ORDER_MARKS: Readonly<Record<FileEncoding, Buffer>> = {
+  utf8: Buffer.from([0xef, 0xbb, 0xbf]),
+  utf16le: Buffer.from([0xff, 0xfe]),
+  utf16be: Buffer.from([0xfe, 0xff]),
+};
+
+/** The encoding whose byte-order mark opens the data, if any. */
+function detectByteOrderMark(data: Buffer): FileEncoding | undefined {
+  return (Object.keys(BYTE_ORDER_MARKS) as FileEncoding[]).find((encoding) => {
+    const mark = BYTE_ORDER_MARKS[encoding];
+    return data.subarray(0, mark.length).equals(mark);
+  });
 }
 
 function decodeUtf16Be(body: Buffer): string {
@@ -294,19 +343,8 @@ function decodeUtf16Be(body: Buffer): string {
  */
 export function encodeFileText(text: string, target: { encoding: FileEncoding; bom: boolean }): Buffer {
   const body =
-    target.encoding === "utf16le"
-      ? Buffer.from(text, "utf16le")
-      : target.encoding === "utf16be"
-        ? Buffer.from(text, "utf16le").swap16()
-        : Buffer.from(text, "utf8");
-  if (!target.bom) return body;
-  const bom =
-    target.encoding === "utf16le"
-      ? Buffer.from([0xff, 0xfe])
-      : target.encoding === "utf16be"
-        ? Buffer.from([0xfe, 0xff])
-        : Buffer.from([0xef, 0xbb, 0xbf]);
-  return Buffer.concat([bom, body]);
+    target.encoding === "utf16be" ? Buffer.from(text, "utf16le").swap16() : Buffer.from(text, target.encoding);
+  return target.bom ? Buffer.concat([BYTE_ORDER_MARKS[target.encoding], body]) : body;
 }
 
 export async function readFileText(file: string): Promise<FileText> {
@@ -321,10 +359,11 @@ export async function readFileText(file: string): Promise<FileText> {
  */
 export async function writeFileAtomic(file: string, data: Buffer): Promise<void> {
   const target = await realpath(file);
-  const mode = (await stat(target)).mode;
+  // Permission bits only: stat()'s mode also carries the file-type bits.
+  const permissions = (await stat(target)).mode & 0o7777;
   const temp = join(dirname(target), `.${basename(target)}.${randomUUID()}.tmp`);
   try {
-    const handle = await open(temp, "wx", mode);
+    const handle = await open(temp, "wx", permissions);
     try {
       await handle.writeFile(data);
       await handle.sync();
@@ -332,7 +371,7 @@ export async function writeFileAtomic(file: string, data: Buffer): Promise<void>
       await handle.close();
     }
     // open()'s mode is filtered through the umask; restore the original exactly.
-    await chmod(temp, mode & 0o7777);
+    await chmod(temp, permissions);
     await rename(temp, target);
   } catch (error) {
     await rm(temp, { force: true }).catch(() => undefined);

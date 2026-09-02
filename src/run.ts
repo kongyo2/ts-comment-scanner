@@ -5,6 +5,7 @@ import { parseArgs, UsageError, type CliOptions, type DirectiveMode } from "./ar
 import {
   collectFiles,
   encodeFileText,
+  foldPathCase,
   isJsxFile,
   mapLimit,
   readFileText,
@@ -53,8 +54,11 @@ General:
   -v, --version        Print the version number
 
 Paths default to the current directory. Directories are scanned recursively,
-skipping node_modules and .git. Removal keeps directives and license headers
-unless explicitly requested, so builds and linters keep working.
+skipping node_modules and .git. Ignore globs without a slash match file names,
+and a trailing slash (dist/) restricts a glob to directories. JavaScript files
+(.js, .jsx, .mjs, .cjs) added with --ext are parsed with JSX enabled. Removal
+keeps directives and license headers unless explicitly requested, so builds
+and linters keep working.
 
 --diff narrows any scan or removal to files changed in git: a single revision
 compares the working tree against it (HEAD covers all uncommitted work,
@@ -142,29 +146,25 @@ async function collectTargets(options: CliOptions, collectOptions: CollectOption
   // alias may point at the changed file), and either spelling names the same
   // content. Broken links (a symlink re-pointed at nothing) only match by
   // their reported spelling.
+  // Paths are folded the way the platform compares them: git reports the case
+  // a file was tracked with, so on Windows `Foo.ts` must stay in scope when
+  // the scan found it as `foo.ts`.
   const changed = new Set<string>();
   for (const path of await changedFiles(options.diff, anchor)) {
-    changed.add(caseFold(path));
+    changed.add(foldPathCase(path));
     const real = tryRealpath(path);
-    if (real !== undefined) changed.add(caseFold(real));
+    if (real !== undefined) changed.add(foldPathCase(real));
   }
   // Realpath only the directory part first: spellings through symlinked
   // directories then compare equal while a tracked symlink still matches the
-  // path git reports it at; the fully dereferenced path is the fallback.
+  // path git reports it at; the fully dereferenced path is the fallback. A
+  // directory that vanished since the walk is compared as spelled.
   return files.filter((file) => {
-    if (changed.has(caseFold(join(realpathSync.native(dirname(file)), basename(file))))) return true;
+    const directory = tryRealpath(dirname(file)) ?? dirname(file);
+    if (changed.has(foldPathCase(join(directory, basename(file))))) return true;
     const real = tryRealpath(file);
-    return real !== undefined && changed.has(caseFold(real));
+    return real !== undefined && changed.has(foldPathCase(real));
   });
-}
-
-/**
- * Windows paths are case-insensitive, but git reports the case a file was
- * tracked with; folding both sides keeps `Foo.ts` in the --diff scope when
- * the scan found it as `foo.ts`.
- */
-function caseFold(path: string): string {
-  return process.platform === "win32" ? path.toLowerCase() : path;
 }
 
 /**

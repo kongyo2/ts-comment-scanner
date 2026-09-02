@@ -81,9 +81,12 @@ export function parseArgs(argv: string[]): CliOptions {
         rejectValue();
         format = "json";
         break;
-      case "--ignore":
-        ignore.push(readValue());
+      case "--ignore": {
+        const value = readValue();
+        if (value === "") throw new UsageError("option --ignore requires a glob pattern");
+        ignore.push(value);
         break;
+      }
       case "--ext": {
         const parsed = readValue()
           .split(",")

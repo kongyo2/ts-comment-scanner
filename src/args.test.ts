@@ -55,6 +55,11 @@ describe("parseArgs", () => {
     expect(parseArgs(["--ignore", "*.test.ts", "--ignore=dist/**"]).ignore).toEqual(["*.test.ts", "dist/**"]);
   });
 
+  it("rejects an empty ignore pattern before it reaches the glob matcher", () => {
+    expect(() => parseArgs(["--ignore", ""])).toThrow(/--ignore requires a glob pattern/);
+    expect(() => parseArgs(["--ignore="])).toThrow(UsageError);
+  });
+
   it("parses comma-separated extension lists", () => {
     expect(parseArgs(["--ext", ".ts, .mts"]).extensions).toEqual([".ts", ".mts"]);
     expect(parseArgs(["--ext=js", "--ext=jsx"]).extensions).toEqual(["js", "jsx"]);

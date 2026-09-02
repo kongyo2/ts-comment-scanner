@@ -1,3 +1,4 @@
+import { lastLine, splitLines } from "./lines.js";
 import type { CommentKind } from "./types.js";
 
 interface DirectiveRule {
@@ -307,7 +308,26 @@ const RULES: DirectiveRule[] = [
   { pattern: /^#(?:region|endregion)\b/ },
 ];
 
-const TRIPLE_SLASH = /^\/\/\/\s*<(reference|amd-dependency|amd-module)\b/;
+// Mirrors tsc's tripleSlashXMLCommentStartRegEx: the directive name (matched
+// case-insensitively) must be followed by whitespace and the tag has to close
+// with `/>` — `/// <reference>` and `/// <reference types="node">` are plain
+// comments to the compiler. The AMD directives additionally need their
+// mandatory quoted argument, or tsc drops the pragma altogether.
+const TRIPLE_SLASH = /^\/\/\/\s*<(reference|amd-dependency|amd-module)\s.*?\/>/i;
+const TRIPLE_SLASH_REQUIRED_ARGUMENT: Readonly<Record<string, RegExp>> = {
+  "amd-dependency": /\spath\s*=\s*(?:'[^']*'|"[^"]*")/i,
+  "amd-module": /\sname\s*=\s*(?:'[^']*'|"[^"]*")/i,
+};
+
+/** The canonical triple-slash directive name the line comment carries, if tsc would honour it. */
+function tripleSlashDirective(text: string): string | undefined {
+  const match = TRIPLE_SLASH.exec(text);
+  if (!match) return undefined;
+  const name = (match[1] as string).toLowerCase();
+  const requiredArgument = TRIPLE_SLASH_REQUIRED_ARGUMENT[name];
+  if (requiredArgument !== undefined && !requiredArgument.test(text)) return undefined;
+  return `triple-slash-${name}`;
+}
 
 /**
  * Where a comment sits in its file, for directives that are only honoured in
@@ -373,10 +393,12 @@ function isActiveAt(name: string, placement: DirectivePlacement): boolean {
 
 // Mirrors the TypeScript compiler's own comment-directive matching, verified
 // against tsc: the suppression directives are case-sensitive PREFIX matches
-// (`@ts-ignoreTODO` is active), while the file-wide check pragmas are
-// case-insensitive and must end at a word boundary (`@ts-nocheckfoo` is not).
+// (`@ts-ignoreTODO` is active), while the file-wide check pragmas go through
+// the case-insensitive pragma parser, whose name runs up to the next
+// whitespace or colon (`@ts-nocheck:reason` is active, `@ts-nocheckfoo` and
+// `@ts-nocheck-foo` are not).
 const TS_LINE_SUPPRESSION = /^\/\/\/?\s*@ts-(ignore|expect-error)/;
-const TS_LINE_CHECK_PRAGMA = /^\/\/\/?\s*@ts-(nocheck|check)\b/i;
+const TS_LINE_CHECK_PRAGMA = /^\/\/\/?\s*@ts-(nocheck|check)(?=[^\S\r\n]|:|$)/i;
 // Block comments: only the suppression directives, and only on the comment's
 // literal last line (`*/` included), even when that line is otherwise blank.
 // tsc trims the line and then allows one run of `/`/`*` characters before the
@@ -396,11 +418,8 @@ const TS_BLOCK_SUPPRESSION = /^\s*[/*]*\s*@ts-(ignore|expect-error)/;
 export function detectDirective(kind: CommentKind, text: string, placement?: DirectivePlacement): string | undefined {
   const at = placement ?? ANY_PLACEMENT;
   if (kind === "line") {
-    const tripleSlash = TRIPLE_SLASH.exec(text);
-    if (tripleSlash) {
-      const name = `triple-slash-${tripleSlash[1]}`;
-      if (isActiveAt(name, at)) return name;
-    }
+    const tripleSlash = tripleSlashDirective(text);
+    if (tripleSlash !== undefined && isActiveAt(tripleSlash, at)) return tripleSlash;
     const suppression = TS_LINE_SUPPRESSION.exec(text);
     if (suppression) {
       return `@ts-${suppression[1]}`;
@@ -479,10 +498,6 @@ export function isLegalComment(text: string): boolean {
   return /@(?:license|preserve|copyright)\b/i.test(text);
 }
 
-// Every ECMAScript line terminator, the way the scanner breaks lines: CRLF as
-// one break, plus lone LF / CR and the U+2028/U+2029 separators.
-const LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/;
-
 /**
  * Non-empty content lines of the comment, with comment markers stripped.
  * For line comments only the `//` marker itself is removed: extra slashes or
@@ -502,15 +517,9 @@ function contentLines(kind: CommentKind, text: string, keepStars: boolean): stri
         ? text.replace(/^\/\*/, "").replace(/\*\/\s*$/, "")
         : text.replace(/^\/\*+/, "").replace(/\*+\/\s*$/, "");
   const lines: string[] = [];
-  for (const line of inner.split(LINE_BREAK)) {
+  for (const line of splitLines(inner)) {
     const stripped = (kind === "block" && !keepStars ? line.replace(/^\s*\*+\s*/, "") : line).trim();
     if (stripped !== "") lines.push(stripped);
   }
   return lines;
-}
-
-/** Literal last line of the comment, closing marker included, exactly as tsc slices it. */
-function lastLine(text: string): string {
-  const lines = text.split(LINE_BREAK);
-  return lines[lines.length - 1] as string;
 }

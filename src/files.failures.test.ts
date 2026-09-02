@@ -11,6 +11,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
     ...actual,
+    readdir: vi.fn(actual.readdir),
     realpath: vi.fn(actual.realpath),
     rename: vi.fn(actual.rename),
     rm: vi.fn(actual.rm),
@@ -57,12 +58,26 @@ describe("collectFiles when the filesystem races", () => {
 
     await expect(collectFiles([file])).rejects.toThrow(/path not found/);
   });
+
+  it("skips a directory that vanishes between resolving and listing it", async () => {
+    await writeFile(join(dir, "a.ts"), "// a\n");
+    vi.mocked(readdir).mockRejectedValueOnce(fsError("ENOENT"));
+
+    expect(await collectFiles([dir])).toEqual([]);
+  });
 });
 
 describe("collectFiles when the filesystem fails", () => {
   it("propagates a permission error from resolving a walked directory", async () => {
     await writeFile(join(dir, "a.ts"), "// a\n");
     vi.mocked(realpath).mockRejectedValueOnce(fsError("EACCES"));
+
+    await expect(collectFiles([dir])).rejects.toThrow(/EACCES/);
+  });
+
+  it("propagates a permission error from listing a walked directory", async () => {
+    await writeFile(join(dir, "a.ts"), "// a\n");
+    vi.mocked(readdir).mockRejectedValueOnce(fsError("EACCES"));
 
     await expect(collectFiles([dir])).rejects.toThrow(/EACCES/);
   });
