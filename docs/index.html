@@ -6,7 +6,7 @@
     <title>ts-comment-scanner — TypeScript のコメントを検出・集計し、安全に削除する CLI</title>
     <meta
       name="description"
-      content="コーディングエージェントが焼き込む“経緯コメント”を TypeScript の AST で安全に掃除する CLI。78 種のディレクティブを保持し、--diff でエージェントが触ったファイルだけを対象にできます。/ A CLI that detects, reports and safely removes comments across a TypeScript project."
+      content="コーディングエージェントが焼き込む“経緯コメント”を TypeScript の AST で安全に掃除する CLI。82 種のディレクティブを保持し、--diff でエージェントが触ったファイルだけを対象にできます。/ A CLI that detects, reports and safely removes comments across a TypeScript project."
     />
     <link rel="canonical" href="https://kongyo2.github.io/ts-comment-scanner/" />
     <link rel="icon" type="image/svg+xml" href="./assets/logo.svg" />
@@ -65,12 +65,12 @@
           <p class="lede">
             <span class="ja">
               コーディングエージェントが焼き込む“開発の経緯”コメントを、TypeScript の AST で検出して安全に削除する
-              CLI。ビルドを支える 78 種類のディレクティブは残したまま、
+              CLI。ビルドを支える 82 種類のディレクティブは残したまま、
               <code>--diff</code> でエージェントが触ったファイルだけを掃除します。
             </span>
             <span class="en">
               A CLI that detects and safely removes the narration comments coding agents bake into TypeScript — via the
-              AST. It keeps all 78 directive kinds your build depends on, and
+              AST. It keeps all 82 directive kinds your build depends on, and
               <code>--diff</code> scopes the sweep to the files the agent just touched.
             </span>
           </p>
@@ -356,11 +356,11 @@
         </div>
         <p class="proof-line">
           <span class="ja"
-            >// この挙動は <strong>415 本のテスト</strong>と <strong>100% カバレッジ</strong>(statements / branches /
+            >// この挙動は <strong>517 本のテスト</strong>と <strong>100% カバレッジ</strong>(statements / branches /
             functions / lines)で固定しています</span
           >
           <span class="en"
-            >// pinned by <strong>415 tests</strong> at <strong>100% coverage</strong> — statements, branches, functions
+            >// pinned by <strong>517 tests</strong> at <strong>100% coverage</strong> — statements, branches, functions
             and lines</span
           >
         </p>
@@ -369,7 +369,7 @@
       <!-- ====================================================== directives -->
       <section id="directives">
         <p class="sec-eyebrow">
-          <span class="ja">// 78 のディレクティブ</span><span class="en">// the 78 directives</span>
+          <span class="ja">// 82 のディレクティブ</span><span class="en">// the 82 directives</span>
         </p>
         <h2>
           <span class="ja">消すとビルドが壊れるコメントを、知っている</span>
@@ -389,18 +389,19 @@
             <span class="chip">@ts-expect-error</span><span class="chip">@ts-ignore</span
             ><span class="chip">@ts-nocheck</span><span class="chip">/// &lt;reference&gt;</span
             ><span class="chip">eslint-disable-next-line</span><span class="chip">eslint-env</span
-            ><span class="chip">oxlint-disable</span><span class="chip">biome-ignore</span
-            ><span class="chip">deno-lint-ignore-file</span><span class="chip">rome-ignore</span
-            ><span class="chip">@flow</span><span class="chip">$FlowFixMe</span><span class="chip">flowlint</span
-            ><span class="chip">tslint:disable</span><span class="chip">jshint esversion:6</span
-            ><span class="chip">jscs:ignore</span><span class="chip">/*jslint*/</span
-            ><span class="chip">prettier-ignore</span><span class="chip">@noformat</span
-            ><span class="chip">oxfmt-ignore</span><span class="chip">dprint-ignore-file</span
-            ><span class="chip">organize-imports-ignore</span><span class="chip">istanbul ignore next</span
-            ><span class="chip">c8 ignore start</span><span class="chip">v8 ignore file</span
-            ><span class="chip">node:coverage disable</span><span class="chip">@vitest-environment</span
-            ><span class="chip">Stryker disable</span><span class="chip">type-coverage:ignore-line</span
-            ><span class="chip">ts-prune-ignore-next</span><span class="chip">@ts-strict-ignore</span>
+            ><span class="chip">oxlint-disable</span><span class="chip">stylelint-disable-next-line</span
+            ><span class="chip">biome-ignore</span><span class="chip">deno-lint-ignore-file</span
+            ><span class="chip">rome-ignore</span><span class="chip">@flow</span><span class="chip">$FlowFixMe</span
+            ><span class="chip">flowlint</span><span class="chip">tslint:disable</span
+            ><span class="chip">jshint esversion:6</span><span class="chip">jscs:ignore</span
+            ><span class="chip">/*jslint*/</span><span class="chip">prettier-ignore</span
+            ><span class="chip">@noformat</span><span class="chip">oxfmt-ignore</span
+            ><span class="chip">dprint-ignore-file</span><span class="chip">organize-imports-ignore</span
+            ><span class="chip">istanbul ignore next</span><span class="chip">c8 ignore start</span
+            ><span class="chip">v8 ignore file</span><span class="chip">node:coverage disable</span
+            ><span class="chip">@vitest-environment</span><span class="chip">Stryker disable</span
+            ><span class="chip">type-coverage:ignore-line</span><span class="chip">ts-prune-ignore-next</span
+            ><span class="chip">@lintignore</span><span class="chip">@ts-strict-ignore</span>
           </div>
           <div class="ticker-track reverse">
             <span class="chip">webpackChunkName:</span><span class="chip">turbopackIgnore:</span
@@ -410,16 +411,16 @@
             ><span class="chip">nx-ignore-next-line</span><span class="chip">@unocss-include</span
             ><span class="chip">@next-codemod-error</span><span class="chip">/* GraphQL */</span
             ><span class="chip">sourceMappingURL=</span><span class="chip">@jsxImportSource</span
-            ><span class="chip">NOSONAR</span><span class="chip">nosemgrep</span
-            ><span class="chip">lgtm[js/sql-injection]</span><span class="chip">codeql[js/unused-variable]</span
-            ><span class="chip">skipcq: JS-0002</span><span class="chip">deepcode ignore</span
-            ><span class="chip">no-dd-sa</span><span class="chip">gitleaks:allow</span
-            ><span class="chip">trufflehog:ignore</span><span class="chip">pragma: allowlist secret</span
-            ><span class="chip">cspell:disable</span><span class="chip">LocalWords:</span
-            ><span class="chip">codespell:ignore</span><span class="chip">noinspection</span
-            ><span class="chip">&lt;editor-fold&gt;</span><span class="chip">ReSharper disable</span
-            ><span class="chip">#region</span><span class="chip">@deno-types=</span
-            ><span class="chip">language=SQL</span>
+            ><span class="chip">/** @public */</span><span class="chip">@internal</span><span class="chip">NOSONAR</span
+            ><span class="chip">nosemgrep</span><span class="chip">lgtm[js/sql-injection]</span
+            ><span class="chip">codeql[js/unused-variable]</span><span class="chip">skipcq: JS-0002</span
+            ><span class="chip">deepcode ignore</span><span class="chip">no-dd-sa</span
+            ><span class="chip">gitleaks:allow</span><span class="chip">trufflehog:ignore</span
+            ><span class="chip">pragma: allowlist secret</span><span class="chip">cspell:disable</span
+            ><span class="chip">LocalWords:</span><span class="chip">codespell:ignore</span
+            ><span class="chip">noinspection</span><span class="chip">&lt;editor-fold&gt;</span
+            ><span class="chip">ReSharper disable</span><span class="chip">#region</span
+            ><span class="chip">@deno-types=</span><span class="chip">language=SQL</span>
           </div>
         </div>
         <ul class="parser-notes">
@@ -453,6 +454,17 @@
             >
             <span class="en"
               >Void if a space follows the marker — JSLint only honours the pragma glued to the comment opener.</span
+            >
+          </li>
+          <li>
+            <span class="rule-name">/** @public */</span>
+            <span class="ja"
+              >直後にトークンが続くときだけ判定 — knip は空白と //
+              コメントだけを飛び越えて次のノードにタグを付けるため、間にブロックコメントがあると効かない。</span
+            >
+            <span class="en"
+              >Only with a token right after it — knip walks over whitespace and // comments to tag the next node, so an
+              intervening block comment leaves the tag inert.</span
             >
           </li>
         </ul>

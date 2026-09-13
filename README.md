@@ -150,7 +150,7 @@ ts-comment-scanner --remove --remove-directives --remove-legal src
 - `@ts-expect-error` / `eslint-disable` などの指示子は、削除するとビルドやリントが壊れるため**デフォルトで保持**
 - `/*! ... */` や `@license` / `@preserve` / `@copyright`、`SPDX-License-Identifier:` / `SPDX-FileCopyrightText:` タグを含む法的コメントも**デフォルトで保持**
 - `@ts-expect-error` や `eslint-disable-next-line` など**次行を対象にする指示子の直下の行構造を保持**: 削除すると行が消えて指示子の適用先がずれる場合(コメントだけの行など)、その行のコメントは削除せずに保持
-- **位置依存ディレクティブを削除で有効化しない**: prettier の `@format`/`@prettier` pragma(ファイル最初のコメントでのみ有効)や Bun の `// @bun`(ファイル先頭でのみ有効)が、手前のコメント削除によって保持コメント内で新たに効き始める場合は、その手前のコメントも保持
+- **位置依存ディレクティブを削除で有効化しない**: prettier の `@format`/`@prettier` pragma(ファイル最初のコメントでのみ有効)や Bun の `// @bun`(ファイル先頭でのみ有効)が、手前のコメント削除によって保持コメント内で新たに効き始める場合は、その手前のコメントも保持。knip の `@public` などのタグ(コメント直後にトークンが続くときのみ、その宣言に付く)が、間に挟まるブロックコメントの削除によって効き始める場合は、そのブロックコメントも保持
 - ブロックコメント除去でトークンが結合してしまう位置には空白を挿入(`a/* x */b` → `a b`)
 - コメントだけの行は行ごと削除、行末コメントは手前の空白ごと削除
 - 削除後のソースを再スキャンし、残ったコメントが保持対象とディレクティブの意味ごと一致することを検証。想定外の結果になる場合はファイルを変更せずエラー報告
@@ -179,8 +179,9 @@ ts-comment-scanner --fail-on-comment --diff a1b2c3..d4e5f6 src
 
 各ディレクティブは実ツールのパーサー実装(正規表現・文字列比較)に合わせて判定されます。
 
-- **コンパイラ / 型**: `@ts-ignore` `@ts-expect-error` `@ts-nocheck` `@ts-check` / `/// <reference>` / `@ts-strict-ignore`・`@ts-strict`(typescript-strict-plugin) / `@deno-types=`・`@ts-types=`・`@ts-self-types=`(Deno)
-- **リンター**: `eslint-disable` 系・`eslint-env`・`/* global */`・`/* exported */` / `oxlint-disable` 系 / `biome-ignore` 系・`rome-ignore` / `deno-lint-ignore` 系 / `@flow`・`@noflow`・`$FlowFixMe` 系・`flowlint` 系(Flow) / `tslint:`・`jshint`・`jscs:`・`jslint`(レガシー)
+- **コンパイラ / 型**: `@ts-ignore` `@ts-expect-error` `@ts-nocheck` `@ts-check` / `/// <reference>` / `@internal`(`stripInternal`) / `@ts-strict-ignore`・`@ts-strict`(typescript-strict-plugin) / `@deno-types=`・`@ts-types=`・`@ts-self-types=`(Deno)
+- **リンター**: `eslint-disable` 系・`eslint-env`・`/* global */`・`/* exported */` / `oxlint-disable` 系 / `stylelint-disable` 系・`stylelint-enable`(stylelint) / `biome-ignore` 系・`rome-ignore` / `deno-lint-ignore` 系 / `@flow`・`@noflow`・`$FlowFixMe` 系・`flowlint` 系(Flow) / `tslint:`・`jshint`・`jscs:`・`jslint`(レガシー)
+- **未使用コード検出**: `@public`・`@beta`・`@alias`・`@internal`・`@lintignore`(knip の JSDoc/TSDoc タグ。ブロックコメントのみ、直後にトークンが続くときに有効)
 - **フォーマッタ**: `prettier-ignore`・`@format`/`@prettier`/`@noformat`/`@noprettier` pragma / `oxfmt-ignore` / `dprint-ignore`・`dprint-ignore-file` / `organize-imports-ignore` / `beautify ignore/preserve`(レガシー)
 - **カバレッジ / テスト**: `istanbul ignore`・`c8 ignore`・`v8 ignore`・`node:coverage` / `@jest-environment(-options)`・`@vitest-environment(-options)`・`@module-tag`(Vitest 4) / `Stryker disable/restore` / `type-coverage:ignore-line/-next-line` / `ts-prune-ignore-next`
 - **バンドラ / ランタイム**: `webpackChunkName:` などの webpack・turbopack マジックコメント / `@vite-ignore` / `#__PURE__`・`@__NO_SIDE_EFFECTS__`・`@__INLINE__`・`@__KEY__`・`@__MANGLE_PROP__`(terser/rollup 注釈) / `// @bun`(Bun) / `@refresh reset/skip/reload`(react-refresh / solid-refresh) / `million-ignore` / `nx-ignore-next-line`(Nx) / `@unocss-include/-ignore/-skip-start/-skip-end` / `@next-codemod-error/-ignore`(Next.js) / `/* GraphQL */`・`/* HTML */` タグコメント / `//# sourceMappingURL=`・`//# sourceURL=` / `@jsx` 系プラグマ

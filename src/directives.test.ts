@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { detectDirective, isLegalComment } from "./directives.js";
+import { activePositionalDirectives, detectDirective, isLegalComment, tokenFollows } from "./directives.js";
 
 describe("detectDirective", () => {
   it.each([
@@ -93,6 +93,38 @@ describe("detectDirective", () => {
   it("does not treat eslint config or global forms as directives in line comments", () => {
     expect(detectDirective("line", "// eslint is a nice tool")).toBeUndefined();
     expect(detectDirective("line", "// global state is bad")).toBeUndefined();
+  });
+
+  it.each([
+    ["/* stylelint-disable */", "stylelint-disable"],
+    ["/* stylelint-disable selector-max-id, declaration-no-important */", "stylelint-disable"],
+    ["/* stylelint-disable-line */", "stylelint-disable-line"],
+    ["/* stylelint-disable-next-line declaration-no-important */", "stylelint-disable-next-line"],
+    ["/* stylelint-enable */", "stylelint-enable"],
+    ["/* stylelint-disable -- Reason for disabling Stylelint. */", "stylelint-disable"],
+    ["/*stylelint-disable*/", "stylelint-disable"],
+    ["/* stylelint-disable\n   foo, bar */", "stylelint-disable"],
+    ["// stylelint-disable", "stylelint-disable"],
+    ["// stylelint-disable-next-line\tfoo", "stylelint-disable-next-line"],
+  ])("detects stylelint configuration comments: %s", (text, expected) => {
+    const kind = text.startsWith("//") ? "line" : "block";
+    expect(detectDirective(kind, text)).toBe(expected);
+  });
+
+  it("requires a stylelint command to be the exact first token, like stylelint's parser", () => {
+    // Stylelint splits the trimmed text at the first whitespace, strips
+    // `stylelint` from that token and compares the rest to its four commands.
+    expect(detectDirective("block", "/* stylelint-disable-lineee */")).toBeUndefined();
+    expect(detectDirective("block", "/* stylelint-disable-next */")).toBeUndefined();
+    expect(detectDirective("block", "/* stylelint-disable- */")).toBeUndefined();
+    expect(detectDirective("block", "/* stylelint-enable- */")).toBeUndefined();
+    expect(detectDirective("block", "/* stylelint-disable,foo */")).toBeUndefined();
+    expect(detectDirective("line", "// see stylelint-disable above")).toBeUndefined();
+    // A docblock's second star (or a starred continuation line) is text to
+    // stylelint, so it becomes the first token instead of the command.
+    expect(detectDirective("block", "/** stylelint-disable */")).toBeUndefined();
+    expect(detectDirective("block", "/*\n * stylelint-disable\n */")).toBeUndefined();
+    expect(detectDirective("block", "/*\n\n stylelint-disable */")).toBe("stylelint-disable");
   });
 
   it.each([
@@ -367,6 +399,44 @@ describe("detectDirective", () => {
     ["// ts-prune-ignore-next", "ts-prune-ignore-next"],
   ])("detects TS ecosystem ignores: %s", (text, expected) => {
     expect(detectDirective("line", text)).toBe(expected);
+  });
+
+  it.each([
+    ["/** @public */", "@public"],
+    ["/** @beta */", "@beta"],
+    ["/** @alias */", "@alias"],
+    ["/** @lintignore */", "@lintignore"],
+    ["/** @internal */", "@internal"],
+    ["/* @public */", "@public"],
+    ["/**\n * Does things.\n * @public\n */", "@public"],
+    ["/**@public*/", "@public"],
+  ])("detects knip's JSDoc tags: %s", (text, expected) => {
+    expect(detectDirective("block", text)).toBe(expected);
+  });
+
+  it("bounds knip's tags the way its tag scanner does", () => {
+    // A tag is `@` plus the run of ASCII letters, digits and underscores
+    // behind it, compared case-sensitively as a whole; any other character
+    // ends the run, and the `@` may sit anywhere in the text.
+    expect(detectDirective("block", "/** @publicApi */")).toBeUndefined();
+    expect(detectDirective("block", "/** @public_ */")).toBeUndefined();
+    expect(detectDirective("block", "/** @public2 */")).toBeUndefined();
+    expect(detectDirective("block", "/** @Public */")).toBeUndefined();
+    expect(detectDirective("block", "/** @public-api */")).toBe("@public");
+    expect(detectDirective("block", "/** mail me@public.example */")).toBe("@public");
+    expect(detectDirective("block", "/* @public*foo */")).toBe("@public");
+    // knip only reads block comments.
+    expect(detectDirective("line", "// @public")).toBeUndefined();
+    expect(detectDirective("line", "// @lintignore")).toBeUndefined();
+  });
+
+  it("detects @internal wherever tsc's stripInternal would find the substring", () => {
+    // tsc checks every leading comment of a declaration, line comments
+    // included, for the bare substring `@internal`.
+    expect(detectDirective("line", "// @internal")).toBe("@internal");
+    expect(detectDirective("block", "/* @internals */")).toBe("@internal");
+    expect(detectDirective("line", "// see the @internal docs")).toBe("@internal");
+    expect(detectDirective("line", "// internal")).toBeUndefined();
   });
 
   it("detects Stryker directives with their exact spacing and mandatory mutator list", () => {
@@ -654,5 +724,60 @@ describe("detectDirective placement", () => {
     expect(detectDirective("line", "// @bun", header)).toBeUndefined();
     expect(detectDirective("block", "/** @format */", { ...header, firstComment: true })).toBe("@format");
     expect(detectDirective("line", "// @bun", { ...header, firstComment: true, fileStart: true })).toBe("@bun");
+  });
+
+  it("requires a following token for knip's tags, but not for tsc's reading of @internal", () => {
+    expect(detectDirective("block", "/** @public */", { ...midFile, tokenFollows: false })).toBeUndefined();
+    expect(detectDirective("block", "/** @public */", { ...midFile, tokenFollows: true })).toBe("@public");
+    // An omitted bit counts as open, so older placements keep working.
+    expect(detectDirective("block", "/** @public */", midFile)).toBe("@public");
+    expect(detectDirective("block", "/** @internal */", { ...midFile, tokenFollows: false })).toBe("@internal");
+  });
+});
+
+describe("activePositionalDirectives", () => {
+  it("lists every live position-dependent directive with its gate, masked ones included", () => {
+    const placement = { header: false, firstComment: true, fileStart: false, tokenFollows: true };
+
+    expect(activePositionalDirectives("block", "/** eslint no-console: 0\n @format @public */", placement)).toEqual([
+      { name: "@format", gate: "firstComment" },
+      { name: "@public", gate: "tokenFollows" },
+    ]);
+  });
+
+  it("reports knip's gated reading of @internal underneath tsc's ungated one", () => {
+    const placement = { header: false, firstComment: false, fileStart: false };
+
+    expect(activePositionalDirectives("block", "/** @internal */", { ...placement, tokenFollows: true })).toEqual([
+      { name: "@internal", gate: "tokenFollows" },
+    ]);
+    expect(activePositionalDirectives("block", "/** @internal */", { ...placement, tokenFollows: false })).toEqual([]);
+  });
+});
+
+describe("tokenFollows", () => {
+  const after = (source: string): boolean => tokenFollows(source, source.indexOf("*/") + 2);
+
+  it("walks over whitespace and line comments to the next token, like knip", () => {
+    expect(after("/**/ x")).toBe(true);
+    expect(after("/**/ \t\r\n x")).toBe(true);
+    expect(after("/**/ // a\n // b\n x")).toBe(true);
+  });
+
+  it("stops at a block comment or the end of the file", () => {
+    expect(after("/**/ /* b */ x")).toBe(false);
+    expect(after("/**/")).toBe(false);
+    expect(after("/**/   ")).toBe(false);
+    expect(after("/**/ // a")).toBe(false);
+  });
+
+  it("skips a line comment only up to a line feed, as knip does", () => {
+    expect(after("/**/ // a\r x")).toBe(false);
+    expect(after("/**/ // a\u2028x")).toBe(false);
+  });
+
+  it("treats whitespace knip does not skip as no token, since no node starts there", () => {
+    expect(after("/**/\fx")).toBe(false);
+    expect(after("/**/\u00a0x")).toBe(false);
   });
 });

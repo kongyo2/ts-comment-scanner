@@ -286,6 +286,20 @@ describe("scanComments directive placement", () => {
     expect(comments[0]?.directive).toBe("@format");
   });
 
+  it("treats knip's tags as directives only when a token follows the comment", () => {
+    // knip attaches the tags to the node that starts right after the
+    // comment, walking over whitespace and `//` comments only.
+    expect(scanComments("/** @public */\nexport const a = 1;\n")[0]?.directive).toBe("@public");
+    expect(scanComments("/** @public */\n// note\nexport const a = 1;\n")[0]?.directive).toBe("@public");
+    expect(scanComments("const a = 1; /** @public */\nexport const b = 2;\n")[0]?.directive).toBe("@public");
+    expect(scanComments("/** @public */\n/* note */\nexport const a = 1;\n")[0]?.directive).toBeUndefined();
+    expect(scanComments("/** @public */\n")[0]?.directive).toBeUndefined();
+  });
+
+  it("keeps tsc's reading of @internal live whatever follows the comment", () => {
+    expect(scanComments("/** @internal */\n/* note */\nexport const a = 1;\n")[0]?.directive).toBe("@internal");
+  });
+
   it("treats // @bun as a directive only at the very start of the file", () => {
     const atStart = scanComments("// @bun\nconst x = 1;\n");
     const afterComment = scanComments("// lead\n// @bun\nconst x = 1;\n");

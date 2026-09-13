@@ -1,4 +1,10 @@
-import { activePositionalDirectives, isLegalComment, type DirectivePlacement } from "./directives.js";
+import {
+  activePositionalDirectives,
+  isLegalComment,
+  tokenFollows,
+  type DirectivePlacement,
+  type PositionalDirective,
+} from "./directives.js";
 import { LINE_BREAK, LINE_TERMINATOR, isBlank, lineStartOffsets } from "./lines.js";
 import { scanComments } from "./scanner.js";
 import type { Comment } from "./types.js";
@@ -21,7 +27,8 @@ export interface RemoveResult {
    * Comments kept because they are protected: directives, license headers,
    * comments whose removal would shift code under a next-line directive, and
    * comments whose removal would move a position-dependent directive
-   * (prettier's first-comment pragma, Bun's file-start marker) into effect.
+   * (prettier's first-comment pragma, Bun's file-start marker, knip's tags
+   * before a token) into effect.
    */
   kept: Comment[];
   /** Comments excluded from removal by the `shouldRemove` predicate. */
@@ -36,11 +43,12 @@ export interface RemoveResult {
  * - AST-based ranges: strings, template literals and regexes are never affected.
  * - Directives (`@ts-expect-error`, `eslint-disable`, ...) and license headers are
  *   kept by default, since deleting them changes build/lint behaviour.
- * - Surviving comments keep their directive semantics: when deleting a leading
- *   comment would newly activate a position-dependent directive in a kept
- *   comment (prettier's `@format` docblock pragma counts only as the file's
- *   first comment, Bun's `// @bun` only at the very start), the leading
- *   comment is kept instead.
+ * - Surviving comments keep their directive semantics: when deleting a
+ *   neighbouring comment would newly activate a position-dependent directive
+ *   in a kept comment (prettier's `@format` docblock pragma counts only as
+ *   the file's first comment, Bun's `// @bun` only at the very start, knip's
+ *   `@public` and friends only with a token right after the comment), the
+ *   neighbouring comment is kept instead.
  * - A space is inserted where removing a block comment would merge two tokens,
  *   and a line break is kept where the comment acted as one (ASI stays intact).
  * - A leading byte-order mark is preserved. Reported positions index into the
@@ -74,26 +82,34 @@ export function removeComments(source: string, options: RemoveOptions = {}): Rem
     }
 
     const code = spliceKeepingBom(source, removed);
-    const survivor = firstChangedSurvivor(source, code, scanComments(code, { jsx }), kept, skipped);
-    if (survivor === undefined) {
+    const change = firstChangedSurvivor(source, code, scanComments(code, { jsx }), kept, skipped);
+    if (change === undefined) {
       return { code, removed, kept, skipped, changed: true };
     }
 
     // A surviving comment changed meaning: with everything before it deleted
-    // it became the file's first comment (or its very first bytes), turning a
+    // it became the file's first comment (or its very first bytes), or with
+    // the block comment after it deleted a token now follows it — turning a
     // previously inert positional directive live. Re-protect the removal
-    // candidate closest before it and try again: that comment then keeps
+    // candidate that held it inert and try again: that comment then keeps
     // holding the survivor away from the activating position, exactly as the
     // input did. (Looping, because the re-protected comment can itself be a
     // next-line directive that shields further lines.)
-    const blocker = closestRemovalBefore(removed, survivor);
-    if (blocker === undefined) {
+    const blockers = blockersFor(change, removed);
+    if (blockers.length === 0) {
       throw unexpectedResult();
     }
-    removed = removed.filter((comment) => comment !== blocker);
-    kept.push(blocker);
+    removed = removed.filter((comment) => !blockers.includes(comment));
+    kept.push(...blockers);
     kept.sort((a, b) => a.start - b.start);
   }
+}
+
+interface SurvivorChange {
+  /** The surviving comment whose directive semantics changed. */
+  comment: Comment;
+  /** The position-dependent directives the removal turned live in it. */
+  activated: PositionalDirective[];
 }
 
 function unexpectedResult(): Error {
@@ -104,12 +120,14 @@ function unexpectedResult(): Error {
  * Compares the spliced output's comments against the comments meant to
  * survive, in document order (removal never reorders them). Throws when the
  * texts themselves differ (the output would be corrupted) and returns the
- * first surviving comment whose directive semantics changed, or undefined
- * when the output is exactly as expected. Besides the canonical directive
- * name, the position-dependent pragmas are compared on their own: a comment
- * can carry an inert `@format` underneath the directive an earlier rule
- * already named (an eslint config block, say), and that pragma going live
- * must not hide behind the unchanged name.
+ * first surviving comment whose directive semantics changed — with the
+ * position-dependent directives that went live in it — or undefined when the
+ * output is exactly as expected. Besides the canonical directive name, the
+ * position-dependent pragmas are compared on their own: a comment can carry
+ * an inert `@format` underneath the directive an earlier rule already named
+ * (an eslint config block, say), and that pragma going live must not hide
+ * behind the unchanged name. Removing comments can only open a gate, never
+ * close one, so the activations are all there is to compare.
  */
 function firstChangedSurvivor(
   source: string,
@@ -117,7 +135,7 @@ function firstChangedSurvivor(
   actual: Comment[],
   kept: Comment[],
   skipped: Comment[],
-): Comment | undefined {
+): SurvivorChange | undefined {
   const expected = [...kept, ...skipped].sort((a, b) => a.start - b.start);
   if (actual.length !== expected.length) {
     throw unexpectedResult();
@@ -127,10 +145,12 @@ function firstChangedSurvivor(
     if (survivor.text !== comment.text) {
       throw unexpectedResult();
     }
-    if (survivor.directive !== comment.directive) return comment;
     const before = activePositionalDirectives(comment.kind, comment.text, positionalPlacement(source, comment));
     const after = activePositionalDirectives(survivor.kind, survivor.text, positionalPlacement(code, survivor));
-    if (before.join("\n") !== after.join("\n")) return comment;
+    const activated = after.filter(
+      (directive) => !before.some((known) => known.gate === directive.gate && known.name === directive.name),
+    );
+    if (survivor.directive !== comment.directive || activated.length > 0) return { comment, activated };
   }
   return undefined;
 }
@@ -139,10 +159,11 @@ function firstChangedSurvivor(
  * The placement bits the position-dependent directives care about, derived
  * without a parse: the comment is the file's first comment when nothing but
  * whitespace (or a shebang) precedes it — any earlier comment's text keeps
- * the slice non-blank — and it sits at the file start when it begins at
- * offset zero. Header status needs the token structure, but removing
- * comments never moves a comment across the first token, so the positional
- * check does not consult it.
+ * the slice non-blank — it sits at the file start when it begins at offset
+ * zero, and a token follows it when knip's walk from its end lands on code.
+ * Header status needs the token structure, but removing comments never
+ * moves a comment across the first token, so the positional check does not
+ * consult it.
  */
 function positionalPlacement(text: string, comment: Comment): DirectivePlacement {
   const shebangLength = /^#!.*/.exec(text)?.[0].length ?? 0;
@@ -150,7 +171,32 @@ function positionalPlacement(text: string, comment: Comment): DirectivePlacement
     header: false,
     firstComment: isBlank(text.slice(shebangLength, comment.start)),
     fileStart: comment.start === 0,
+    tokenFollows: tokenFollows(text, comment.end),
   };
+}
+
+/**
+ * The removal candidates to re-protect so that every directive the removal
+ * turned live in the survivor stays inert. The first-comment and file-start
+ * gates opened because a comment before the survivor went: re-protecting
+ * the closest one restores the barrier. knip's reach opened because the
+ * block comment it used to stop at went: the first block candidate after
+ * the survivor is that comment, since a kept or skipped block comment
+ * closer to it would still stop the reach. Only when no block candidate
+ * follows can a `//` candidate have been the barrier — knip skips line
+ * comments up to a `\n`, so on a file with other line terminators the line
+ * comment itself held the reach off the code.
+ */
+function blockersFor(change: SurvivorChange, removals: readonly Comment[]): Comment[] {
+  const blockers = new Set<Comment>();
+  for (const { gate } of change.activated) {
+    const blocker =
+      gate === "tokenFollows"
+        ? reachBlockerAfter(removals, change.comment)
+        : closestRemovalBefore(removals, change.comment);
+    if (blocker !== undefined) blockers.add(blocker);
+  }
+  return [...blockers];
 }
 
 /** The removal candidate that starts closest before the comment, if any. */
@@ -160,6 +206,12 @@ function closestRemovalBefore(removals: readonly Comment[], comment: Comment): C
     if (removal.start < comment.start) closest = removal;
   }
   return closest;
+}
+
+/** The first block-comment removal candidate after the comment, else the closest candidate of any kind after it. */
+function reachBlockerAfter(removals: readonly Comment[], comment: Comment): Comment | undefined {
+  const after = removals.filter((removal) => removal.start > comment.start);
+  return after.find((removal) => removal.kind === "block") ?? after[0];
 }
 
 /**

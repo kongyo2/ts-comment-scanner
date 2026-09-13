@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { detectDirective, type DirectivePlacement } from "./directives.js";
+import { detectDirective, tokenFollows, type DirectivePlacement } from "./directives.js";
 import type { Comment, CommentKind } from "./types.js";
 
 export interface ScanOptions {
@@ -71,16 +71,17 @@ export function scanComments(source: string, options: ScanOptions = {}): Comment
   const sorted = ranges.filter((range) => !insideJsxText(range.pos)).sort((a, b) => a.pos - b.pos);
 
   // Directive rules with positional requirements (header pragmas, prettier's
-  // first-comment docblock, Bun's file-start marker) get the comment's actual
-  // placement; a shebang does not count as content before the first comment,
-  // matching jest-docblock.
+  // first-comment docblock, Bun's file-start marker, knip's tags before a
+  // token) get the comment's actual placement; a shebang does not count as
+  // content before the first comment, matching jest-docblock.
   const firstTokenStart = sourceFile.getStart(sourceFile);
   const shebangEnd = ts.getShebang(source)?.length ?? 0;
   const firstCommentPos = sorted.length > 0 ? (sorted[0] as ts.CommentRange).pos : -1;
-  const placementOf = (pos: number): DirectivePlacement => ({
-    header: pos < firstTokenStart,
-    firstComment: pos === firstCommentPos && /^\s*$/.test(source.slice(shebangEnd, pos)),
-    fileStart: pos === 0,
+  const placementOf = (range: ts.CommentRange): DirectivePlacement => ({
+    header: range.pos < firstTokenStart,
+    firstComment: range.pos === firstCommentPos && /^\s*$/.test(source.slice(shebangEnd, range.pos)),
+    fileStart: range.pos === 0,
+    tokenFollows: tokenFollows(source, range.end),
   });
 
   return sorted.map((range) => {
@@ -88,7 +89,7 @@ export function scanComments(source: string, options: ScanOptions = {}): Comment
     const text = source.slice(range.pos, range.end);
     const startPosition = sourceFile.getLineAndCharacterOfPosition(range.pos);
     const endPosition = sourceFile.getLineAndCharacterOfPosition(range.end);
-    const directive = detectDirective(kind, text, placementOf(range.pos));
+    const directive = detectDirective(kind, text, placementOf(range));
     return {
       kind,
       text,

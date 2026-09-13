@@ -1,4 +1,4 @@
-import { lastLine, splitLines } from "./lines.js";
+import { isBlank, lastLine, splitLines } from "./lines.js";
 import type { CommentKind } from "./types.js";
 
 interface DirectiveRule {
@@ -35,7 +35,22 @@ interface DirectiveRule {
    * trimmed body, so `/** prettier-ignore *​/` is NOT a suppression to them).
    */
   keepStars?: boolean;
+  /**
+   * The placement the directive is only honoured in, for tools that read
+   * the comment relative to its neighbours: prettier's pragma mode wants
+   * the file's first comment, Bun the very first bytes, knip a token right
+   * after the comment. Elsewhere the rule's match is inert.
+   */
+  positional?: PositionalGate;
 }
+
+/**
+ * The placement bits a directive can hinge on besides the file header. They
+ * are the ones a comment removal can flip: deleting the comments before a
+ * comment can make it the file's first comment or its first bytes, deleting
+ * a block comment after it can make a token follow it.
+ */
+export type PositionalGate = "firstComment" | "fileStart" | "tokenFollows";
 
 const RULES: DirectiveRule[] = [
   // ESLint
@@ -66,6 +81,14 @@ const RULES: DirectiveRule[] = [
   { pattern: /^\/\/jslint-(ignore-line|quiet)$/, rawText: true, name: (match) => `jslint-${match[1]}` },
   // oxlint
   { pattern: /^oxlint-(?:disable|enable)(?:-next-line|-line)?\b/ },
+  // Stylelint configuration comments (CSS-in-JS sources go through the same
+  // PostCSS pipeline). Stylelint takes the FIRST whitespace-delimited token
+  // of the trimmed comment text, strips `stylelint` from it and requires the
+  // rest to be exactly one of its four commands: a longer token
+  // (`stylelint-disable-lineee`, `stylelint-disable,`) or a command later in
+  // the text is inert, and a JSDoc `*` is text too, so it defeats the
+  // command (keepStars). Rule names and a `-- reason` may follow.
+  { pattern: /^stylelint-(?:disable(?:-line|-next-line)?|enable)(?=\s|$)/, keepStars: true },
   // Biome
   { pattern: /^biome-ignore(?:-all|-start|-end)?\b/ },
   // Rome (Biome's predecessor). Case-insensitive keyword with `-` or `_`,
@@ -104,10 +127,12 @@ const RULES: DirectiveRule[] = [
     anyLine: true,
   },
   // Prettier pragma mode (--require-pragma / --check-ignore-pragma). Prettier
-  // reads them via jest-docblock: only the file's first block comment counts
-  // and the pragma has to open a line. The lookahead keeps distinct keys like
-  // `@prettier-plugin` ordinary, matching jest-docblock's `@(\S+)` parsing.
-  { pattern: /^@(?:no)?(?:format|prettier)(?=\s|$)/, blockOnly: true, anyLine: true },
+  // reads them via jest-docblock, which only ever extracts the file's FIRST
+  // comment (a shebang may precede it) — a docblock behind any other comment
+  // is ignored; verified against prettier 3.8. The pragma has to open a
+  // line, and the lookahead keeps distinct keys like `@prettier-plugin`
+  // ordinary, matching jest-docblock's `@(\S+)` parsing.
+  { pattern: /^@(?:no)?(?:format|prettier)(?=\s|$)/, blockOnly: true, anyLine: true, positional: "firstComment" },
   // prettier-plugin-organize-imports: a literal whole-file substring check,
   // `//` and single space included, so it matches the raw comment text.
   { pattern: /\/\/ organize-imports-ignore/, rawText: true, name: "organize-imports-ignore" },
@@ -152,6 +177,28 @@ const RULES: DirectiveRule[] = [
   },
   // ts-prune: substring of the closest leading comment above an export.
   { pattern: /ts-prune-ignore-next/, name: "ts-prune-ignore-next", anyLine: true },
+  // TypeScript's stripInternal: a declaration is dropped from the .d.ts
+  // output when any of its leading comments — line or block — contains the
+  // substring `@internal` (tsc's hasInternalAnnotation), so `@internals` and
+  // `see @internal` count too. knip reads the same tag (production mode)
+  // with its tag scanner below.
+  { pattern: /@internal/, rawText: true, name: "@internal" },
+  // knip's JSDoc/TSDoc tags. Its tag lookup takes every block comment (`/*`
+  // as well as `/**`), collects each `@` plus the run of ASCII letters,
+  // digits and underscores behind it — wherever it sits in the text, so
+  // `me@public.example` carries `@public` while `@publicApi` does not — and
+  // compares them case-sensitively as whole tags. `@public`, `@beta` and
+  // `@alias` exempt an export unconditionally, `@internal` in production
+  // mode, and `@lintignore` is the documented tag for a `tags` exclusion.
+  // The tags reach only the token that starts right after the comment
+  // (whitespace and `//` comments aside), hence the placement gate.
+  {
+    pattern: /@(public|internal|beta|alias|lintignore)(?![A-Za-z0-9_])/,
+    name: (match) => `@${match[1]}`,
+    blockOnly: true,
+    anyLine: true,
+    positional: "tokenFollows",
+  },
   // typescript-strict-plugin: token-equality scan over the whole file (the
   // CLI splits comment lines on spaces, the IDE plugin uses a TODO scan).
   {
@@ -208,8 +255,9 @@ const RULES: DirectiveRule[] = [
   // @next-codemod-error comment is attached to the call.
   { pattern: /@next-codemod-(error|ignore)/, name: (match) => `@next-codemod-${match[1]}`, anyLine: true },
   // Bun: the runtime treats a file starting with the literal bytes `// @bun`
-  // (optionally followed by flags like `@bytecode`) as already transpiled.
-  { pattern: /^\/\/ @bun/, rawText: true, lineOnly: true, name: "@bun" },
+  // (optionally followed by flags like `@bytecode`) as already transpiled;
+  // after a shebang or any other leading content the marker is inert.
+  { pattern: /^\/\/ @bun/, rawText: true, lineOnly: true, name: "@bun", positional: "fileStart" },
   // React Fast Refresh / solid-refresh. react-refresh looks for the
   // substring `@refresh reset` in any comment; solid-refresh requires its
   // pragma to be the entire comment body.
@@ -341,9 +389,15 @@ export interface DirectivePlacement {
   firstComment: boolean;
   /** The comment starts at the very first character of the file. */
   fileStart: boolean;
+  /**
+   * A token follows the comment directly: only whitespace and `//` comments
+   * separate it from the next code, not another block comment or the end of
+   * the file (see {@link tokenFollows}). Omitted, it counts as true.
+   */
+  tokenFollows?: boolean;
 }
 
-const ANY_PLACEMENT: DirectivePlacement = { header: true, firstComment: true, fileStart: true };
+const ANY_PLACEMENT: DirectivePlacement = { header: true, firstComment: true, fileStart: true, tokenFollows: true };
 
 // File-wide pragmas (check pragmas, triple-slash directives, Flow/JSLint
 // header pragmas, Deno's *-ignore-file and @ts-self-types forms) only count
@@ -358,7 +412,9 @@ const ANY_PLACEMENT: DirectivePlacement = { header: true, firstComment: true, fi
 // the @jest- spellings) with a regex over the whole file, and neither are
 // @ts-strict pragmas (typescript-strict-plugin scans every line). @jsx
 // pragmas stay ungated too: tsc only reads leading ones, but Babel's JSX
-// transform scans every comment in the file.
+// transform scans every comment in the file. The header gate is keyed by
+// name because the check pragmas and triple-slash directives are matched
+// outside RULES; the other placement gates are declared on the rules.
 const HEADER_ONLY_DIRECTIVES = new Set([
   "@ts-nocheck",
   "@ts-check",
@@ -369,18 +425,7 @@ const HEADER_ONLY_DIRECTIVES = new Set([
   "property",
 ]);
 
-// Prettier's pragma mode reads the pragma through jest-docblock, which only
-// ever extracts the file's FIRST comment (a shebang may precede it) — a
-// docblock behind any other comment is ignored. Verified against prettier 3.8.
-const FIRST_COMMENT_ONLY_DIRECTIVES = new Set(["@format", "@noformat", "@prettier", "@noprettier"]);
-
-// Bun treats a file as pre-transpiled only when it literally STARTS with
-// `// @bun`; after a shebang or any other leading content the marker is inert.
-const FILE_START_ONLY_DIRECTIVES = new Set(["@bun"]);
-
-function isActiveAt(name: string, placement: DirectivePlacement): boolean {
-  if (FILE_START_ONLY_DIRECTIVES.has(name)) return placement.fileStart;
-  if (FIRST_COMMENT_ONLY_DIRECTIVES.has(name)) return placement.firstComment;
+function isActiveInHeaderTerms(name: string, placement: DirectivePlacement): boolean {
   if (
     HEADER_ONLY_DIRECTIVES.has(name) ||
     (name.startsWith("deno-") && name.endsWith("-ignore-file")) ||
@@ -389,6 +434,38 @@ function isActiveAt(name: string, placement: DirectivePlacement): boolean {
     return placement.header;
   }
   return true;
+}
+
+/** Whether a rule's positional gate (if any) is open at the placement; an omitted bit counts as open. */
+function isActiveAtPosition(gate: PositionalGate | undefined, placement: DirectivePlacement): boolean {
+  return gate === undefined || placement[gate] !== false;
+}
+
+/**
+ * Whether a token follows the comment that ends at `end`, walked the way
+ * knip attaches JSDoc tags to the node after a comment: spaces, tabs and
+ * line breaks are skipped, so is every `//` comment (up to its `\n`), and
+ * the walk stops at the first other character. The tags belong to the node
+ * starting exactly there, so landing on a `/*` opener, on whitespace knip
+ * does not skip (a form feed, U+2028) or past the end of the file means no
+ * token follows and the tags stay inert.
+ */
+export function tokenFollows(source: string, end: number): boolean {
+  let index = end;
+  for (;;) {
+    while (index < source.length && isReachBlank(source[index] as string)) index += 1;
+    if (!source.startsWith("//", index)) {
+      return index < source.length && !isBlank(source[index] as string) && !source.startsWith("/*", index);
+    }
+    const lineEnd = source.indexOf("\n", index + 2);
+    if (lineEnd === -1) return false;
+    index = lineEnd + 1;
+  }
+}
+
+// knip's reach skips exactly these four characters.
+function isReachBlank(char: string): boolean {
+  return char === " " || char === "\t" || char === "\n" || char === "\r";
 }
 
 // Mirrors the TypeScript compiler's own comment-directive matching, verified
@@ -411,15 +488,16 @@ const TS_BLOCK_SUPPRESSION = /^\s*[/*]*\s*@ts-(ignore|expect-error)/;
  *
  * When a placement is given, directives that the corresponding tool only
  * honours in certain positions (header pragmas, prettier's docblock pragma,
- * `// @bun`) are skipped elsewhere — and the remaining rules still run, so a
- * live directive later in the same comment (`// deno-lint-ignore-file
- * nosemgrep` in mid-file) is not masked by a positionally dead one.
+ * `// @bun`, knip's tags before a token) are skipped elsewhere — and the
+ * remaining rules still run, so a live directive later in the same comment
+ * (`// deno-lint-ignore-file nosemgrep` in mid-file) is not masked by a
+ * positionally dead one.
  */
 export function detectDirective(kind: CommentKind, text: string, placement?: DirectivePlacement): string | undefined {
   const at = placement ?? ANY_PLACEMENT;
   if (kind === "line") {
     const tripleSlash = tripleSlashDirective(text);
-    if (tripleSlash !== undefined && isActiveAt(tripleSlash, at)) return tripleSlash;
+    if (tripleSlash !== undefined && isActiveInHeaderTerms(tripleSlash, at)) return tripleSlash;
     const suppression = TS_LINE_SUPPRESSION.exec(text);
     if (suppression) {
       return `@ts-${suppression[1]}`;
@@ -427,7 +505,7 @@ export function detectDirective(kind: CommentKind, text: string, placement?: Dir
     const checkPragma = TS_LINE_CHECK_PRAGMA.exec(text);
     if (checkPragma) {
       const name = `@ts-${checkPragma[1]?.toLowerCase()}`;
-      if (isActiveAt(name, at)) return name;
+      if (isActiveInHeaderTerms(name, at)) return name;
     }
   } else {
     const suppression = TS_BLOCK_SUPPRESSION.exec(lastLine(text));
@@ -436,14 +514,19 @@ export function detectDirective(kind: CommentKind, text: string, placement?: Dir
     }
   }
 
-  for (const name of ruleMatches(kind, text)) {
-    if (isActiveAt(name, at)) return name;
+  for (const { name, positional } of ruleMatches(kind, text)) {
+    if (isActiveInHeaderTerms(name, at) && isActiveAtPosition(positional, at)) return name;
   }
   return undefined;
 }
 
-/** Directive names of every rule the comment matches, in rule order. */
-function* ruleMatches(kind: CommentKind, text: string): Generator<string> {
+interface RuleMatch {
+  name: string;
+  positional: PositionalGate | undefined;
+}
+
+/** The directive name and placement gate of every rule the comment matches, in rule order. */
+function* ruleMatches(kind: CommentKind, text: string): Generator<RuleMatch> {
   const lines = contentLines(kind, text, false);
   const literalLines = kind === "block" ? contentLines(kind, text, true) : lines;
   for (const rule of RULES) {
@@ -462,28 +545,42 @@ function* ruleMatches(kind: CommentKind, text: string): Generator<string> {
     for (const line of candidates) {
       const match = rule.pattern.exec(line);
       if (!match) continue;
-      yield typeof rule.name === "string" ? rule.name : typeof rule.name === "function" ? rule.name(match) : match[0];
+      const name =
+        typeof rule.name === "string" ? rule.name : typeof rule.name === "function" ? rule.name(match) : match[0];
+      yield { name, positional: rule.positional };
     }
   }
 }
 
+/** A position-dependent directive a comment carries, with the placement bit it hinges on. */
+export interface PositionalDirective {
+  name: string;
+  gate: PositionalGate;
+}
+
 /**
  * The position-dependent directives (prettier's first-comment pragmas, Bun's
- * file-start marker) the comment carries that are active at the given
- * placement, sorted. Unlike detectDirective — which reports one canonical
- * name — this sees through masking: an eslint config block can also hold a
- * `@format` pragma, and whether that pragma is live must not hide behind the
- * name an earlier rule already claimed. Only first-comment and file-start
- * gates are consulted; header-gated directives cannot change activation when
- * the comments around them change.
+ * file-start marker, knip's tags before a token) the comment carries that are
+ * active at the given placement, sorted by gate and name. Unlike
+ * detectDirective — which reports one canonical name — this sees through
+ * masking: an eslint config block can also hold a `@format` pragma, and
+ * whether that pragma is live must not hide behind the name an earlier rule
+ * already claimed; likewise tsc's ungated `@internal` rule names a docblock
+ * before knip's gated reading of the same tag runs. Header-gated directives
+ * are not consulted: they cannot change activation when the comments around
+ * them change.
  */
-export function activePositionalDirectives(kind: CommentKind, text: string, placement: DirectivePlacement): string[] {
-  const names = new Set<string>();
-  for (const name of ruleMatches(kind, text)) {
-    if (!FIRST_COMMENT_ONLY_DIRECTIVES.has(name) && !FILE_START_ONLY_DIRECTIVES.has(name)) continue;
-    if (isActiveAt(name, placement)) names.add(name);
+export function activePositionalDirectives(
+  kind: CommentKind,
+  text: string,
+  placement: DirectivePlacement,
+): PositionalDirective[] {
+  const active = new Map<string, PositionalDirective>();
+  for (const { name, positional } of ruleMatches(kind, text)) {
+    if (positional === undefined || !isActiveAtPosition(positional, placement)) continue;
+    active.set(`${positional} ${name}`, { name, gate: positional });
   }
-  return [...names].sort();
+  return [...active.keys()].sort().map((key) => active.get(key) as PositionalDirective);
 }
 
 /**

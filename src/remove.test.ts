@@ -510,6 +510,20 @@ describe("removeComments next-line shielding by whole lines", () => {
     expect(result.kept.map((comment) => comment.text)).toEqual(["/* @ts-ignore */", "/* @ts-expect-error */"]);
     expect(result.removed.map((comment) => comment.text)).toEqual(["// gone"]);
   });
+
+  it("shields the line under a stylelint-disable-next-line comment", () => {
+    // Stylelint disables the line after the comment's last line; deleting
+    // the comment-only line would move that onto the declaration below.
+    const source = "/* stylelint-disable-next-line declaration-no-important */\n/* gone */\nconst a = 1;\n";
+
+    const result = removeComments(source);
+
+    expect(result.changed).toBe(false);
+    expect(result.kept.map((comment) => comment.text)).toEqual([
+      "/* stylelint-disable-next-line declaration-no-important */",
+      "/* gone */",
+    ]);
+  });
 });
 
 describe("removeComments position-dependent directive protection", () => {
@@ -635,5 +649,104 @@ describe("removeComments position-dependent directive protection", () => {
 
     expect(result.code).toBe("/**\n * eslint no-console: 0\n * @format\n */\nconst x = 1;\n");
     expect(result.removed.map((comment) => comment.text)).toEqual(["// gone"]);
+  });
+
+  it("still removes comments behind a docblock holding two pragmas that were already first and active", () => {
+    const source = "/** @format @prettier */\n// gone\nconst x = 1;\n";
+
+    const result = removeComments(source);
+
+    expect(result.code).toBe("/** @format @prettier */\nconst x = 1;\n");
+    expect(result.removed.map((comment) => comment.text)).toEqual(["// gone"]);
+  });
+
+  it("keeps a block comment whose removal would attach an inert knip tag to the export below", () => {
+    // knip attaches `@public` to the node right after the docblock, walking
+    // over whitespace and `//` comments only; `/* gone */` stops that walk,
+    // so deleting it would newly exempt `a` from knip's unused-export report.
+    const source = "/**\n * @license MIT\n * @public\n */\n/* gone */\nexport const a = 1;\n";
+
+    const result = removeComments(source);
+
+    expect(result.changed).toBe(false);
+    expect(result.code).toBe(source);
+    expect(result.kept.map((comment) => comment.text)).toEqual(["/**\n * @license MIT\n * @public\n */", "/* gone */"]);
+  });
+
+  it("still removes a line comment between a live knip tag and its export", () => {
+    const source = "/** @public */\n// gone\nexport const a = 1;\n";
+
+    const result = removeComments(source);
+
+    expect(result.code).toBe("/** @public */\nexport const a = 1;\n");
+    expect(result.kept.map((comment) => comment.directive)).toEqual(["@public"]);
+  });
+
+  it("removes an inert knip tag comment together with the block comment that kept it inert", () => {
+    // Neither comment is a directive as written, and knip sees `a` as
+    // untagged before and after, so both may go.
+    const source = "/** @public */\n/* gone */\nexport const a = 1;\n";
+
+    const result = removeComments(source);
+
+    expect(result.code).toBe("export const a = 1;\n");
+    expect(result.removed.map((comment) => comment.text)).toEqual(["/** @public */", "/* gone */"]);
+  });
+
+  it("keeps the block comment holding knip's reading of @internal inert, although tsc's is live", () => {
+    // tsc strips the declaration either way (any leading comment counts),
+    // but knip's production mode would newly exempt `a` once the wall is gone.
+    const source = "/** @internal */\n/* gone */\nexport const a = 1;\n";
+
+    const result = removeComments(source);
+
+    expect(result.changed).toBe(false);
+    expect(result.kept.map((comment) => comment.text)).toEqual(["/** @internal */", "/* gone */"]);
+  });
+
+  it("re-protects only the block comment that stops knip's reach, not the line comments before it", () => {
+    const source = "/** @license @public */\n// gone\n/* wall */\nexport const a = 1;\n";
+
+    const result = removeComments(source);
+
+    expect(result.code).toBe("/** @license @public */\n/* wall */\nexport const a = 1;\n");
+    expect(result.removed.map((comment) => comment.text)).toEqual(["// gone"]);
+  });
+
+  it("keeps a wall that also holds a live first-comment pragma away from a knip tag", () => {
+    // The docblock is already the file's first comment, so `@format` is live
+    // before and after; only `@public` changes, and the wall stays for it.
+    const source = "/** @format @license @public */\n/* wall */\nexport const a = 1;\n";
+
+    const result = removeComments(source);
+
+    expect(result.changed).toBe(false);
+    expect(result.kept.map((comment) => comment.text)).toEqual(["/** @format @license @public */", "/* wall */"]);
+  });
+
+  it("falls back to a line comment as the reach blocker on a file without line feeds", () => {
+    // knip skips a `//` comment up to the next `\n`; with CR line endings it
+    // never finds one, so the line comment itself held the tags off the
+    // export, and deleting it would attach them.
+    const source = "/** @license @public */\r// x\rexport const a = 1;\r";
+
+    const result = removeComments(source);
+
+    expect(result.changed).toBe(false);
+    expect(result.kept.map((comment) => comment.text)).toEqual(["/** @license @public */", "// x"]);
+  });
+
+  it("re-protects comments on both sides when a docblock gains a first-comment pragma and a knip tag at once", () => {
+    const source = "/* lead */\n/** @format @license @public */\n/* wall */\nexport const a = 1;\n";
+
+    const result = removeComments(source);
+
+    expect(result.changed).toBe(false);
+    expect(result.code).toBe(source);
+    expect(result.kept.map((comment) => comment.text)).toEqual([
+      "/* lead */",
+      "/** @format @license @public */",
+      "/* wall */",
+    ]);
   });
 });
