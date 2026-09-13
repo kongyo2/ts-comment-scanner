@@ -297,6 +297,27 @@ describe("removeComments", () => {
     expect(removeComments(semgrep).code).toBe(semgrep);
   });
 
+  it("shields below stylelint-disable-next-line, which targets the line after the comment", () => {
+    const line = "// stylelint-disable-next-line declaration-no-important\n// shielded\nimportant();\n";
+    expect(removeComments(line).code).toBe(line);
+
+    const block = "/* stylelint-disable-next-line block-no-empty */\n// shielded\nconst empty = css``;\n";
+    expect(removeComments(block).code).toBe(block);
+
+    // stylelint disables the line after the comment's end line, so the
+    // trailing form still targets the next line rather than its own.
+    const trailing = "const a = 1; /* stylelint-disable-next-line */\n// shielded\nconst b = 2;\n";
+    expect(removeComments(trailing).code).toBe(trailing);
+  });
+
+  it("does not shield below stylelint-disable-line or the stylelint range commands", () => {
+    const ownLine = "const a = 1; /* stylelint-disable-line */\n// gone\nconst b = 2;\n";
+    expect(removeComments(ownLine).code).toBe("const a = 1; /* stylelint-disable-line */\nconst b = 2;\n");
+
+    const range = "/* stylelint-disable */\n// gone\nconst c = 3;\n/* stylelint-enable */\n";
+    expect(removeComments(range).code).toBe("/* stylelint-disable */\nconst c = 3;\n/* stylelint-enable */\n");
+  });
+
   it("does not shield below trailing scanner suppressions that target their own line", () => {
     const semgrep = "danger(); // nosemgrep\n// gone\nsafe();\n";
     expect(removeComments(semgrep).code).toBe("danger(); // nosemgrep\nsafe();\n");

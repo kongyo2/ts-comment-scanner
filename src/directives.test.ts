@@ -286,6 +286,45 @@ describe("detectDirective", () => {
     expect(detectDirective("line", "// rome-ignore banana: reason")).toBeUndefined();
   });
 
+  it.each([
+    ["/* stylelint-disable */", "stylelint-disable"],
+    ["/*stylelint-disable*/", "stylelint-disable"],
+    ["/* stylelint-disable selector-max-id, declaration-no-important */", "stylelint-disable"],
+    ["/* stylelint-disable foo -- Reason for disabling the foo rule. */", "stylelint-disable"],
+    ["/* stylelint-disable-line */", "stylelint-disable-line"],
+    ["/* stylelint-disable-next-line declaration-no-important */", "stylelint-disable-next-line"],
+    ["/* stylelint-enable selector-max-id */", "stylelint-enable"],
+    ["/*\n  stylelint-disable foo,\n  bar\n*/", "stylelint-disable"],
+    ["/*\tstylelint-disable\tfoo\t*/", "stylelint-disable"],
+  ])("detects stylelint configuration comments: %s", (text, expected) => {
+    expect(detectDirective("block", text)).toBe(expected);
+  });
+
+  it("detects stylelint commands in line comments, as postcss-scss and postcss-less feed them", () => {
+    expect(detectDirective("line", "// stylelint-disable-next-line declaration-no-important")).toBe(
+      "stylelint-disable-next-line",
+    );
+    expect(detectDirective("line", "//stylelint-disable-line")).toBe("stylelint-disable-line");
+    expect(detectDirective("line", "// stylelint-enable")).toBe("stylelint-enable");
+    // A SassDoc `///` comment puts a slash in front of the first token.
+    expect(detectDirective("line", "/// stylelint-disable")).toBeUndefined();
+  });
+
+  it("requires stylelint's command to be the exact first token of the comment body", () => {
+    // stylelint splits the trimmed comment text at the first whitespace and
+    // compares that token (minus the `stylelint` marker) with its command
+    // list verbatim: glued rule lists, suffixes, prose before the marker and
+    // a different case all leave the comment ordinary.
+    expect(detectDirective("block", "/* stylelint-disable,foo */")).toBeUndefined();
+    expect(detectDirective("block", "/* stylelint-disable-lineee */")).toBeUndefined();
+    expect(detectDirective("block", "/* stylelint-disable- */")).toBeUndefined();
+    expect(detectDirective("block", "/* stylelint-disable-next */")).toBeUndefined();
+    expect(detectDirective("block", "/* stylelint-enable-foo */")).toBeUndefined();
+    expect(detectDirective("block", "/* note stylelint-disable */")).toBeUndefined();
+    expect(detectDirective("block", "/* STYLELINT-DISABLE */")).toBeUndefined();
+    expect(detectDirective("line", "// see stylelint-disable above")).toBeUndefined();
+  });
+
   it("detects JSLint directives only when they hug the comment marker", () => {
     expect(detectDirective("block", "/*jslint devel, browser*/")).toBe("jslint");
     expect(detectDirective("line", "//jslint devel")).toBe("jslint");
@@ -615,6 +654,28 @@ describe("detectDirective tool-faithful boundaries", () => {
     expect(detectDirective("block", "/* codeql[js/xss] */")).toBeUndefined();
     expect(detectDirective("block", "/* lgtm[js/xss] */")).toBeUndefined();
     expect(detectDirective("block", "/* lgtm */")).toBeUndefined();
+  });
+
+  it("keeps stylelint commands ordinary behind a JSDoc star, which postcss keeps as content", () => {
+    // postcss stores `* stylelint-disable` as the text of a `/**` block (or
+    // of a star-prefixed line), so the first token is `*` and stylelint sees
+    // no command — verified against stylelint 17.15. Plain leading
+    // whitespace, newlines included, is trimmed away and stays harmless.
+    expect(detectDirective("block", "/** stylelint-disable */")).toBeUndefined();
+    expect(detectDirective("block", "/*\n * stylelint-disable\n */")).toBeUndefined();
+    expect(detectDirective("block", "/*\n  stylelint-disable\n*/")).toBe("stylelint-disable");
+  });
+
+  it("mirrors stylelint's marker stripping: the first `stylelint` in the token is cut, wherever it sits", () => {
+    // isConfigurationComment runs `token.replace('stylelint', '')` and
+    // compares the remainder, so a token without the marker — or with it in
+    // the middle or at the end — is a live command to stylelint too, while a
+    // doubled marker is not.
+    expect(detectDirective("block", "/* -disable */")).toBe("stylelint-disable");
+    expect(detectDirective("block", "/* -disablestylelint */")).toBe("stylelint-disable");
+    expect(detectDirective("block", "/* -disstylelintable */")).toBe("stylelint-disable");
+    expect(detectDirective("line", "// -enable")).toBe("stylelint-enable");
+    expect(detectDirective("block", "/* stylelintstylelint-disable */")).toBeUndefined();
   });
 
   it("keeps prettier/oxfmt suppressions ordinary when a JSDoc star precedes them", () => {
