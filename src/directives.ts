@@ -3,8 +3,12 @@ import type { CommentKind } from "./types.js";
 
 interface DirectiveRule {
   pattern: RegExp;
-  /** Fixed name, or derive it from the match. Defaults to the full matched text. */
-  name?: string | ((match: RegExpExecArray) => string);
+  /**
+   * Fixed name, or derive it from the match — returning undefined rejects the
+   * match, for checks a single regex cannot express. Defaults to the full
+   * matched text.
+   */
+  name?: string | ((match: RegExpExecArray) => string | undefined);
   blockOnly?: boolean;
   /** Only match line comments (e.g. JetBrains suppressions in JS/TS). */
   lineOnly?: boolean;
@@ -35,6 +39,25 @@ interface DirectiveRule {
    * trimmed body, so `/** prettier-ignore *​/` is NOT a suppression to them).
    */
   keepStars?: boolean;
+}
+
+// stylelint's configuration commands, compared verbatim (as in its
+// `configurationComment.mjs`) once the marker has been cut out of the
+// comment's first token.
+const STYLELINT_MARKER = "stylelint";
+const STYLELINT_COMMANDS: ReadonlySet<string> = new Set(["-disable", "-disable-line", "-disable-next-line", "-enable"]);
+
+/**
+ * The stylelint command the comment's first whitespace-delimited token
+ * carries, if any. Mirrors `isConfigurationComment`: `String#replace` with a
+ * string pattern drops only the FIRST `stylelint` in the token, wherever it
+ * sits, and the remainder must equal a command exactly (case-sensitively) —
+ * so `-disable` alone, or `-disablestylelint`, is a live command to stylelint
+ * while `stylelintstylelint-disable` is not.
+ */
+function stylelintDirective(token: string): string | undefined {
+  const command = token.replace(STYLELINT_MARKER, "");
+  return STYLELINT_COMMANDS.has(command) ? `${STYLELINT_MARKER}${command}` : undefined;
 }
 
 const RULES: DirectiveRule[] = [
@@ -84,6 +107,16 @@ const RULES: DirectiveRule[] = [
   { pattern: /^@deno-types\s*=\s*(?:"[^"\n]+"|'[^'\n]+'|\S+)/i, name: "@deno-types" },
   { pattern: /^@ts-types\s*=\s*(?:"[^"\n]+"|'[^'\n]+')/i, name: "@ts-types" },
   { pattern: /^@ts-self-types\s*=\s*(?:"[^"\n]+"|'[^'\n]+')/i, name: "@ts-self-types" },
+  // stylelint. A configuration comment is recognised from the first
+  // whitespace-delimited token of the trimmed comment body alone (see
+  // stylelintDirective), so a glued rule list, a suffix, prose before the
+  // marker or a different case leave the comment inert — as does a JSDoc star
+  // after `/**`, which postcss keeps as comment text (hence keepStars). `//`
+  // comments count too: postcss-scss and postcss-less hand stylelint the same
+  // trimmed text. Verified against stylelint 17.15. A project-specific
+  // `configurationComment` prefix cannot be known here, so only the default
+  // marker is matched.
+  { pattern: /^\S+/, keepStars: true, name: (match) => stylelintDirective(match[0]) },
   // Formatter suppressions (prettier, and oxfmt which mirrors it). Both
   // parsers compare the exact trimmed comment body, so the marker must be the
   // whole comment (joinLines makes `$` span every line): hyphenated
@@ -462,7 +495,9 @@ function* ruleMatches(kind: CommentKind, text: string): Generator<string> {
     for (const line of candidates) {
       const match = rule.pattern.exec(line);
       if (!match) continue;
-      yield typeof rule.name === "string" ? rule.name : typeof rule.name === "function" ? rule.name(match) : match[0];
+      const name =
+        typeof rule.name === "string" ? rule.name : typeof rule.name === "function" ? rule.name(match) : match[0];
+      if (name !== undefined) yield name;
     }
   }
 }
