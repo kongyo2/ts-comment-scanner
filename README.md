@@ -181,12 +181,14 @@ ts-comment-scanner --fail-on-comment --diff a1b2c3..d4e5f6 src
 
 - **コンパイラ / 型**: `@ts-ignore` `@ts-expect-error` `@ts-nocheck` `@ts-check` / `/// <reference>` / `@ts-strict-ignore`・`@ts-strict`(typescript-strict-plugin) / `@deno-types=`・`@ts-types=`・`@ts-self-types=`(Deno)
 - **リンター**: `eslint-disable` 系・`eslint-env`・`/* global */`・`/* exported */` / `oxlint-disable` 系 / `biome-ignore` 系・`rome-ignore` / `deno-lint-ignore` 系 / `stylelint-disable`・`stylelint-disable-line`・`stylelint-disable-next-line`・`stylelint-enable`(stylelint) / `@flow`・`@noflow`・`$FlowFixMe` 系・`flowlint` 系(Flow) / `tslint:`・`jshint`・`jscs:`・`jslint`(レガシー)
-- **フォーマッタ**: `prettier-ignore`・`@format`/`@prettier`/`@noformat`/`@noprettier` pragma / `oxfmt-ignore` / `dprint-ignore`・`dprint-ignore-file` / `organize-imports-ignore` / `beautify ignore/preserve`(レガシー)
+- **フォーマッタ**: `prettier-ignore`・`@format`/`@prettier`/`@noformat`/`@noprettier` pragma・`/** @type */`/`/** @satisfies */` 型キャストコメント(prettier) / `oxfmt-ignore` / `dprint-ignore`・`dprint-ignore-file` / `organize-imports-ignore` / `beautify ignore/preserve`(レガシー)
 - **カバレッジ / テスト**: `istanbul ignore`・`c8 ignore`・`v8 ignore`・`node:coverage` / `@jest-environment(-options)`・`@vitest-environment(-options)`・`@module-tag`(Vitest 4) / `Stryker disable/restore` / `type-coverage:ignore-line/-next-line` / `ts-prune-ignore-next`
 - **バンドラ / ランタイム**: `webpackChunkName:` などの webpack・turbopack マジックコメント / `@vite-ignore` / `#__PURE__`・`@__NO_SIDE_EFFECTS__`・`@__INLINE__`・`@__KEY__`・`@__MANGLE_PROP__`(terser/rollup 注釈) / `// @bun`(Bun) / `@refresh reset/skip/reload`(react-refresh / solid-refresh) / `million-ignore` / `nx-ignore-next-line`(Nx) / `@unocss-include/-ignore/-skip-start/-skip-end` / `@next-codemod-error/-ignore`(Next.js) / `/* GraphQL */`・`/* HTML */` タグコメント / `//# sourceMappingURL=`・`//# sourceURL=` / `@jsx` 系プラグマ
 - **セキュリティ / 静的解析**: `NOSONAR`(SonarQube) / `nosemgrep`(Semgrep) / `lgtm[...]`・`codeql[...]`(CodeQL) / `skipcq`(DeepSource) / `deepcode ignore`(Snyk Code) / `no-dd-sa`・`datadog-disable`(Datadog) / `gitleaks:allow` / `trufflehog:ignore` / `pragma: allowlist secret`(detect-secrets)
 - **スペルチェック**: `cspell:` 系(`cSpell:`・`spell-checker:`・`spellchecker:` 別名込み)・`LocalWords` / `codespell:ignore`
 - **エディタ / IDE**: `#region`・`#endregion` / `noinspection`・`<editor-fold>`・`language=`(JetBrains) / `ReSharper disable/restore`
+
+prettier 関連のルールは prettier 本体の実装をそのまま写しています。`prettier-ignore` はコメント本文を trim した完全一致(JS/TS に `prettier-ignore-start`/`-end` はなく、普通のコメント扱い)、`@format` 系 pragma は jest-docblock と同じ docblock 解析(ファイル最初のブロックコメントのみ、`@` は行頭、行頭の空白はスペースのみ)、`/** @type */`・`/** @satisfies */` は prettier が直後の括弧を保持する型キャストコメント(tsc も JavaScript で解釈)、先頭コメントの `@flow`/`@noflow` は babel パーサーを Flow 構文に切り替える判定です。テストスイートはこれらを実際の prettier と突き合わせて検証しています。
 
 ## ライブラリとして使う
 

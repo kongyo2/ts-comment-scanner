@@ -1,3 +1,4 @@
+import { docblockPragmas } from "./docblock.js";
 import { lastLine, splitLines } from "./lines.js";
 import type { CommentKind } from "./types.js";
 
@@ -5,10 +6,11 @@ interface DirectiveRule {
   pattern: RegExp;
   /**
    * Fixed name, or derive it from the match — returning undefined rejects the
-   * match, for checks a single regex cannot express. Defaults to the full
-   * matched text.
+   * match, for checks a single regex cannot express, and a list reports every
+   * directive the match carries (a docblock can hold several pragmas).
+   * Defaults to the full matched text.
    */
-  name?: string | ((match: RegExpExecArray) => string | undefined);
+  name?: string | ((match: RegExpExecArray) => string | readonly string[] | undefined);
   blockOnly?: boolean;
   /** Only match line comments (e.g. JetBrains suppressions in JS/TS). */
   lineOnly?: boolean;
@@ -59,6 +61,11 @@ function stylelintDirective(token: string): string | undefined {
   const command = token.replace(STYLELINT_MARKER, "");
   return STYLELINT_COMMANDS.has(command) ? `${STYLELINT_MARKER}${command}` : undefined;
 }
+
+// Prettier's FORMAT_PRAGMAS and FORMAT_IGNORE_PRAGMAS (its
+// `src/utilities/pragma/pragma.evaluate.js`): the docblock keys that
+// --require-pragma looks for and --check-ignore-pragma stops on.
+const FORMAT_PRAGMA_KEYS: ReadonlySet<string> = new Set(["format", "prettier", "noformat", "noprettier"]);
 
 const RULES: DirectiveRule[] = [
   // ESLint
@@ -117,14 +124,15 @@ const RULES: DirectiveRule[] = [
   // `configurationComment` prefix cannot be known here, so only the default
   // marker is matched.
   { pattern: /^\S+/, keepStars: true, name: (match) => stylelintDirective(match[0]) },
-  // Formatter suppressions (prettier, and oxfmt which mirrors it). Both
-  // parsers compare the exact trimmed comment body, so the marker must be the
+  // Formatter suppressions (prettier, and oxfmt which mirrors it). Prettier's
+  // isPrettierIgnoreComment compares `comment.value.trim()` with the exact
+  // string, for line and block comments alike, so the marker must be the
   // whole comment (joinLines makes `$` span every line): hyphenated
-  // lookalikes (`oxfmt-ignore-more`) and prose stay ordinary. keepStars,
-  // because the literal comparison also means a JSDoc `*` before the marker
-  // (`/** prettier-ignore *​/`) leaves the comment ordinary — verified against
-  // prettier 3.8.
-  { pattern: /^prettier-ignore(?:-start|-end)?$/, joinLines: true, keepStars: true },
+  // lookalikes (`oxfmt-ignore-more`) and prose stay ordinary, and so do
+  // `prettier-ignore-start`/`-end`, which prettier only reads in Markdown.
+  // keepStars, because the literal comparison also means a JSDoc `*` before
+  // the marker (`/** prettier-ignore *​/`) leaves the comment ordinary.
+  { pattern: /^prettier-ignore$/, joinLines: true, keepStars: true },
   { pattern: /^oxfmt-ignore$/, joinLines: true, keepStars: true },
   // dprint. The file pragma is a starts-with check (trailing text allowed) on
   // the file's leading comments, skipping only whitespace — a `/**` docblock
@@ -137,10 +145,25 @@ const RULES: DirectiveRule[] = [
     anyLine: true,
   },
   // Prettier pragma mode (--require-pragma / --check-ignore-pragma). Prettier
-  // reads them via jest-docblock: only the file's first block comment counts
-  // and the pragma has to open a line. The lookahead keeps distinct keys like
-  // `@prettier-plugin` ordinary, matching jest-docblock's `@(\S+)` parsing.
-  { pattern: /^@(?:no)?(?:format|prettier)(?=\s|$)/, blockOnly: true, anyLine: true },
+  // reads the pragmas through jest-docblock (its `src/language-js/pragma.js`):
+  // only the file's first block comment counts, and a pragma is a key that
+  // opens a line of the docblock, so `@prettier-plugin` is a different key and
+  // stays ordinary. The port in docblock.ts carries jest-docblock's exact
+  // line-shape rules (spaces only before the gutter star and the `@`).
+  {
+    pattern: /^\/\*/,
+    rawText: true,
+    blockOnly: true,
+    name: (match) =>
+      docblockPragmas(match.input)
+        .filter((key) => FORMAT_PRAGMA_KEYS.has(key))
+        .map((key) => `@${key}`),
+  },
+  // JSDoc type casts. Prettier's isTypeCastComment takes any `/**` docblock
+  // whose value matches /@(?:type|satisfies)\b/ and keeps the parentheses of
+  // the expression that follows it (`/** @type {Foo} *​/ (bar)`), the cast
+  // tsc itself honours in JavaScript. A `/*` comment or `@typedef` is not one.
+  { pattern: /^\/\*\*[^]*?@(type|satisfies)\b/, rawText: true, blockOnly: true, name: (match) => `@${match[1]}` },
   // prettier-plugin-organize-imports: a literal whole-file substring check,
   // `//` and single space included, so it matches the raw comment text.
   { pattern: /\/\/ organize-imports-ignore/, rawText: true, name: "organize-imports-ignore" },
@@ -192,13 +215,17 @@ const RULES: DirectiveRule[] = [
     name: (match) => (match[1] === undefined ? "@ts-strict" : "@ts-strict-ignore"),
     anyLine: true,
   },
-  // Flow. The pragmas live in the file's leading docblock and are matched as
-  // whole words (text may surround them). Suppressions must open the comment
-  // and take an optional [error-code]; all four historical suppressors are
-  // recognised ($FlowIssue/$FlowIgnore stopped working in Flow 0.281 but
-  // still gate older setups). flowlint takes rule:severity pairs.
+  // Flow. The pragmas live in the file's leading comments. Prettier's babel
+  // parser switches to Flow syntax when /@(?:no)?flow\b/ matches anywhere in
+  // the text before the first token (isFlowFile in its parse/babel.js), so
+  // `foo@flow.com` or `@flow-strict` in a header comment is live to it; Flow's
+  // own tokenised pragma (`@flow` as a whole word) is a subset of that.
+  // Suppressions must open the comment and take an optional [error-code]; all
+  // four historical suppressors are recognised ($FlowIssue/$FlowIgnore stopped
+  // working in Flow 0.281 but still gate older setups). flowlint takes
+  // rule:severity pairs.
   {
-    pattern: /(?:^|[\s*/])@(no)?flow(?=$|[\s*/])/,
+    pattern: /@(no)?flow\b/,
     name: (match) => (match[1] === undefined ? "@flow" : "@noflow"),
     anyLine: true,
   },
@@ -404,7 +431,8 @@ const HEADER_ONLY_DIRECTIVES = new Set([
 
 // Prettier's pragma mode reads the pragma through jest-docblock, which only
 // ever extracts the file's FIRST comment (a shebang may precede it) — a
-// docblock behind any other comment is ignored. Verified against prettier 3.8.
+// docblock behind any other comment is ignored. Cross-checked against the
+// real prettier in directives.prettier.test.ts.
 const FIRST_COMMENT_ONLY_DIRECTIVES = new Set(["@format", "@noformat", "@prettier", "@noprettier"]);
 
 // Bun treats a file as pre-transpiled only when it literally STARTS with
@@ -497,7 +525,9 @@ function* ruleMatches(kind: CommentKind, text: string): Generator<string> {
       if (!match) continue;
       const name =
         typeof rule.name === "string" ? rule.name : typeof rule.name === "function" ? rule.name(match) : match[0];
-      if (name !== undefined) yield name;
+      if (name === undefined) continue;
+      if (typeof name === "string") yield name;
+      else yield* name;
     }
   }
 }
