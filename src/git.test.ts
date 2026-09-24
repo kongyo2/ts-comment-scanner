@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { commitAll, git, initRepo } from "../test/git.js";
@@ -172,5 +172,26 @@ describe("changedFiles", () => {
   it("names a missing working directory instead of blaming the git executable", async () => {
     // spawn reports a missing cwd with the same ENOENT a missing binary gets.
     await expect(changedFiles("HEAD", join(dir, "missing"))).rejects.toThrow(/directory not found: .*missing/);
+  });
+});
+
+describe("fixture repository helpers", () => {
+  it("keep the temporary repository at the given directory when GIT_DIR points elsewhere", async () => {
+    // A git hook exports GIT_DIR into everything it runs. Inherited by the
+    // helpers, `git init`, `add -A` and `commit` would target that repository
+    // instead of the temporary one.
+    const previous = process.env.GIT_DIR;
+    process.env.GIT_DIR = join(dir, "elsewhere", ".git");
+    try {
+      await initRepo(dir);
+      await writeFile(join(dir, "a.ts"), "// a\n");
+      await commitAll(dir, "base");
+    } finally {
+      if (previous === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = previous;
+    }
+
+    expect((await readdir(dir)).sort()).toEqual([".git", "a.ts"]);
+    expect(await changedFiles("HEAD", dir)).toEqual([]);
   });
 });
