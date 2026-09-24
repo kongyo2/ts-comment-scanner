@@ -1,14 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { execFile } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
+import { commitAll, initRepo } from "../test/git.js";
+import { capture } from "../test/io.js";
 import { parseArgs } from "./args.js";
 import { removeComments } from "./remove.js";
 import { getVersion } from "./version.js";
-import { run, type CliIO } from "./run.js";
+import { run } from "./run.js";
 
 // Nothing in the real collaborators throws non-Error values or non-usage
 // parser errors, so these paths are provoked through wrapped modules.
@@ -25,23 +25,7 @@ vi.mock("./remove.js", async (importOriginal) => {
   return { ...actual, removeComments: vi.fn(actual.removeComments) };
 });
 
-const execFileAsync = promisify(execFile);
-
 let dir: string;
-
-function capture(): { io: CliIO; out: () => string; err: () => string } {
-  const outChunks: string[] = [];
-  const errChunks: string[] = [];
-  return {
-    io: { out: (text) => outChunks.push(text), err: (text) => errChunks.push(text) },
-    out: () => outChunks.join(""),
-    err: () => errChunks.join(""),
-  };
-}
-
-async function git(...args: string[]): Promise<void> {
-  await execFileAsync("git", args, { cwd: dir });
-}
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "tcs-runfail-"));
@@ -88,13 +72,9 @@ describe("run when collaborators misbehave", () => {
   });
 
   it("keeps --diff matching when a collected file's directory can no longer be resolved", async () => {
-    await git("init", "-q", "-b", "main");
-    await git("config", "user.email", "test@example.com");
-    await git("config", "user.name", "Test");
-    await git("config", "commit.gpgsign", "false");
+    await initRepo(dir);
     await writeFile(join(dir, "a.ts"), "// base\n");
-    await git("add", "-A");
-    await git("commit", "-q", "-m", "base");
+    await commitAll(dir, "base");
     await writeFile(join(dir, "a.ts"), "// changed\n");
     // A directory vanishing between the walk and the --diff filter must not
     // abort the run: the file is compared as spelled instead.

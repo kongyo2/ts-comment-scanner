@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { onWin32 } from "../test/platform.js";
 import { collectFiles } from "./files.js";
 
 // A Windows-flavoured path module: everything real except the separator, so
@@ -20,16 +21,6 @@ beforeEach(async () => {
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
-
-async function onWin32<T>(action: () => Promise<T>): Promise<T> {
-  const descriptor = Object.getOwnPropertyDescriptor(process, "platform") as PropertyDescriptor;
-  Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-  try {
-    return await action();
-  } finally {
-    Object.defineProperty(process, "platform", descriptor);
-  }
-}
 
 describe("collectFiles on Windows-like platforms", () => {
   it("collapses input paths that differ only by case", async () => {

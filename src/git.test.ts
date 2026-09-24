@@ -1,30 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
+import { commitAll, git, initRepo } from "../test/git.js";
 import { changedFiles } from "./git.js";
 
-const execFileAsync = promisify(execFile);
-
 let dir: string;
-
-async function git(...args: string[]): Promise<void> {
-  await execFileAsync("git", args, { cwd: dir });
-}
-
-async function initRepo(): Promise<void> {
-  await git("init", "-q", "-b", "main");
-  await git("config", "user.email", "test@example.com");
-  await git("config", "user.name", "Test");
-  await git("config", "commit.gpgsign", "false");
-}
-
-async function commitAll(message: string): Promise<void> {
-  await git("add", "-A");
-  await git("commit", "-q", "-m", message);
-}
 
 beforeEach(async () => {
   // realpath so expectations match the resolved paths changedFiles returns
@@ -38,12 +19,12 @@ afterEach(async () => {
 
 describe("changedFiles", () => {
   it("lists files changed between two commits as absolute paths", async () => {
-    await initRepo();
+    await initRepo(dir);
     await writeFile(join(dir, "a.ts"), "// a\n");
-    await commitAll("base");
+    await commitAll(dir, "base");
     await writeFile(join(dir, "a.ts"), "// a2\n");
     await writeFile(join(dir, "b.ts"), "// b\n");
-    await commitAll("change");
+    await commitAll(dir, "change");
 
     const files = await changedFiles("HEAD~1..HEAD", dir);
 
@@ -51,41 +32,41 @@ describe("changedFiles", () => {
   });
 
   it("compares the working tree against a single revision", async () => {
-    await initRepo();
+    await initRepo(dir);
     await writeFile(join(dir, "a.ts"), "// a\n");
     await writeFile(join(dir, "b.ts"), "// b\n");
-    await commitAll("base");
+    await commitAll(dir, "base");
     await writeFile(join(dir, "b.ts"), "// b2\n");
 
     expect(await changedFiles("HEAD", dir)).toEqual([join(dir, "b.ts")]);
   });
 
   it("omits files deleted in the range", async () => {
-    await initRepo();
+    await initRepo(dir);
     await writeFile(join(dir, "a.ts"), "// a\n");
     await writeFile(join(dir, "b.ts"), "// b\n");
-    await commitAll("base");
+    await commitAll(dir, "base");
     await writeFile(join(dir, "a.ts"), "// a2\n");
-    await git("rm", "-q", "b.ts");
+    await git(dir, "rm", "-q", "b.ts");
 
     expect(await changedFiles("HEAD", dir)).toEqual([join(dir, "a.ts")]);
   });
 
   it("reports a renamed file at its new path only", async () => {
-    await initRepo();
+    await initRepo(dir);
     await writeFile(join(dir, "old.ts"), "// same content\n");
-    await commitAll("base");
-    await git("mv", "old.ts", "new.ts");
-    await commitAll("rename");
+    await commitAll(dir, "base");
+    await git(dir, "mv", "old.ts", "new.ts");
+    await commitAll(dir, "rename");
 
     expect(await changedFiles("HEAD~1..HEAD", dir)).toEqual([join(dir, "new.ts")]);
   });
 
   it("resolves paths against the repository root, not the working directory", async () => {
-    await initRepo();
+    await initRepo(dir);
     await mkdir(join(dir, "sub"));
     await writeFile(join(dir, "sub", "c.ts"), "// c\n");
-    await commitAll("base");
+    await commitAll(dir, "base");
     await writeFile(join(dir, "sub", "c.ts"), "// c2\n");
     await writeFile(join(dir, "u.ts"), "// untracked at the root\n");
 
@@ -95,43 +76,43 @@ describe("changedFiles", () => {
   });
 
   it("keeps root-relative output even when diff.relative is configured", async () => {
-    await initRepo();
-    await git("config", "diff.relative", "true");
+    await initRepo(dir);
+    await git(dir, "config", "diff.relative", "true");
     await mkdir(join(dir, "sub"));
     await writeFile(join(dir, "a.ts"), "// root decoy\n");
     await writeFile(join(dir, "sub", "a.ts"), "// nested\n");
-    await commitAll("base");
+    await commitAll(dir, "base");
     await writeFile(join(dir, "sub", "a.ts"), "// nested changed\n");
 
     expect(await changedFiles("HEAD", join(dir, "sub"))).toEqual([join(dir, "sub", "a.ts")]);
   });
 
   it("includes untracked files when comparing against the working tree", async () => {
-    await initRepo();
+    await initRepo(dir);
     await writeFile(join(dir, "a.ts"), "// a\n");
-    await commitAll("base");
+    await commitAll(dir, "base");
     await writeFile(join(dir, "b.ts"), "// new\n");
 
     expect(await changedFiles("HEAD", dir)).toEqual([join(dir, "b.ts")]);
   });
 
   it("excludes untracked files from commit-to-commit ranges", async () => {
-    await initRepo();
+    await initRepo(dir);
     await writeFile(join(dir, "a.ts"), "// a\n");
-    await commitAll("base");
+    await commitAll(dir, "base");
     await writeFile(join(dir, "a.ts"), "// a2\n");
-    await commitAll("change");
+    await commitAll(dir, "change");
     await writeFile(join(dir, "b.ts"), "// new\n");
 
     expect(await changedFiles("HEAD~1..HEAD", dir)).toEqual([join(dir, "a.ts")]);
   });
 
   it("treats HEAD^! as a commit comparison and adds no untracked files", async () => {
-    await initRepo();
+    await initRepo(dir);
     await writeFile(join(dir, "a.ts"), "// a\n");
-    await commitAll("base");
+    await commitAll(dir, "base");
     await writeFile(join(dir, "a.ts"), "// a2\n");
-    await commitAll("change");
+    await commitAll(dir, "change");
     await writeFile(join(dir, "b.ts"), "// untracked\n");
 
     expect(await changedFiles("HEAD^!", dir)).toEqual([join(dir, "a.ts")]);
@@ -140,9 +121,9 @@ describe("changedFiles", () => {
   it("treats a lone negated revision like ^HEAD as a working-tree comparison", async () => {
     // `git diff ^HEAD` diffs the working tree against HEAD just like
     // `git diff HEAD`, so brand-new files count as changed here too.
-    await initRepo();
+    await initRepo(dir);
     await writeFile(join(dir, "a.ts"), "// a\n");
-    await commitAll("base");
+    await commitAll(dir, "base");
     await writeFile(join(dir, "a.ts"), "// a2\n");
     await writeFile(join(dir, "b.ts"), "// untracked\n");
 
@@ -150,9 +131,9 @@ describe("changedFiles", () => {
   });
 
   it("honours .gitignore for untracked files", async () => {
-    await initRepo();
+    await initRepo(dir);
     await writeFile(join(dir, ".gitignore"), "ignored.ts\n");
-    await commitAll("base");
+    await commitAll(dir, "base");
     await writeFile(join(dir, "ignored.ts"), "// generated\n");
     await writeFile(join(dir, "b.ts"), "// new\n");
 
@@ -160,11 +141,11 @@ describe("changedFiles", () => {
   });
 
   it("reports a changed symlink at its own path, not its target's", async () => {
-    await initRepo();
+    await initRepo(dir);
     await writeFile(join(dir, "one.ts"), "// one\n");
     await writeFile(join(dir, "two.ts"), "// two\n");
     await symlink("one.ts", join(dir, "link.ts"));
-    await commitAll("base");
+    await commitAll(dir, "base");
     await rm(join(dir, "link.ts"));
     await symlink("two.ts", join(dir, "link.ts"));
 
@@ -177,9 +158,9 @@ describe("changedFiles", () => {
   });
 
   it("rejects an unknown revision with git's error message", async () => {
-    await initRepo();
+    await initRepo(dir);
     await writeFile(join(dir, "a.ts"), "// a\n");
-    await commitAll("base");
+    await commitAll(dir, "base");
 
     await expect(changedFiles("no-such-ref", dir)).rejects.toThrow(/git diff failed/);
   });
@@ -191,5 +172,26 @@ describe("changedFiles", () => {
   it("names a missing working directory instead of blaming the git executable", async () => {
     // spawn reports a missing cwd with the same ENOENT a missing binary gets.
     await expect(changedFiles("HEAD", join(dir, "missing"))).rejects.toThrow(/directory not found: .*missing/);
+  });
+});
+
+describe("fixture repository helpers", () => {
+  it("keep the temporary repository at the given directory when GIT_DIR points elsewhere", async () => {
+    // A git hook exports GIT_DIR into everything it runs. Inherited by the
+    // helpers, `git init`, `add -A` and `commit` would target that repository
+    // instead of the temporary one.
+    const previous = process.env.GIT_DIR;
+    process.env.GIT_DIR = join(dir, "elsewhere", ".git");
+    try {
+      await initRepo(dir);
+      await writeFile(join(dir, "a.ts"), "// a\n");
+      await commitAll(dir, "base");
+    } finally {
+      if (previous === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = previous;
+    }
+
+    expect((await readdir(dir)).sort()).toEqual([".git", "a.ts"]);
+    expect(await changedFiles("HEAD", dir)).toEqual([]);
   });
 });

@@ -1,0 +1,6 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": ["docs/script.js"],
+  "project": ["src/**/*.ts!", "test/**/*.ts", "docs/**/*.js"],
+  "tags": ["-lintignore"]
+}

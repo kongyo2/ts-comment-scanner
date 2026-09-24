@@ -1,40 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, writeFile, rm, readFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
-import { run, type CliIO } from "./run.js";
-
-const execFileAsync = promisify(execFile);
+import { commitAll, initRepo } from "../test/git.js";
+import { capture } from "../test/io.js";
+import { onWin32 } from "../test/platform.js";
+import { run } from "./run.js";
 
 let dir: string;
-
-function capture(): { io: CliIO; out: () => string; err: () => string } {
-  const outChunks: string[] = [];
-  const errChunks: string[] = [];
-  return {
-    io: { out: (text) => outChunks.push(text), err: (text) => errChunks.push(text) },
-    out: () => outChunks.join(""),
-    err: () => errChunks.join(""),
-  };
-}
-
-async function git(args: string[], cwd = dir): Promise<void> {
-  await execFileAsync("git", args, { cwd });
-}
-
-async function initRepo(cwd = dir): Promise<void> {
-  await git(["init", "-q", "-b", "main"], cwd);
-  await git(["config", "user.email", "test@example.com"], cwd);
-  await git(["config", "user.name", "Test"], cwd);
-  await git(["config", "commit.gpgsign", "false"], cwd);
-}
-
-async function commitAll(message: string, cwd = dir): Promise<void> {
-  await git(["add", "-A"], cwd);
-  await git(["commit", "-q", "-m", message], cwd);
-}
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "tcs-run-"));
@@ -299,11 +272,11 @@ describe("run", () => {
   });
 
   it("limits the scan to files changed in the --diff range", async () => {
-    await initRepo();
+    await initRepo(dir);
     await writeFile(join(dir, "old.ts"), "// old\n");
-    await commitAll("base");
+    await commitAll(dir, "base");
     await writeFile(join(dir, "new.ts"), "// new\n");
-    await commitAll("feature");
+    await commitAll(dir, "feature");
     const { io, out } = capture();
 
     const code = await run(["--diff", "HEAD~1..HEAD", dir], io);
@@ -314,12 +287,12 @@ describe("run", () => {
   });
 
   it("limits --remove to files changed in the --diff range", async () => {
-    await initRepo();
+    await initRepo(dir);
     const untouched = join(dir, "untouched.ts");
     const edited = join(dir, "edited.ts");
     await writeFile(untouched, "// stays\n");
     await writeFile(edited, "const x = 1;\n");
-    await commitAll("base");
+    await commitAll(dir, "base");
     await writeFile(edited, "const x = 1; // gone\n");
     const { io, out } = capture();
 
@@ -332,9 +305,9 @@ describe("run", () => {
   });
 
   it("reports no comments when the --diff range changed nothing", async () => {
-    await initRepo();
+    await initRepo(dir);
     await writeFile(join(dir, "a.ts"), "// hi\n");
-    await commitAll("base");
+    await commitAll(dir, "base");
     const { io, out } = capture();
 
     const code = await run(["--diff", "HEAD", dir], io);
@@ -344,9 +317,9 @@ describe("run", () => {
   });
 
   it("returns 2 when --diff gets an unknown revision", async () => {
-    await initRepo();
+    await initRepo(dir);
     await writeFile(join(dir, "a.ts"), "// hi\n");
-    await commitAll("base");
+    await commitAll(dir, "base");
     const { io, err } = capture();
 
     const code = await run(["--diff", "no-such-ref", dir], io);
@@ -366,9 +339,9 @@ describe("run", () => {
   });
 
   it("includes files created but never committed with --diff HEAD", async () => {
-    await initRepo();
+    await initRepo(dir);
     await writeFile(join(dir, "old.ts"), "// old\n");
-    await commitAll("base");
+    await commitAll(dir, "base");
     await writeFile(join(dir, "fresh.ts"), "// fresh\n");
     const { io, out } = capture();
 
@@ -380,7 +353,7 @@ describe("run", () => {
   });
 
   it("returns 2 for an invalid --diff revision even when no files were collected", async () => {
-    await initRepo();
+    await initRepo(dir);
     const { io, err } = capture();
 
     const code = await run(["--diff", "no-such-ref", dir], io);
@@ -399,11 +372,11 @@ describe("run", () => {
   });
 
   it("keeps a re-pointed symlink in the --diff scope when passed explicitly", async () => {
-    await initRepo();
+    await initRepo(dir);
     await writeFile(join(dir, "one.ts"), "// one\n");
     await writeFile(join(dir, "two.ts"), "// two\n");
     await symlink("one.ts", join(dir, "link.ts"));
-    await commitAll("base");
+    await commitAll(dir, "base");
     await rm(join(dir, "link.ts"));
     await symlink("two.ts", join(dir, "link.ts"));
     const { io, out } = capture();
@@ -418,11 +391,11 @@ describe("run", () => {
     // The collector keeps one spelling per real file, so the re-pointed
     // z.ts and its new target a.ts survive as a single entry — under either
     // name, that entry must still count as changed.
-    await initRepo();
+    await initRepo(dir);
     await writeFile(join(dir, "a.ts"), "// alias comment\n");
     await writeFile(join(dir, "b.ts"), "const x = 1;\n");
     await symlink("b.ts", join(dir, "z.ts"));
-    await commitAll("base");
+    await commitAll(dir, "base");
     await rm(join(dir, "z.ts"));
     await symlink("a.ts", join(dir, "z.ts"));
     const { io, out } = capture();
@@ -435,10 +408,10 @@ describe("run", () => {
   });
 
   it("keeps an explicitly listed alias of a changed file in the --diff scope", async () => {
-    await initRepo();
+    await initRepo(dir);
     await writeFile(join(dir, "a.ts"), "// base\n");
     await symlink("a.ts", join(dir, "link.ts"));
-    await commitAll("base");
+    await commitAll(dir, "base");
     await writeFile(join(dir, "a.ts"), "// edited\n");
     const { io, out } = capture();
 
@@ -452,9 +425,9 @@ describe("run", () => {
     // The re-scoped set also realpaths the git-reported paths; a symlink
     // pointing at nothing cannot be resolved and must simply fall back to
     // its spelling instead of failing the run.
-    await initRepo();
+    await initRepo(dir);
     await writeFile(join(dir, "a.ts"), "// base\n");
-    await commitAll("base");
+    await commitAll(dir, "base");
     await writeFile(join(dir, "a.ts"), "// changed\n");
     await symlink("missing.ts", join(dir, "broken.ts"));
     const { io, out } = capture();
@@ -470,7 +443,7 @@ describe("run", () => {
     await mkdir(nested);
     await initRepo(nested);
     await writeFile(join(nested, "a.ts"), "// hi\n");
-    await commitAll("base", nested);
+    await commitAll(nested, "base");
     const { io, err } = capture();
 
     const code = await run(["--diff", "HEAD", dir], io);
@@ -480,20 +453,13 @@ describe("run", () => {
   });
 
   it("matches --diff files case-insensitively on Windows-like platforms", async () => {
-    await initRepo();
+    await initRepo(dir);
     await writeFile(join(dir, "a.ts"), "// base\n");
-    await commitAll("base");
+    await commitAll(dir, "base");
     await writeFile(join(dir, "a.ts"), "// changed\n");
     const { io, out } = capture();
 
-    const descriptor = Object.getOwnPropertyDescriptor(process, "platform") as PropertyDescriptor;
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-    let code: number;
-    try {
-      code = await run(["--diff", "HEAD", dir], io);
-    } finally {
-      Object.defineProperty(process, "platform", descriptor);
-    }
+    const code = await onWin32(() => run(["--diff", "HEAD", dir], io));
 
     expect(code).toBe(0);
     expect(out()).toContain("// changed");
