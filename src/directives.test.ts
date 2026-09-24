@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { detectDirective, isLegalComment } from "./directives.js";
+import { activePositionalDirectives, detectDirective, isLegalComment } from "./directives.js";
 
 describe("detectDirective", () => {
   it.each([
@@ -71,7 +71,11 @@ describe("detectDirective", () => {
   it("rejects hyphenated lookalikes of the formatter suppressions", () => {
     expect(detectDirective("line", "// oxfmt-ignore-more")).toBeUndefined();
     expect(detectDirective("line", "// prettier-ignore-more")).toBeUndefined();
-    expect(detectDirective("line", "// prettier-ignore-start")).toBe("prettier-ignore-start");
+    // Range ignores exist in prettier's Markdown printer only; in JavaScript
+    // and TypeScript isPrettierIgnoreComment compares the whole trimmed
+    // comment with `prettier-ignore`, so these are ordinary comments.
+    expect(detectDirective("line", "// prettier-ignore-start")).toBeUndefined();
+    expect(detectDirective("line", "// prettier-ignore-end")).toBeUndefined();
   });
 
   it("requires formatter suppressions to be the whole comment, like their parsers", () => {
@@ -270,6 +274,43 @@ describe("detectDirective", () => {
     expect(detectDirective("line", "// @format")).toBeUndefined();
   });
 
+  it("reads prettier pragmas the way jest-docblock does", () => {
+    // A `/*` comment is a docblock too, the key runs to the next blank, and
+    // only spaces may precede the gutter star and the `@`.
+    expect(detectDirective("block", "/* @format */")).toBe("@format");
+    expect(detectDirective("block", "/**@format*/")).toBe("@format");
+    expect(detectDirective("block", "/**\r\n * @noformat\r\n */")).toBe("@noformat");
+    expect(detectDirective("block", "/** @format, */")).toBeUndefined();
+    expect(detectDirective("block", "/** @format:reason */")).toBeUndefined();
+    expect(detectDirective("block", "/** @FORMAT */")).toBeUndefined();
+    expect(detectDirective("block", "/** foo @format */")).toBeUndefined();
+    expect(detectDirective("block", "/**\n\t* @format\n */")).toBeUndefined();
+    expect(detectDirective("block", "/**\n ** @format\n */")).toBeUndefined();
+    expect(detectDirective("block", "/**\n *\t@format\n */")).toBeUndefined();
+    // A U+2028 line terminator inside the comment defeats jest-docblock's
+    // extraction regex altogether.
+    expect(detectDirective("block", "/** @format  */")).toBeUndefined();
+    // `@noformat` on the pragma's own line is part of its value, not a key.
+    expect(detectDirective("block", "/** @format @noformat */")).toBe("@format");
+  });
+
+  it("detects JSDoc type casts the way prettier's isTypeCastComment does", () => {
+    expect(detectDirective("block", "/** @type {string} */")).toBe("@type");
+    expect(detectDirective("block", "/**@type{string}*/")).toBe("@type");
+    expect(detectDirective("block", "/** @satisfies {Record<string, string>} */")).toBe("@satisfies");
+    expect(detectDirective("block", "/**\n * @type {{\n *   width: number,\n * }}\n */")).toBe("@type");
+    // The tag may sit anywhere in the docblock; the word boundary after it is
+    // all prettier checks.
+    expect(detectDirective("block", "/** see @type above */")).toBe("@type");
+    expect(detectDirective("block", "/** @type-param T */")).toBe("@type");
+    // `/*` comments are not docblocks, and other tags are not casts.
+    expect(detectDirective("block", "/* @type {string} */")).toBeUndefined();
+    expect(detectDirective("block", "/** @typedef {Foo} Bar */")).toBeUndefined();
+    expect(detectDirective("block", "/** @typefoo Foo */")).toBeUndefined();
+    expect(detectDirective("block", "/** @Type {string} */")).toBeUndefined();
+    expect(detectDirective("line", "// @type {string}")).toBeUndefined();
+  });
+
   it.each([
     ["// rome-ignore lint(correctness/noUnusedVariables): not used yet", "rome-ignore"],
     ["// rome-ignore format: hand aligned", "rome-ignore"],
@@ -435,6 +476,10 @@ describe("detectDirective", () => {
     expect(detectDirective("block", "/**\n * @flow strict-local\n */")).toBe("@flow");
     expect(detectDirective("line", "// @noflow")).toBe("@noflow");
     expect(detectDirective("line", "// @flowfoo")).toBeUndefined();
+    // prettier's babel parser tests /@(?:no)?flow\b/ over the leading
+    // comments, so an address or a hyphenated suffix keeps the pragma live.
+    expect(detectDirective("line", "// by someone@flow.example :)")).toBe("@flow");
+    expect(detectDirective("line", "// @flow-strict")).toBe("@flow");
     expect(detectDirective("line", "// $FlowFixMe[incompatible-call] reason")).toBe("$FlowFixMe");
     expect(detectDirective("line", "//$FlowExpectedError[prop-missing]")).toBe("$FlowExpectedError");
     expect(detectDirective("line", "// $FlowIssue")).toBe("$FlowIssue");
@@ -715,5 +760,16 @@ describe("detectDirective placement", () => {
     expect(detectDirective("line", "// @bun", header)).toBeUndefined();
     expect(detectDirective("block", "/** @format */", { ...header, firstComment: true })).toBe("@format");
     expect(detectDirective("line", "// @bun", { ...header, firstComment: true, fileStart: true })).toBe("@bun");
+  });
+});
+
+describe("activePositionalDirectives", () => {
+  const first = { header: true, firstComment: true, fileStart: true };
+
+  it("lists every prettier pragma the docblock carries", () => {
+    const docblock = "/**\n * @format\n * @prettier\n * @noformat\n */";
+
+    expect(activePositionalDirectives("block", docblock, first)).toEqual(["@format", "@noformat", "@prettier"]);
+    expect(activePositionalDirectives("block", docblock, { ...first, firstComment: false })).toEqual([]);
   });
 });
