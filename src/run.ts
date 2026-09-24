@@ -15,7 +15,7 @@ import {
   type CollectOptions,
 } from "./files.js";
 import { changedFiles } from "./git.js";
-import { removeComments } from "./remove.js";
+import { removeComments, type RemoveResult } from "./remove.js";
 import { count, formatGitHub, formatJson, formatText } from "./report.js";
 import { getVersion } from "./version.js";
 import type { Comment, FileScanResult } from "./types.js";
@@ -122,10 +122,14 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
     const total = results.reduce((sum, result) => sum + result.comments.length, 0);
     return options.failOnComment && total > 0 ? 1 : 0;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    io.err(`ts-comment-scanner: ${message}\n`);
+    io.err(`ts-comment-scanner: ${errorMessage(error)}\n`);
     return 2;
   }
+}
+
+/** The message of a thrown value; collaborators can throw non-Error values, which are stringified. */
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**
@@ -210,11 +214,9 @@ function filterDirectives(results: FileScanResult[], mode: DirectiveMode): FileS
   }));
 }
 
-interface FileRemoval {
+/** One file's removal outcome: the comment tallies removeComments reports, keyed by the file they came from. */
+interface FileRemoval extends Pick<RemoveResult, "removed" | "kept" | "skipped"> {
   file: string;
-  removed: Comment[];
-  kept: Comment[];
-  skipped: Comment[];
 }
 
 async function runRemove(options: CliOptions, collectOptions: CollectOptions, io: CliIO): Promise<number> {
@@ -243,8 +245,7 @@ async function runRemove(options: CliOptions, collectOptions: CollectOptions, io
       }
       return { file, removed: result.removed, kept: result.kept, skipped: result.skipped };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { file, failure: `${file}: ${message}` };
+      return { file, failure: `${file}: ${errorMessage(error)}` };
     }
   });
 

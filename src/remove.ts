@@ -92,12 +92,17 @@ export function removeComments(source: string, options: RemoveOptions = {}): Rem
     }
     removed = removed.filter((comment) => comment !== blocker);
     kept.push(blocker);
-    kept.sort((a, b) => a.start - b.start);
+    kept.sort(byStart);
   }
 }
 
 function unexpectedResult(): Error {
   return new Error("comment removal produced an unexpected result; refusing to continue");
+}
+
+/** Sort comparator for document order: comments are ordered by where they start. */
+function byStart(a: Comment, b: Comment): number {
+  return a.start - b.start;
 }
 
 /**
@@ -118,7 +123,7 @@ function firstChangedSurvivor(
   kept: Comment[],
   skipped: Comment[],
 ): Comment | undefined {
-  const expected = [...kept, ...skipped].sort((a, b) => a.start - b.start);
+  const expected = [...kept, ...skipped].sort(byStart);
   if (actual.length !== expected.length) {
     throw unexpectedResult();
   }
@@ -247,7 +252,7 @@ function shieldNextLineDirectives(source: string, removed: Comment[], kept: Comm
     if (!collectShields()) break;
   }
   if (stillRemoved.length !== removed.length) {
-    kept.sort((a, b) => a.start - b.start);
+    kept.sort(byStart);
   }
   return stillRemoved;
 }
