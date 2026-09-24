@@ -25,7 +25,7 @@ export interface CliIO {
   err: (text: string) => void;
 }
 
-export const HELP_TEXT = `Usage: ts-comment-scanner [options] [paths...]
+const HELP_TEXT = `Usage: ts-comment-scanner [options] [paths...]
 
 Detect, report and clean up comments across a TypeScript project.
 

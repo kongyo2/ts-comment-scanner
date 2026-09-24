@@ -39,6 +39,15 @@ jobs:
       - name: Format check
         run: npm run format:check
 
+      # Unused files, exports and dependencies. The default run covers tests
+      # and tooling too; the production run only what ships, so code kept
+      # alive by tests alone is caught as well.
+      - name: Knip
+        run: npm run knip
+
+      - name: Knip (production mode)
+        run: npm run knip -- --production
+
       - name: Type check
         run: npm run typecheck
 

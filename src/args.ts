@@ -1,4 +1,4 @@
-export type OutputFormat = "text" | "json" | "github";
+type OutputFormat = "text" | "json" | "github";
 export type DirectiveMode = "include" | "skip" | "only";
 
 export interface CliOptions {
