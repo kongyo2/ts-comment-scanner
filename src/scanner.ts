@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { detectDirective, type DirectivePlacement } from "./directives.js";
+import { bunMarkerOffset, detectDirective, type DirectivePlacement } from "./directives.js";
 import type { Comment, CommentKind } from "./types.js";
 
 export interface ScanOptions {
@@ -77,18 +77,31 @@ export function scanComments(source: string, options: ScanOptions = {}): Comment
   const firstTokenStart = sourceFile.getStart(sourceFile);
   const shebangEnd = ts.getShebang(source)?.length ?? 0;
   const firstCommentPos = sorted.length > 0 ? (sorted[0] as ts.CommentRange).pos : -1;
-  const placementOf = (pos: number): DirectivePlacement => ({
+  const bunMarkerPos = bunMarkerOffset(source);
+  // The token after each comment, past the comments that follow it (`""` when
+  // only comments do): walking back from the last comment, a gap holding code
+  // supplies its first token and a blank one passes on the next comment's.
+  const nextTokens: string[] = [];
+  let following = "";
+  for (let index = sorted.length - 1; index >= 0; index -= 1) {
+    const gapEnd = sorted[index + 1]?.pos ?? source.length;
+    const gap = source.slice((sorted[index] as ts.CommentRange).end, gapEnd);
+    following = /^\s*([A-Za-z_$][\w$]*|\S)/.exec(gap)?.[1] ?? following;
+    nextTokens[index] = following;
+  }
+  const placementOf = (pos: number, index: number): DirectivePlacement => ({
     header: pos < firstTokenStart,
     firstComment: pos === firstCommentPos && /^\s*$/.test(source.slice(shebangEnd, pos)),
-    fileStart: pos === 0,
+    fileStart: pos === bunMarkerPos,
+    nextToken: nextTokens[index] as string,
   });
 
-  return sorted.map((range) => {
+  return sorted.map((range, index) => {
     const kind: CommentKind = range.kind === ts.SyntaxKind.SingleLineCommentTrivia ? "line" : "block";
     const text = source.slice(range.pos, range.end);
     const startPosition = sourceFile.getLineAndCharacterOfPosition(range.pos);
     const endPosition = sourceFile.getLineAndCharacterOfPosition(range.end);
-    const directive = detectDirective(kind, text, placementOf(range.pos));
+    const directive = detectDirective(kind, text, placementOf(range.pos, index));
     return {
       kind,
       text,

@@ -374,12 +374,18 @@ describe("removeComments", () => {
     expect(removeComments(source).code).toBe(source);
   });
 
-  it("removes a block @ts-ignore whose directive is not on the closing line, since tsc ignores it", () => {
-    const source = "/* @ts-ignore\n */\nconst x = 1;\n";
+  it("removes a block @ts-ignore that neither tsc nor Flow reads, being on neither its first nor its last line", () => {
+    const source = "/* note\n * @ts-ignore\n */\nconst x = 1;\n";
     const result = removeComments(source);
 
     expect(result.code).toBe("const x = 1;\n");
     expect(result.removed).toHaveLength(1);
+  });
+
+  it("keeps a block @ts-ignore that opens the comment, which Flow honours in TypeScript files", () => {
+    const source = "/* @ts-ignore\n */\nconst x = 1;\n";
+
+    expect(removeComments(source).changed).toBe(false);
   });
 
   it("keeps a byte-order mark when removing the first line", () => {
@@ -617,7 +623,7 @@ describe("removeComments position-dependent directive protection", () => {
     // detectDirective names this docblock "eslint" before and after the
     // removal, so the canonical name alone cannot reveal that the inert
     // @format underneath just became the file's first comment.
-    const source = "/* lead */\n/**\n * eslint no-console: 0\n * @format\n * @license\n */\nconst x={a:1}\n";
+    const source = "/* lead */\n/* eslint no-console: 0\n * @format\n * @license\n */\nconst x={a:1}\n";
 
     expect(scanComments(source).map((comment) => comment.directive)).toEqual([undefined, "eslint"]);
 
@@ -641,7 +647,7 @@ describe("removeComments position-dependent directive protection", () => {
   });
 
   it("applies the masked-pragma protection behind a shebang too", () => {
-    const source = "#!/usr/bin/env node\n// lead\n/**\n * eslint no-console: 0\n * @format\n */\nconst x = 1;\n";
+    const source = "#!/usr/bin/env node\n// lead\n/* eslint no-console: 0\n * @format\n */\nconst x = 1;\n";
 
     const result = removeComments(source);
 
@@ -650,11 +656,229 @@ describe("removeComments position-dependent directive protection", () => {
   });
 
   it("still removes comments behind a pragma that was already first and active", () => {
-    const source = "/**\n * eslint no-console: 0\n * @format\n */\n// gone\nconst x = 1;\n";
+    const source = "/* eslint no-console: 0\n * @format\n */\n// gone\nconst x = 1;\n";
 
     const result = removeComments(source);
 
-    expect(result.code).toBe("/**\n * eslint no-console: 0\n * @format\n */\nconst x = 1;\n");
+    expect(result.code).toBe("/* eslint no-console: 0\n * @format\n */\nconst x = 1;\n");
     expect(result.removed.map((comment) => comment.text)).toEqual(["// gone"]);
+  });
+});
+
+describe("removeComments positional protection for the October 2026 tool sources", () => {
+  it("keeps a leading comment whose removal would move // @bun to the line after a shebang", () => {
+    // Bun reads its marker at the file start or right after a `#!` line.
+    const source = "#!/usr/bin/env bun\n// lead\n// @bun @license\nconst x = 1;\n";
+
+    const result = removeComments(source);
+
+    expect(result.changed).toBe(false);
+    expect(result.kept.map((comment) => comment.text)).toEqual(["// lead", "// @bun @license"]);
+  });
+
+  it("keeps a leading comment whose removal would make deno-coverage-ignore-file the first comment", () => {
+    // Deno only honours the pragma as the file's first comment; the license
+    // keeps the inert one from going with the lead comment.
+    const source = "// lead\n// deno-coverage-ignore-file @license MIT\nconst x = 1;\n";
+
+    const result = removeComments(source);
+
+    expect(result.changed).toBe(false);
+    expect(result.kept.map((comment) => comment.text)).toEqual([
+      "// lead",
+      "// deno-coverage-ignore-file @license MIT",
+    ]);
+  });
+});
+
+describe("removeComments below tsc suppressions", () => {
+  it("keeps the first comment line tsc cannot step over between a suppression and its code", () => {
+    // tsc looks past blank and `//` lines for the line a suppression applies
+    // to; a block-comment line stops it, so the suppression has no target.
+    // Deleting that line would let it reach the assignment instead.
+    const source = '// @ts-expect-error\n\n/* blocker */\nconst a: number = "x";\n';
+
+    const result = removeComments(source);
+
+    expect(result.changed).toBe(false);
+  });
+
+  it("still removes the `//` lines tsc steps over, below the line Flow targets", () => {
+    const source = "// @ts-ignore\n// note\n\n// gone\nfoo();\n";
+
+    const result = removeComments(source);
+
+    expect(result.code).toBe("// @ts-ignore\n// note\n\nfoo();\n");
+  });
+
+  it("treats a line tsc 7 does not step over as blocking, though tsc 6 would", () => {
+    // tsc 7 skips only spaces and tabs before the `//` of a comment line.
+    const source = "// @ts-ignore\n\n\u00a0// note\nfoo();\n";
+
+    expect(removeComments(source).changed).toBe(false);
+  });
+
+  it("removes comments on a blocking line that a kept comment opens", () => {
+    const source = "// @ts-ignore\n\n/*! legal */ /* gone */\nfoo();\n";
+
+    const result = removeComments(source);
+
+    expect(result.code).toBe("// @ts-ignore\n\n/*! legal */\nfoo();\n");
+  });
+
+  it("keeps the line each compiler stops at when the two stop at different lines", () => {
+    // tsc 7 stops at the vertical-tab line, which tsc 6 trims away and steps
+    // over before stopping at the block comment.
+    const source = "// @ts-ignore\n\v\n/* stop */\nfoo();\n";
+
+    expect(removeComments(source).changed).toBe(false);
+  });
+
+  it("still removes the `//` lines both compilers step over behind a whitespace-only blocking line", () => {
+    const source = "// @ts-ignore\n\v\n// gone\nfoo();\n";
+
+    const result = removeComments(source);
+
+    expect(result.code).toBe("// @ts-ignore\n\v\nfoo();\n");
+  });
+
+  it("keeps a multi-line comment that starts on the suppression's line and blocks the next one", () => {
+    const source = "/* @ts-ignore */ /* note\n   more */\nfoo();\n";
+
+    expect(removeComments(source).changed).toBe(false);
+  });
+
+  it("removes blocking comments when no code follows the suppression at all", () => {
+    const source = "// @ts-ignore\n\n/* gone */\n";
+
+    const result = removeComments(source);
+
+    expect(result.code).toBe("// @ts-ignore\n\n");
+  });
+});
+
+describe("removeComments for directives that must stay the last comment before their target", () => {
+  it("keeps every comment between @deno-types and its import, trailing ones included", () => {
+    // deno_graph reads the directive from the import's last leading comment:
+    // with another comment after it the directive is inert, and deleting
+    // that comment would activate it.
+    const apart = '// @deno-types="./x.d.ts"\n\n// note\nimport y from "./y.js";\n';
+    const inline = '// @deno-types="./x.d.ts"\n/* note */ import y from "./y.js";\n';
+
+    expect(removeComments(apart).changed).toBe(false);
+    expect(removeComments(inline).changed).toBe(false);
+  });
+
+  it("keeps the comments between a GraphQL tag and its template", () => {
+    const source = "const q = /* GraphQL */ /* note */ `query { a }`;\n";
+
+    expect(removeComments(source).changed).toBe(false);
+  });
+
+  it("keeps the comments between ESLint's fallthrough and default-case comments and their target", () => {
+    const source = [
+      "switch (x) {",
+      "  case 1:",
+      "    a();",
+      "    // falls through",
+      "",
+      "    // TODO: split",
+      "  case 2:",
+      "    b();",
+      "    break;",
+      "  // no default",
+      "  // reviewed",
+      "}",
+      "",
+    ].join("\n");
+
+    expect(removeComments(source).changed).toBe(false);
+  });
+
+  it("removes ordinary comments after the target as usual", () => {
+    const spaced = "const q = /* GraphQL */ `query { a }`; // gone\n";
+    const tight = "const q = /* GraphQL */`query { a }`; // gone\n";
+
+    expect(removeComments(spaced).code).toBe("const q = /* GraphQL */ `query { a }`;\n");
+    expect(removeComments(tight).code).toBe("const q = /* GraphQL */`query { a }`;\n");
+  });
+});
+
+describe("removeComments shields from directives that mention another tool's marker", () => {
+  it("keeps the next-line shield of a directive whose text mentions a JSX pragma", () => {
+    const source = "// nosemgrep: react-dangerously-set-inner-html -- @jsx h below\n// note\nrender();\n";
+
+    expect(removeComments(source).changed).toBe(false);
+  });
+
+  it("does not shield the line below a node:coverage range pragma", () => {
+    const source = "/* node:coverage ignore start */\n// gone\nfoo();\n/* node:coverage ignore stop */\n";
+
+    expect(removeComments(source).code).toBe(
+      "/* node:coverage ignore start */\nfoo();\n/* node:coverage ignore stop */\n",
+    );
+  });
+});
+
+describe("removeComments gaps before code no last-comment directive reads", () => {
+  it("removes fallthrough words outside a switch like any other comment", () => {
+    const source = "// this helper falls through to the default handler\n// gone\nfoo();\n";
+
+    expect(removeComments(source).code).toBe("foo();\n");
+  });
+
+  it("keeps the comments before a default clause or a case block's closing brace", () => {
+    const beforeDefault = "switch (x) {\n  case 1:\n    a();\n  // falls through\n  // kept\n  default:\n    b();\n}\n";
+    const beforeBrace =
+      "switch (x) {\n  case 1: {\n    a();\n    // falls through\n    // kept\n  }\n  case 2:\n    b();\n}\n";
+
+    expect(removeComments(beforeDefault).changed).toBe(false);
+    expect(removeComments(beforeBrace).changed).toBe(false);
+  });
+
+  it("removes a no-default comment that does not close a switch like any other comment", () => {
+    const source = "// no default\n// gone\nfoo();\n";
+
+    expect(removeComments(source).code).toBe("foo();\n");
+  });
+
+  it("removes the comments after a last-comment directive with no code left to target", () => {
+    const source = 'foo();\n// @deno-types="./x.d.ts"\n// gone\n';
+
+    expect(removeComments(source).code).toBe('foo();\n// @deno-types="./x.d.ts"\n');
+  });
+});
+
+describe("removeComments below a tsc suppression that shares its line with code", () => {
+  it("keeps the first line tsc stops at below the line of the suppression and its code", () => {
+    const source = '/* @ts-expect-error */ const b = 1;\n\n/* stop */\nconst a: number = "x";\n';
+
+    expect(removeComments(source).changed).toBe(false);
+  });
+
+  it("looks past a block comment that opens on the suppression's line and closes below it", () => {
+    // The comment's closing line already stops tsc, so the comment stays and
+    // the block comment further down may go.
+    const source = '/* @ts-expect-error */ const b = 1; /* note\n */\n\n/* gone */\nconst a: number = "x";\n';
+
+    const result = removeComments(source);
+
+    expect(result.code).toBe('/* @ts-expect-error */ const b = 1; /* note\n */\n\nconst a: number = "x";\n');
+  });
+
+  it("finds nothing to keep below a suppression on the last line", () => {
+    const source = "/* gone */ foo(); // @ts-ignore";
+
+    expect(removeComments(source).code).toBe("foo(); // @ts-ignore");
+  });
+});
+
+describe("removeComments keeps the shields of directives that open a comment", () => {
+  it("keeps the next-line shield of a suppression that mentions an earlier rule's marker", () => {
+    // The gitleaks rule comes first in the table, but the comment opens with
+    // detect-secrets' next-line pragma, which keeps its name and shield.
+    const source = '// pragma: allowlist nextline secret (gitleaks:allow too)\n// note\nconst key = "x";\n';
+
+    expect(removeComments(source).changed).toBe(false);
   });
 });

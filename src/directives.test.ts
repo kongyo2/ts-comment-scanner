@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { activePositionalDirectives, detectDirective, isLegalComment } from "./directives.js";
+import { activePositionalDirectives, bunMarkerOffset, detectDirective, isLegalComment } from "./directives.js";
 
 describe("detectDirective", () => {
   it.each([
@@ -15,11 +15,19 @@ describe("detectDirective", () => {
   });
 
   it("treats commented-out directives with extra slashes as ordinary comments", () => {
-    expect(detectDirective("line", "//// @ts-ignore")).toBeUndefined();
     expect(detectDirective("line", "// / @ts-ignore")).toBeUndefined();
     expect(detectDirective("line", "/// eslint-disable-next-line no-console")).toBeUndefined();
     expect(detectDirective("line", "///# sourceMappingURL=x.map")).toBeUndefined();
-    expect(detectDirective("line", "///#region")).toBeUndefined();
+  });
+
+  it("matches the slashes and blanks either tsc skips before a suppression", () => {
+    // tsc 6 allows one extra slash and any whitespace before the `@`; tsc 7
+    // (the Go port) any number of extra slashes, but only spaces and tabs.
+    expect(detectDirective("line", "//// @ts-ignore")).toBe("@ts-ignore");
+    expect(detectDirective("line", "////////@ts-expect-error")).toBe("@ts-expect-error");
+    expect(detectDirective("line", "//\u00a0@ts-ignore")).toBe("@ts-ignore");
+    expect(detectDirective("line", "///\u00a0@ts-ignore")).toBe("@ts-ignore");
+    expect(detectDirective("line", "//// \u00a0@ts-ignore")).toBeUndefined();
   });
 
   it.each([
@@ -133,30 +141,45 @@ describe("detectDirective", () => {
     expect(detectDirective("line", "// @ts-nocheck extra words")).toBe("@ts-nocheck");
   });
 
-  it("ends check pragma names where tsc's pragma parser does: at whitespace or a colon", () => {
-    // The parser reads the name as `[^\s:]+`, so a hyphen or dot extends it
-    // into an unknown pragma, while `:` starts the argument text.
+  it("ends check pragma names where either tsc's pragma parser does", () => {
+    // tsc 6 reads the name as `[^\s:]+`, so a hyphen or dot extends it into an
+    // unknown pragma while `:` starts the argument text; tsc 7 reads it as a
+    // run of letters and hyphens, so a dot, digit or underscore ends it.
     expect(detectDirective("line", "// @ts-nocheck:reason")).toBe("@ts-nocheck");
     expect(detectDirective("line", "// @ts-check\tstrict")).toBe("@ts-check");
     expect(detectDirective("line", "// @ts-nocheck-foo")).toBeUndefined();
-    expect(detectDirective("line", "// @ts-nocheck.")).toBeUndefined();
+    expect(detectDirective("line", "// @ts-nocheck.")).toBe("@ts-nocheck");
+    expect(detectDirective("line", "// @ts-nocheck1")).toBe("@ts-nocheck");
+    expect(detectDirective("line", "// @ts-check_strict")).toBe("@ts-check");
+    // Before the `@`, tsc 7 skips only spaces and tabs.
+    expect(detectDirective("line", "//\u00a0@ts-nocheck.")).toBeUndefined();
   });
 
-  it("honours block @ts directives only on the block's last line, like TypeScript", () => {
+  it("honours block @ts directives on the block's last line, like TypeScript", () => {
     expect(detectDirective("block", "/* @ts-ignore */")).toBe("@ts-ignore");
     expect(detectDirective("block", "/* note\n@ts-expect-error */")).toBe("@ts-expect-error");
     expect(detectDirective("block", "/* note\n * @ts-ignore */")).toBe("@ts-ignore");
     expect(detectDirective("block", "/* note\n  * @ts-ignore */")).toBe("@ts-ignore");
     expect(detectDirective("block", "/* note\r@ts-ignore */")).toBe("@ts-ignore");
-    expect(detectDirective("block", "/* @ts-ignore\nnote */")).toBeUndefined();
   });
 
-  it("treats a block whose closing line is blank as ordinary, matching tsc exactly", () => {
-    // tsc slices the literal last line of the comment; when the directive sits
-    // on an earlier line the comment is inert, so it must stay removable.
-    expect(detectDirective("block", "/* @ts-ignore\n */")).toBeUndefined();
-    expect(detectDirective("block", "/* @ts-expect-error\n\t*/")).toBeUndefined();
-    expect(detectDirective("block", "/* @ts-ignore\u2028*/")).toBeUndefined();
+  it("honours @ts directives that open a comment too, as Flow does in TypeScript files", () => {
+    // Flow strips spaces, tabs, line breaks and stars from the front of the
+    // comment value and needs an identifier boundary after the name.
+    expect(detectDirective("block", "/* @ts-ignore\nnote */")).toBe("@ts-ignore");
+    expect(detectDirective("block", "/* @ts-ignore\n */")).toBe("@ts-ignore");
+    expect(detectDirective("block", "/*\n * @ts-expect-error: legacy\n */")).toBe("@ts-expect-error");
+    expect(detectDirective("line", "// * @ts-ignore")).toBe("@ts-ignore");
+    expect(detectDirective("block", "/* @ts-ignoreTODO\nnote */")).toBeUndefined();
+  });
+
+  it("treats a block @ts directive on neither its first nor its last line as ordinary", () => {
+    // tsc slices the literal last line of the comment and Flow reads the start
+    // of its value; anywhere else the directive is inert, so the comment must
+    // stay removable.
+    expect(detectDirective("block", "/* note\n@ts-ignore\n */")).toBeUndefined();
+    expect(detectDirective("block", "/* note\n * @ts-expect-error\n\t*/")).toBeUndefined();
+    expect(detectDirective("block", "/* note\u2028@ts-ignore\u2028*/")).toBeUndefined();
   });
 
   it("rejects marker runs broken by whitespace, matching tsc's block regex", () => {
@@ -202,12 +225,18 @@ describe("detectDirective", () => {
     expect(detectDirective("line", "/// just a heavy comment")).toBeUndefined();
   });
 
-  it("requires the tag shape tsc parses: a case-insensitive name, whitespace, then a closing />", () => {
+  it("requires the tag shape either tsc parses", () => {
     expect(detectDirective("line", '/// <REFERENCE types="node" />')).toBe("triple-slash-reference");
     expect(detectDirective("line", '///<reference lib="dom"/>')).toBe("triple-slash-reference");
-    expect(detectDirective("line", "/// <reference>")).toBeUndefined();
-    expect(detectDirective("line", '/// <reference types="node">')).toBeUndefined();
+    // tsc 6 needs whitespace after the name and a closing `/>`; tsc 7 needs
+    // neither, and rejects a bare tag with an error instead of ignoring it.
+    expect(detectDirective("line", '/// <reference types="node">')).toBe("triple-slash-reference");
+    expect(detectDirective("line", '///\t<reference path="./a.d.ts"')).toBe("triple-slash-reference");
+    expect(detectDirective("line", "/// <reference>")).toBe("triple-slash-reference");
+    expect(detectDirective("line", "/// <reference/>")).toBe("triple-slash-reference");
     expect(detectDirective("line", '/// <references path="./a.d.ts" />')).toBeUndefined();
+    expect(detectDirective("line", '/// <reference-x path="./a.d.ts" />')).toBeUndefined();
+    expect(detectDirective("line", "/// see <reference>")).toBeUndefined();
   });
 
   it("drops AMD directives that lack the argument tsc requires", () => {
@@ -238,8 +267,22 @@ describe("detectDirective", () => {
     expect(detectDirective("block", `/** docs first\n * ${vitestPragma} jsdom\n */`)).toBe(vitestPragma);
   });
 
-  it("keeps line-form docblock pragmas ordinary", () => {
-    expect(detectDirective("line", "// @jsx h")).toBeUndefined();
+  it("detects JSX pragmas in line comments and mid-text too, like Babel, esbuild and Bun", () => {
+    expect(detectDirective("line", "// @jsx h")).toBe("@jsx");
+    expect(detectDirective("line", "//@jsxFrag Fragment")).toBe("@jsxFrag");
+    expect(detectDirective("line", "// TODO: switch to @jsxImportSource preact")).toBe("@jsxImportSource");
+    // Every reader needs whitespace and an argument after the name, and only
+    // block comments are matched case-insensitively.
+    expect(detectDirective("line", "// @jsx")).toBeUndefined();
+    expect(detectDirective("line", "// @jsx:h")).toBeUndefined();
+    expect(detectDirective("line", "// @JSX h")).toBeUndefined();
+  });
+
+  it("matches JSX pragma names in any case in block comments, like tsc and deno_graph", () => {
+    expect(detectDirective("block", "/** @JSX h */")).toBe("@jsx");
+    expect(detectDirective("block", "/* @jsxfrag Fragment */")).toBe("@jsxFrag");
+    expect(detectDirective("block", "/** @jsxImportSourceTypes npm:@types/react */")).toBe("@jsxImportSourceTypes");
+    expect(detectDirective("block", "/** @jsxRuntime */")).toBeUndefined();
   });
 
   it("detects test-environment pragmas the way Vitest matches them", () => {
@@ -462,12 +505,19 @@ describe("detectDirective", () => {
     expect(detectDirective("line", "// Stryker disable")).toBeUndefined();
   });
 
-  it("detects typescript-strict-plugin pragmas by token equality", () => {
+  it("detects typescript-strict-plugin pragmas the way its CLI and IDE plugin find them", () => {
     expect(detectDirective("line", "// @ts-strict-ignore")).toBe("@ts-strict-ignore");
     expect(detectDirective("line", "// @ts-strict")).toBe("@ts-strict");
     // The CLI splits lines on spaces, so the token matches anywhere.
     expect(detectDirective("line", "// legacy file @ts-strict-ignore")).toBe("@ts-strict-ignore");
-    expect(detectDirective("line", "// @ts-strict-ignored")).toBeUndefined();
+    // The IDE plugin's TODO-comment scan is case-insensitive and only needs a
+    // character other than a letter or digit after the tag — which finds
+    // `@ts-strict` at the front of `@ts-strict-ignored`.
+    expect(detectDirective("line", "// @ts-strict-ignore: legacy")).toBe("@ts-strict-ignore");
+    expect(detectDirective("block", "/*\n * @TS-STRICT-IGNORE\n */")).toBe("@ts-strict-ignore");
+    expect(detectDirective("line", "// @ts-strict-ignored")).toBe("@ts-strict");
+    expect(detectDirective("line", "// @ts-strictly")).toBeUndefined();
+    expect(detectDirective("line", "// see @ts-strict-ignore: later")).toBeUndefined();
   });
 
   it("detects Flow pragmas and suppressions", () => {
@@ -692,13 +742,16 @@ describe("detectDirective tool-faithful boundaries", () => {
     expect(detectDirective("block", "/* @vite-ignore-more */")).toBeUndefined();
   });
 
-  it("matches CodeQL and LGTM suppressions in line comments only", () => {
-    // The AlertSuppression queries only read `//` comments.
+  it("matches CodeQL and LGTM suppressions in single-line comments of either kind", () => {
+    // The JavaScript AlertSuppression query reads every comment whose text
+    // holds no line feed.
     expect(detectDirective("line", "// codeql[js/xss]")).toBe("codeql");
     expect(detectDirective("line", "// lgtm[js/xss]")).toBe("lgtm");
-    expect(detectDirective("block", "/* codeql[js/xss] */")).toBeUndefined();
-    expect(detectDirective("block", "/* lgtm[js/xss] */")).toBeUndefined();
-    expect(detectDirective("block", "/* lgtm */")).toBeUndefined();
+    expect(detectDirective("block", "/* codeql[js/xss] */")).toBe("codeql");
+    expect(detectDirective("block", "/* lgtm[js/xss] */")).toBe("lgtm");
+    expect(detectDirective("block", "/*lgtm*/")).toBe("lgtm");
+    expect(detectDirective("block", "/* codeql[js/xss]\n */")).toBeUndefined();
+    expect(detectDirective("block", "/** lgtm */")).toBeUndefined();
   });
 
   it("keeps stylelint commands ordinary behind a JSDoc star, which postcss keeps as content", () => {
@@ -771,5 +824,285 @@ describe("activePositionalDirectives", () => {
 
     expect(activePositionalDirectives("block", docblock, first)).toEqual(["@format", "@noformat", "@prettier"]);
     expect(activePositionalDirectives("block", docblock, { ...first, firstComment: false })).toEqual([]);
+  });
+
+  it("includes Deno's coverage file pragma, which only counts as the first comment", () => {
+    const comment = "// deno-coverage-ignore-file";
+
+    expect(activePositionalDirectives("line", comment, first)).toEqual(["deno-coverage-ignore-file"]);
+    expect(activePositionalDirectives("line", comment, { ...first, firstComment: false })).toEqual([]);
+  });
+});
+
+describe("bunMarkerOffset", () => {
+  it("is the start of the text, or the start of the line after a shebang", () => {
+    expect(bunMarkerOffset("// @bun\n")).toBe(0);
+    expect(bunMarkerOffset("#!/usr/bin/env bun\n// @bun\n")).toBe(19);
+    expect(bunMarkerOffset("#!/usr/bin/env bun\r\n// @bun\n")).toBe(20);
+    expect(bunMarkerOffset("#!/usr/bin/env bun")).toBe(-1);
+  });
+});
+
+// Each rule below was re-derived from the tool's current source (October
+// 2026); the comments name the tool whose behaviour each case pins down.
+describe("detectDirective against the current tool sources", () => {
+  it("reads eslint- and oxlint- commands the way ESLint 10 and oxlint parse them", () => {
+    // oxlint takes all four commands from `//` comments too.
+    expect(detectDirective("line", "// eslint-disable")).toBe("eslint-disable");
+    expect(detectDirective("line", "// oxlint-enable no-debugger")).toBe("oxlint-enable");
+    expect(detectDirective("block", "/* eslint-disable -- reason */")).toBe("eslint-disable");
+    expect(detectDirective("block", "/*\n  eslint-disable no-console\n*/")).toBe("eslint-disable");
+    // A JSDoc star in front of the label, or a glued suffix, defeats both.
+    expect(detectDirective("block", "/** eslint-disable */")).toBeUndefined();
+    expect(detectDirective("block", "/*\n * oxlint-disable\n */")).toBeUndefined();
+    expect(detectDirective("block", "/* eslint-disable-foo */")).toBeUndefined();
+    expect(detectDirective("block", "/* eslint-disable:no-console */")).toBeUndefined();
+    expect(detectDirective("line", "// eslint-enable-next-line")).toBeUndefined();
+    expect(detectDirective("line", "// eslint-env node")).toBeUndefined();
+    expect(detectDirective("block", "/* eslint-env node */")).toBe("eslint-env");
+    expect(detectDirective("block", "/* eslint-environment */")).toBeUndefined();
+    expect(detectDirective("block", "/** eslint no-console: 0 */")).toBeUndefined();
+    expect(detectDirective("block", "/** global foo */")).toBeUndefined();
+  });
+
+  it("detects the react-hooks suppressions React Compiler searches every comment for", () => {
+    expect(detectDirective("block", "/** eslint-disable-next-line react-hooks/exhaustive-deps */")).toBe(
+      "eslint-disable-next-line",
+    );
+    expect(detectDirective("line", "// TODO eslint-disable react-hooks/rules-of-hooks")).toBe("eslint-disable");
+    expect(detectDirective("block", "/* see eslint-enable react-hooks/exhaustive-deps */")).toBe("eslint-enable");
+    expect(detectDirective("block", "/** eslint-disable no-console */")).toBeUndefined();
+    expect(detectDirective("line", "// TODO $FlowFixMe[react-rule-hook]")).toBe("$FlowFixMe");
+    expect(detectDirective("line", "// see $FlowFixMeProps[react-rule-hook]")).toBe("$FlowFixMe");
+    expect(detectDirective("block", "/** $FlowExpectedError[react-rule-unsafe-ref] */")).toBe("$FlowExpectedError");
+    expect(detectDirective("line", "// TODO $FlowIssue[react-rule-hook]")).toBe("$FlowIssue");
+  });
+
+  it("detects ESLint's fallthrough and default-case comments", () => {
+    expect(detectDirective("line", "// falls through")).toBe("fallthrough");
+    expect(detectDirective("block", "/* fall through */")).toBe("fallthrough");
+    expect(detectDirective("line", "// FALLTHROUGH: same handler")).toBe("fallthrough");
+    expect(detectDirective("line", "// intentional fallsthrough")).toBe("fallthrough");
+    expect(detectDirective("line", "// intentional fall-through")).toBeUndefined();
+    expect(detectDirective("block", "/*\n * falls\n * through\n */")).toBeUndefined();
+    expect(detectDirective("line", "// no default")).toBe("no-default");
+    expect(detectDirective("block", "/* No Default */")).toBe("no-default");
+    expect(detectDirective("line", "// no default case")).toBeUndefined();
+    expect(detectDirective("block", "/** no default */")).toBeUndefined();
+    // A tool's own directive that mentions the words keeps its name.
+    expect(detectDirective("line", "// biome-ignore lint/suspicious/noFallthroughSwitchClause: fallthrough")).toBe(
+      "biome-ignore",
+    );
+  });
+
+  it("matches the legacy TSLint and JSCS shapes", () => {
+    expect(detectDirective("block", "/* tslint:disable */")).toBe("tslint:disable");
+    expect(detectDirective("line", "// tslint:enable-line")).toBe("tslint:enable-line");
+    expect(detectDirective("line", "// tslint:disablefoo")).toBeUndefined();
+    expect(detectDirective("line", "// tslint:foo")).toBeUndefined();
+    expect(detectDirective("block", "/** tslint:disable */")).toBeUndefined();
+    expect(detectDirective("line", "// jscs : enable")).toBe("jscs:enable");
+    expect(detectDirective("block", "/** jscs:disable */")).toBeUndefined();
+    expect(detectDirective("line", "//global foo")).toBe("global");
+  });
+
+  it("reads Biome suppressions from every line of a comment", () => {
+    expect(detectDirective("block", "/* legacy code:\n * biome-ignore lint/style/noVar: kept\n */")).toBe(
+      "biome-ignore",
+    );
+    expect(detectDirective("line", "// biome-ignore-start lint: generated")).toBe("biome-ignore-start");
+    expect(detectDirective("line", "// biome-ignore-end lint: generated")).toBe("biome-ignore-end");
+    expect(detectDirective("line", "// biome-ignore-all lint: generated")).toBe("biome-ignore-all");
+    expect(
+      detectDirective("line", "// biome-ignore-all lint: generated", {
+        header: false,
+        firstComment: false,
+        fileStart: false,
+      }),
+    ).toBeUndefined();
+    expect(detectDirective("line", "// mention of biome-ignore")).toBeUndefined();
+  });
+
+  it("accepts Rome's category paths", () => {
+    expect(detectDirective("line", "// rome-ignore lint/suspicious/noDebugger: reason")).toBe("rome-ignore");
+    expect(detectDirective("line", "// rome-ignore lint/correctness format: reason")).toBe("rome-ignore");
+    expect(detectDirective("line", "// rome-ignore organizeImports: hand-ordered")).toBe("rome-ignore");
+    expect(detectDirective("line", "// rome-ignore parse/noSuperWithoutExtends: why")).toBe("rome-ignore");
+  });
+
+  it("matches Deno's lint and coverage comments by their first token", () => {
+    // deno_lint reads `deno-lint-ignore` from block comments too (JSX
+    // children), the file form only from line comments.
+    expect(detectDirective("block", "/* deno-lint-ignore react-no-danger */")).toBe("deno-lint-ignore");
+    expect(detectDirective("block", "/** deno-lint-ignore no-explicit-any */")).toBeUndefined();
+    expect(detectDirective("line", "// deno-lint-ignore-foo")).toBeUndefined();
+    expect(detectDirective("line", "// deno-lint-ignore-file no-explicit-any")).toBe("deno-lint-ignore-file");
+    expect(detectDirective("block", "/* deno-lint-ignore-file */")).toBeUndefined();
+    // Every coverage directive is a line comment.
+    expect(detectDirective("line", "// deno-coverage-ignore-start")).toBe("deno-coverage-ignore-start");
+    expect(detectDirective("line", "// deno-coverage-ignore-stop -- reason")).toBe("deno-coverage-ignore-stop");
+    expect(detectDirective("line", "// deno-coverage-ignore-file")).toBe("deno-coverage-ignore-file");
+    expect(detectDirective("block", "/* deno-coverage-ignore */")).toBeUndefined();
+    expect(detectDirective("line", "// deno-coverage-ignorefoo")).toBeUndefined();
+  });
+
+  it("reads deno fmt's comments with dprint's bounded substring and file-start checks", () => {
+    expect(detectDirective("line", "// TODO deno-fmt-ignore")).toBe("deno-fmt-ignore");
+    expect(detectDirective("block", "/** deno-fmt-ignore */")).toBe("deno-fmt-ignore");
+    expect(detectDirective("line", "// deno-fmt-ignored")).toBeUndefined();
+    expect(detectDirective("line", "//deno-fmt-ignore-file")).toBe("deno-fmt-ignore-file");
+    // Only spaces may precede the file pragma in a line comment, and a star
+    // defeats it in a block one; the node pragma inside still counts.
+    expect(detectDirective("line", "//\tdeno-fmt-ignore-file")).toBe("deno-fmt-ignore");
+    expect(detectDirective("line", "//\tdprint-ignore-file")).toBe("dprint-ignore");
+    expect(detectDirective("block", "/*\n  dprint-ignore-file\n*/")).toBe("dprint-ignore-file");
+    expect(detectDirective("block", "/*\n * dprint-ignore-file\n */")).toBe("dprint-ignore");
+  });
+
+  it("keeps a JSDoc star in front of Deno's type directives inert", () => {
+    expect(detectDirective("block", '/* @deno-types="./x.d.ts" */')).toBe("@deno-types");
+    expect(detectDirective("block", '/** @deno-types="./x.d.ts" */')).toBeUndefined();
+    // deno_graph accepts either quote on either side.
+    expect(detectDirective("line", "// @ts-types=\"./x.d.ts'")).toBe("@ts-types");
+  });
+
+  it("detects the import-sorting opt-outs", () => {
+    expect(detectDirective("line", "// sort-imports-ignore")).toBe("sort-imports-ignore");
+    expect(detectDirective("block", "/*\n  sort-imports-ignore\n*/")).toBe("sort-imports-ignore");
+    expect(detectDirective("line", "// sort-imports-ignored")).toBe("sort-imports-ignore");
+    expect(detectDirective("block", "/** sort-imports-ignore */")).toBeUndefined();
+    expect(detectDirective("line", "// please sort-imports-ignore")).toBeUndefined();
+    expect(detectDirective("line", "// legacy // tslint:disable:ordered-imports")).toBe("organize-imports-ignore");
+  });
+
+  it("accepts any single whitespace character in the comment ending a js-beautify range", () => {
+    expect(detectDirective("block", "/*\tbeautify\tignore:end\t*/")).toBe("beautify");
+    expect(detectDirective("block", "/*\nbeautify ignore:end\n*/")).toBe("beautify");
+    expect(detectDirective("block", "/*\tbeautify\tignore:start\t*/")).toBeUndefined();
+  });
+
+  it("finds ast-v8-to-istanbul's ignore ranges after any text", () => {
+    expect(detectDirective("line", "// TODO: v8 ignore start")).toBe("v8-ignore-start");
+    expect(detectDirective("block", "/* see c8 ignore stop */")).toBe("c8-ignore-stop");
+    expect(detectDirective("line", "// legacy istanbul ignore start -- whole block")).toBe("istanbul-ignore-start");
+    expect(detectDirective("line", "// legacy node:coverage ignore stop")).toBe("node:coverage-ignore-stop");
+    expect(detectDirective("line", "// prose v8 ignore startup")).toBeUndefined();
+  });
+
+  it("names node:coverage ranges apart from Node's counted next-line pragma", () => {
+    expect(detectDirective("block", "/* node:coverage ignore start */")).toBe("node:coverage-ignore-start");
+    expect(detectDirective("line", "// node:coverage ignore stop")).toBe("node:coverage-ignore-stop");
+    expect(detectDirective("block", "/* node:coverage ignore next 3 */")).toBe("node:coverage-ignore");
+    expect(detectDirective("block", "/* node:coverage ignore startx */")).toBe("node:coverage-ignore");
+    expect(detectDirective("block", "/* node:coverage enable */")).toBe("node:coverage-enable");
+  });
+
+  it("names a comment after the directive that opens it, before any marker it mentions later", () => {
+    expect(detectDirective("line", "// $FlowFixMe[incompatible-call] see the @ts-strict-ignore note")).toBe(
+      "$FlowFixMe",
+    );
+    expect(detectDirective("block", "/* c8 ignore next 2 -- not a dprint-ignore case */")).toBe("c8-ignore-next");
+    expect(detectDirective("line", "// pragma: allowlist nextline secret (gitleaks:allow too)")).toBe(
+      "pragma-allowlist-nextline-secret",
+    );
+    expect(detectDirective("line", "// lgtm[js/unused-local-variable] -- @jsx h")).toBe("lgtm");
+    // Without a directive at the start, the first marker found later names it.
+    expect(detectDirective("line", "// TODO: nosemgrep until the rule is fixed")).toBe("nosemgrep");
+    // Among markers found later, the table order decides.
+    expect(detectDirective("line", "// note: @ts-strict-ignore and gitleaks:allow")).toBe("@ts-strict-ignore");
+  });
+
+  it("detects ESLint's switch-clause comments only in front of the tokens their rules read them before", () => {
+    const unknownToken = { header: false, firstComment: false, fileStart: false };
+    const at = (nextToken: string) => ({ ...unknownToken, nextToken });
+
+    expect(detectDirective("line", "// falls through", at("case"))).toBe("fallthrough");
+    expect(detectDirective("line", "// falls through", at("default"))).toBe("fallthrough");
+    expect(detectDirective("line", "// falls through", at("}"))).toBe("fallthrough");
+    expect(detectDirective("line", "// falls through", at("foo"))).toBeUndefined();
+    expect(detectDirective("line", "// falls through", at(""))).toBeUndefined();
+    expect(detectDirective("line", "// falls through", unknownToken)).toBe("fallthrough");
+    expect(detectDirective("line", "// no default", at("}"))).toBe("no-default");
+    expect(detectDirective("line", "// no default", at("case"))).toBeUndefined();
+  });
+
+  it("keeps a directive's own name when it mentions a marker matched anywhere in the text", () => {
+    // The rules that match anywhere come after every anchored rule, so the
+    // anchored directive keeps its name (and next-line directives their
+    // shield).
+    expect(
+      detectDirective(
+        "line",
+        "// biome-ignore lint/correctness/useExhaustiveDependencies: eslint-disable react-hooks/exhaustive-deps is not enough",
+      ),
+    ).toBe("biome-ignore");
+    expect(detectDirective("line", "// nosemgrep: react-dangerously-set-inner-html -- @jsx h below")).toBe("nosemgrep");
+    expect(detectDirective("line", "// $FlowFixMe[incompatible-type] istanbul ignore start")).toBe("$FlowFixMe");
+    expect(detectDirective("line", "// skipcq: JS-0002 -- c8 ignore stop")).toBe("skipcq");
+    expect(detectDirective("line", "// nosemgrep: rule -- $FlowFixMe[react-rule-hook]")).toBe("nosemgrep");
+  });
+
+  it("lets a Stryker mutator list open with blanks or a comma", () => {
+    expect(detectDirective("line", "// Stryker disable  all")).toBe("stryker-disable");
+    expect(detectDirective("line", "// Stryker disable next-line ,StringLiteral")).toBe("stryker-disable-next-line");
+  });
+
+  it("reads magic comments the way webpack and Turbopack do", () => {
+    expect(detectDirective("block", '/*\n * webpackChunkName: "x"\n */')).toBeUndefined();
+    expect(detectDirective("block", "/* webpackIgnore : true */")).toBe("turbopack-magic-comment");
+    expect(detectDirective("line", "// turbopackOptional : true")).toBe("turbopack-magic-comment");
+    expect(detectDirective("block", '/* webpackExports : ["a"] */')).toBe("turbopack-magic-comment");
+    expect(detectDirective("block", '/* webpackChunkName : "x" */')).toBeUndefined();
+  });
+
+  it("compares Million's and solid-refresh's annotations with the whole trimmed comment value", () => {
+    expect(detectDirective("block", "/** @million skip */")).toBeUndefined();
+    expect(detectDirective("block", "/* @refresh jsx-skip */")).toBe("@refresh-jsx-skip");
+    expect(detectDirective("block", "/** @refresh skip */")).toBeUndefined();
+    expect(detectDirective("block", "/** GraphQL */")).toBeUndefined();
+  });
+
+  it("detects UnoCSS's language-server include marker", () => {
+    expect(detectDirective("line", "// @unocss-ide-include")).toBe("@unocss-ide-include");
+  });
+
+  it("matches sourceMappingURL in any case with blanks around the =, like deno_graph", () => {
+    expect(detectDirective("line", "//# SOURCEMAPPINGURL = x.map")).toBe("sourceMappingURL");
+    expect(detectDirective("line", "//@ sourceURL =eval.js")).toBe("sourceURL");
+  });
+
+  it("finds Vitest module tags after any // or * of the comment", () => {
+    const tag = ["@module", "tag"].join("-");
+    expect(detectDirective("line", `/// ${tag} slow`)).toBe("@module-tag");
+    expect(detectDirective("line", `// a * ${tag} slow`)).toBe("@module-tag");
+    expect(detectDirective("block", `/**\n * ${tag} db\n */`)).toBe("@module-tag");
+    expect(detectDirective("line", `// ${tag} /`)).toBeUndefined();
+  });
+
+  it("drops only one leading star before NOSONAR, like SonarJS", () => {
+    expect(detectDirective("line", "//*NOSONAR")).toBe("NOSONAR");
+    expect(detectDirective("block", "/*\n * NOSONAR\n */")).toBeUndefined();
+    expect(detectDirective("block", "/***NOSONAR*/")).toBeUndefined();
+  });
+
+  it("lets any whitespace separate codespell's tag from the punctuation before it", () => {
+    expect(detectDirective("line", "// x;   codespell:ignore teh")).toBe("codespell:ignore");
+    expect(detectDirective("line", "// codespell:ignore-next-line-later")).toBe("codespell:ignore-next-line");
+    expect(detectDirective("line", "// codespell:ignores")).toBeUndefined();
+    expect(detectDirective("line", "// codespell:ignore-foo")).toBeUndefined();
+  });
+
+  it("detects JetBrains file-level suppressions", () => {
+    expect(detectDirective("line", "//file:noinspection SpellCheckingInspection")).toBe("noinspection");
+    expect(detectDirective("line", "// file:noinspection SpellCheckingInspection")).toBeUndefined();
+  });
+
+  it("detects the folding regions VS Code and IntelliJ recognise", () => {
+    expect(detectDirective("line", "// region Setup")).toBe("#region");
+    expect(detectDirective("line", "//endregion")).toBe("#endregion");
+    expect(detectDirective("line", "///#region")).toBe("#region");
+    expect(detectDirective("block", "/* #region helpers */")).toBe("#region");
+    expect(detectDirective("line", "// regional settings")).toBeUndefined();
+    expect(detectDirective("line", "// the region below")).toBeUndefined();
   });
 });
