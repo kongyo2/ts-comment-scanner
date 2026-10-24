@@ -325,3 +325,31 @@ describe("scanComments directive placement", () => {
     expect(second[1]?.directive).toBeUndefined();
   });
 });
+
+describe("scanComments switch-clause comments", () => {
+  it("reads the token after a comment past the comments that follow it", () => {
+    const source = [
+      "switch (x) {",
+      "  case 1:",
+      "    a();",
+      "    // falls through",
+      "    // TODO: split",
+      "  case 2:",
+      "    b();",
+      "  // no default",
+      "}",
+      "// the parser falls through to the slow path",
+      "foo();",
+      "// falls through",
+      "",
+    ].join("\n");
+
+    expect(scanComments(source).map((comment) => comment.directive)).toEqual([
+      "fallthrough",
+      undefined,
+      "no-default",
+      undefined,
+      undefined,
+    ]);
+  });
+});

@@ -821,10 +821,10 @@ describe("removeComments shields from directives that mention another tool's mar
 });
 
 describe("removeComments gaps before code no last-comment directive reads", () => {
-  it("removes the comments after fallthrough words outside a switch", () => {
+  it("removes fallthrough words outside a switch like any other comment", () => {
     const source = "// this helper falls through to the default handler\n// gone\nfoo();\n";
 
-    expect(removeComments(source).code).toBe("// this helper falls through to the default handler\nfoo();\n");
+    expect(removeComments(source).code).toBe("foo();\n");
   });
 
   it("keeps the comments before a default clause or a case block's closing brace", () => {
@@ -836,10 +836,10 @@ describe("removeComments gaps before code no last-comment directive reads", () =
     expect(removeComments(beforeBrace).changed).toBe(false);
   });
 
-  it("removes the comments after a no-default comment that does not close a switch", () => {
+  it("removes a no-default comment that does not close a switch like any other comment", () => {
     const source = "// no default\n// gone\nfoo();\n";
 
-    expect(removeComments(source).code).toBe("// no default\nfoo();\n");
+    expect(removeComments(source).code).toBe("foo();\n");
   });
 
   it("removes the comments after a last-comment directive with no code left to target", () => {
@@ -870,5 +870,15 @@ describe("removeComments below a tsc suppression that shares its line with code"
     const source = "/* gone */ foo(); // @ts-ignore";
 
     expect(removeComments(source).code).toBe("foo(); // @ts-ignore");
+  });
+});
+
+describe("removeComments keeps the shields of directives that open a comment", () => {
+  it("keeps the next-line shield of a suppression that mentions an earlier rule's marker", () => {
+    // The gitleaks rule comes first in the table, but the comment opens with
+    // detect-secrets' next-line pragma, which keeps its name and shield.
+    const source = '// pragma: allowlist nextline secret (gitleaks:allow too)\n// note\nconst key = "x";\n';
+
+    expect(removeComments(source).changed).toBe(false);
   });
 });

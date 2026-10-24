@@ -997,6 +997,35 @@ describe("detectDirective against the current tool sources", () => {
     expect(detectDirective("block", "/* node:coverage enable */")).toBe("node:coverage-enable");
   });
 
+  it("names a comment after the directive that opens it, before any marker it mentions later", () => {
+    expect(detectDirective("line", "// $FlowFixMe[incompatible-call] see the @ts-strict-ignore note")).toBe(
+      "$FlowFixMe",
+    );
+    expect(detectDirective("block", "/* c8 ignore next 2 -- not a dprint-ignore case */")).toBe("c8-ignore-next");
+    expect(detectDirective("line", "// pragma: allowlist nextline secret (gitleaks:allow too)")).toBe(
+      "pragma-allowlist-nextline-secret",
+    );
+    expect(detectDirective("line", "// lgtm[js/unused-local-variable] -- @jsx h")).toBe("lgtm");
+    // Without a directive at the start, the first marker found later names it.
+    expect(detectDirective("line", "// TODO: nosemgrep until the rule is fixed")).toBe("nosemgrep");
+    // Among markers found later, the table order decides.
+    expect(detectDirective("line", "// note: @ts-strict-ignore and gitleaks:allow")).toBe("@ts-strict-ignore");
+  });
+
+  it("detects ESLint's switch-clause comments only in front of the tokens their rules read them before", () => {
+    const unknownToken = { header: false, firstComment: false, fileStart: false };
+    const at = (nextToken: string) => ({ ...unknownToken, nextToken });
+
+    expect(detectDirective("line", "// falls through", at("case"))).toBe("fallthrough");
+    expect(detectDirective("line", "// falls through", at("default"))).toBe("fallthrough");
+    expect(detectDirective("line", "// falls through", at("}"))).toBe("fallthrough");
+    expect(detectDirective("line", "// falls through", at("foo"))).toBeUndefined();
+    expect(detectDirective("line", "// falls through", at(""))).toBeUndefined();
+    expect(detectDirective("line", "// falls through", unknownToken)).toBe("fallthrough");
+    expect(detectDirective("line", "// no default", at("}"))).toBe("no-default");
+    expect(detectDirective("line", "// no default", at("case"))).toBeUndefined();
+  });
+
   it("keeps a directive's own name when it mentions a marker matched anywhere in the text", () => {
     // The rules that match anywhere come after every anchored rule, so the
     // anchored directive keeps its name (and next-line directives their

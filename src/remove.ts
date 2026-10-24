@@ -227,10 +227,9 @@ function shieldNextLineDirectives(source: string, removed: Comment[], kept: Comm
       processed.add(comment);
       const directive = comment.directive;
       if (directive === undefined) continue;
-      const target = LAST_COMMENT_DIRECTIVES.get(directive);
-      if (target !== undefined) {
+      if (LAST_COMMENT_DIRECTIVES.has(directive)) {
         const codeStart = codeStartAfter(source, comment.end, allComments);
-        if (codeStart > comment.end && codeStart < source.length && target.test(source.slice(codeStart))) {
+        if (codeStart > comment.end && codeStart < source.length) {
           shieldedGaps.push([comment.end, codeStart]);
           added = true;
         }
@@ -450,19 +449,17 @@ const TSC_PASSABLE_LINES = [/^\s*(?:\/\/|$)/, /^[ \t]*(?:[\r\n]|\/\/)/];
 // leading comment, and ESLint's no-fallthrough and default-case from the last
 // comment before the next case or the closing brace. Deleting the comments in
 // that gap would newly activate such a directive, so the whole gap is
-// shielded — trailing comments in front of the code included. Each maps to
-// the code its tool reads it in front of: a fallthrough comment counts only
-// before the next `case`/`default` or a case block's closing brace, and `no
-// default` only before the switch's closing brace, so the same words
-// elsewhere — or with no code left at all — shield nothing.
-const ANY_CODE = /^/;
-const LAST_COMMENT_DIRECTIVES: ReadonlyMap<string, RegExp> = new Map([
-  ["@deno-types", ANY_CODE],
-  ["@ts-types", ANY_CODE],
-  ["ts-prune-ignore-next", ANY_CODE],
-  ["GraphQL", ANY_CODE],
-  ["fallthrough", /^(?:case\b|default\b|\})/],
-  ["no-default", /^\}/],
+// shielded — trailing comments in front of the code included. With no code
+// left there is nothing to target, and the switch-clause comments are only
+// detected in front of the `case`, `default` or `}` their rules read them
+// before.
+const LAST_COMMENT_DIRECTIVES = new Set([
+  "@deno-types",
+  "@ts-types",
+  "ts-prune-ignore-next",
+  "GraphQL",
+  "fallthrough",
+  "no-default",
 ]);
 
 // Directives that target the line or node directly below them. File- and

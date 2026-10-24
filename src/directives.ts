@@ -90,6 +90,16 @@ const RULES: DirectiveRule[] = [
   // same boundary. A JSDoc star in front of the label defeats both, and so
   // does a glued suffix (`eslint-disable-foo`, `eslint-disable:foo`).
   { pattern: /^(?:eslint|oxlint)-(?:disable(?:-next-line|-line)?|enable)(?=\s|$)/, keepStars: true },
+  // React Compiler (babel-plugin-react-compiler, and Bun's port of it) skips a
+  // component whose comments suppress its react-hooks rules: it searches each
+  // comment for `eslint-disable`/`-next-line`/`eslint-enable` followed by one
+  // of the rules, anywhere in the text — JSDoc blocks and mid-text mentions
+  // included.
+  {
+    pattern: /eslint-(disable(?:-next-line)?|enable)\s[^]*react-hooks\/(?:exhaustive-deps|rules-of-hooks)/,
+    rawText: true,
+    name: (match) => `eslint-${match[1] as string}`,
+  },
   // ESLint 10 reports `/* eslint-env */` comments as no longer supported, and
   // ESLint 9's eslintrc mode still applies them; both read block comments
   // only, like the configuration comments below.
@@ -259,6 +269,13 @@ const RULES: DirectiveRule[] = [
     name: (match) =>
       match[1] === undefined ? `node:coverage-${match[2] as string}` : `node:coverage-ignore-${match[1]}`,
   },
+  // ast-v8-to-istanbul finds `ignore start`/`stop` ranges with a plain text
+  // search over every line, so those count after any other text as well.
+  {
+    pattern: /(istanbul|[cv]8|node:coverage)\s+ignore\s+(start|stop)(?=\W|$)/,
+    name: (match) => `${match[1] as string}-ignore-${match[2] as string}`,
+    anyLine: true,
+  },
   // type-coverage: substring match in any comment. There is no ignore-file
   // comment — file-level ignores are a CLI option only.
   {
@@ -303,6 +320,13 @@ const RULES: DirectiveRule[] = [
   {
     pattern: /^\$Flow(FixMe|ExpectedError|Issue|Ignore)(?:\[[a-z-]+\])?(?![\w-])/,
     name: (match) => `$Flow${match[1]}`,
+  },
+  // React Compiler also skips a component under a Flow suppression of its
+  // `react-rule-*` errors, found anywhere in a comment.
+  {
+    pattern: /\$(?:(FlowFixMe)\w*|(FlowExpectedError|FlowIssue))\[react-rule/,
+    rawText: true,
+    name: (match) => `$${match[1] ?? match[2]}`,
   },
   {
     pattern: /^flowlint(-line|-next-line)?\s+[a-z][a-z-]*\s*:\s*(?:off|warn|error)/,
@@ -375,6 +399,24 @@ const RULES: DirectiveRule[] = [
   {
     pattern: /^[#@]\s*(source(?:Mapping)?URL)\s*=/i,
     name: (match) => ((match[1] as string).toLowerCase() === "sourceurl" ? "sourceURL" : "sourceMappingURL"),
+  },
+  // JSX pragmas. esbuild and Bun look at every `@` of every comment, Babel at
+  // every comment line (its TypeScript plugin anywhere in the text), and the
+  // oxc transformer at the leading comments — line comments included, all
+  // case-sensitive, all needing whitespace and an argument after the name.
+  // tsc lowercases the name of a block-comment pragma, and deno_graph matches
+  // `@jsxImportSource(Types)` block comments in any case, so block comments
+  // also match case-insensitively.
+  {
+    pattern: /@(jsx(?:Frag|Runtime|ImportSource)?)\s+\S/,
+    joinLines: true,
+    name: (match) => `@${match[1] as string}`,
+  },
+  {
+    pattern: /@(jsx(?:frag|runtime|importsource(?:types)?)?)\s+\S/i,
+    blockOnly: true,
+    joinLines: true,
+    name: (match) => JSX_PRAGMAS.get((match[1] as string).toLowerCase()),
   },
   // Test runners. Jest reads these from the file's leading docblock, but
   // Vitest (which also honours the @jest- spellings) matches the pragma with
@@ -464,58 +506,13 @@ const RULES: DirectiveRule[] = [
   // comments (`^\s*//\s*#?region\b`), IntelliJ any comment that opens with
   // marker characters, blanks and `region` (`[/*#-]*\s*region.*`).
   { pattern: /^[/*#-]*\s*#?(region|endregion)\b/, rawText: true, name: (match) => `#${match[1] as string}` },
-  // Rules that match anywhere in the comment text come after every anchored
-  // rule, so a tool's own directive that merely mentions another tool's
-  // marker keeps its name — and, for a next-line directive, the shield that
-  // goes with it (`// nosemgrep: ... @jsx h` stays a Semgrep suppression).
-  //
-  // React Compiler (babel-plugin-react-compiler, and Bun's port of it) skips a
-  // component whose comments suppress its react-hooks rules: it searches each
-  // comment for `eslint-disable`/`-next-line`/`eslint-enable` followed by one
-  // of the rules, anywhere in the text — JSDoc blocks and mid-text mentions
-  // included — and for a Flow suppression of its `react-rule-*` errors.
-  {
-    pattern: /eslint-(disable(?:-next-line)?|enable)\s[^]*react-hooks\/(?:exhaustive-deps|rules-of-hooks)/,
-    rawText: true,
-    name: (match) => `eslint-${match[1] as string}`,
-  },
-  {
-    pattern: /\$(?:(FlowFixMe)\w*|(FlowExpectedError|FlowIssue))\[react-rule/,
-    rawText: true,
-    name: (match) => `$${match[1] ?? match[2]}`,
-  },
-  // ast-v8-to-istanbul finds `ignore start`/`stop` ranges with a plain text
-  // search over every line, so those count after any other text as well.
-  {
-    pattern: /(istanbul|[cv]8|node:coverage)\s+ignore\s+(start|stop)(?=\W|$)/,
-    name: (match) => `${match[1] as string}-ignore-${match[2] as string}`,
-    anyLine: true,
-  },
-  // JSX pragmas. esbuild and Bun look at every `@` of every comment, Babel at
-  // every comment line (its TypeScript plugin anywhere in the text), and the
-  // oxc transformer at the leading comments — line comments included, all
-  // case-sensitive, all needing whitespace and an argument after the name.
-  // tsc lowercases the name of a block-comment pragma, and deno_graph matches
-  // `@jsxImportSource(Types)` block comments in any case, so block comments
-  // also match case-insensitively.
-  {
-    pattern: /@(jsx(?:Frag|Runtime|ImportSource)?)\s+\S/,
-    joinLines: true,
-    name: (match) => `@${match[1] as string}`,
-  },
-  {
-    pattern: /@(jsx(?:frag|runtime|importsource(?:types)?)?)\s+\S/i,
-    blockOnly: true,
-    joinLines: true,
-    name: (match) => JSX_PRAGMAS.get((match[1] as string).toLowerCase()),
-  },
   // ESLint's no-fallthrough (in eslint:recommended) accepts a case that falls
   // through when the last comment before the next case matches
   // /falls?\s?through/iu anywhere in its value; oxlint's port and JSHint's
   // `/* falls through */` accept narrower forms of the same words. ESLint's and
   // oxlint's default-case accept a final comment that is exactly `no default`,
-  // in any case. Both come last, so a tool's own directive that mentions the
-  // words (`biome-ignore ...: fallthrough intended`) keeps its name.
+  // in any case. Both only count in front of the code those rules read them
+  // before (see SWITCH_CLAUSE_TARGETS), so the same words elsewhere are prose.
   { pattern: /falls?\s?through/iu, rawText: true, name: "fallthrough" },
   { pattern: /^\/(?:\/\s*no default\s*|\*\s*no default\s*\*\/)$/iu, rawText: true, name: "no-default" },
 ];
@@ -562,6 +559,13 @@ export interface DirectivePlacement {
    * that ends a leading `#!` line (see bunMarkerOffset).
    */
   fileStart: boolean;
+  /**
+   * The token that follows the comment past any further comments (`case`,
+   * `}`, an identifier, ...), or `""` when only comments follow. ESLint's
+   * switch-clause comments (`// falls through`, `// no default`) count only in
+   * front of certain tokens. Left out, any token is assumed.
+   */
+  nextToken?: string;
 }
 
 const ANY_PLACEMENT: DirectivePlacement = { header: true, firstComment: true, fileStart: true };
@@ -622,12 +626,23 @@ const FIRST_COMMENT_ONLY_DIRECTIVES = new Set([
 // line after its shebang; anywhere else the marker is inert.
 const FILE_START_ONLY_DIRECTIVES = new Set(["@bun"]);
 
+// ESLint's no-fallthrough reads the last comment before the next `case` or
+// `default` (or before a case block's closing brace), and default-case the
+// last one before the switch's closing brace; in front of anything else the
+// same words are prose.
+const SWITCH_CLAUSE_TARGETS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["fallthrough", new Set(["case", "default", "}"])],
+  ["no-default", new Set(["}"])],
+]);
+
 function isActiveAt(name: string, placement: DirectivePlacement): boolean {
   if (FILE_START_ONLY_DIRECTIVES.has(name)) return placement.fileStart;
   if (FIRST_COMMENT_ONLY_DIRECTIVES.has(name)) return placement.firstComment;
   if (HEADER_ONLY_DIRECTIVES.has(name) || name.startsWith("triple-slash-")) {
     return placement.header;
   }
+  const targets = SWITCH_CLAUSE_TARGETS.get(name);
+  if (targets !== undefined) return placement.nextToken === undefined || targets.has(placement.nextToken);
   return true;
 }
 
@@ -689,16 +704,32 @@ export function detectDirective(kind: CommentKind, text: string, placement?: Dir
     }
   }
 
-  for (const name of ruleMatches(kind, text)) {
-    if (isActiveAt(name, at)) return name;
+  // A directive that opens the comment names it, however the comment goes on
+  // to mention other tools' markers (`// nosemgrep: ... @jsx h` stays a
+  // Semgrep suppression, with the next-line shield that goes with it); only
+  // without one does a marker found after other text name the comment.
+  let mention: string | undefined;
+  for (const { name, opening } of ruleMatches(kind, text)) {
+    if (!isActiveAt(name, at)) continue;
+    if (opening) return name;
+    mention ??= name;
   }
-  return undefined;
+  return mention;
 }
 
 /** Directive names of every rule the comment matches, in rule order. */
-function* ruleMatches(kind: CommentKind, text: string): Generator<string> {
+/** A rule's directive name, and whether its match opens the comment rather than following other text. */
+interface RuleMatch {
+  name: string;
+  opening: boolean;
+}
+
+function* ruleMatches(kind: CommentKind, text: string): Generator<RuleMatch> {
   const lines = contentLines(kind, text, false);
   const literalLines = kind === "block" ? contentLines(kind, text, true) : lines;
+  // Where the raw text's content begins, past the comment opener, stars and
+  // blanks.
+  const contentStart = (/^[/*\s]*/.exec(text) as RegExpExecArray)[0].length;
   for (const rule of RULES) {
     if (rule.blockOnly === true && kind !== "block") continue;
     if (rule.lineOnly === true && kind !== "line") continue;
@@ -713,14 +744,14 @@ function* ruleMatches(kind: CommentKind, text: string): Generator<string> {
           : rule.joinLines === true
             ? [ruleLines.join(" ")]
             : ruleLines.slice(0, 1);
-    for (const line of candidates) {
+    for (const [index, line] of candidates.entries()) {
       const match = rule.pattern.exec(line);
       if (!match) continue;
+      const opening = rule.rawText === true ? match.index <= contentStart : index === 0 && match.index === 0;
       const name =
         typeof rule.name === "string" ? rule.name : typeof rule.name === "function" ? rule.name(match) : match[0];
       if (name === undefined) continue;
-      if (typeof name === "string") yield name;
-      else yield* name;
+      for (const each of typeof name === "string" ? [name] : name) yield { name: each, opening };
     }
   }
 }
@@ -737,7 +768,7 @@ function* ruleMatches(kind: CommentKind, text: string): Generator<string> {
  */
 export function activePositionalDirectives(kind: CommentKind, text: string, placement: DirectivePlacement): string[] {
   const names = new Set<string>();
-  for (const name of ruleMatches(kind, text)) {
+  for (const { name } of ruleMatches(kind, text)) {
     if (!FIRST_COMMENT_ONLY_DIRECTIVES.has(name) && !FILE_START_ONLY_DIRECTIVES.has(name)) continue;
     if (isActiveAt(name, placement)) names.add(name);
   }
