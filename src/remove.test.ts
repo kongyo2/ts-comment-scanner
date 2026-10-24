@@ -803,3 +803,72 @@ describe("removeComments for directives that must stay the last comment before t
     expect(removeComments(tight).code).toBe("const q = /* GraphQL */`query { a }`;\n");
   });
 });
+
+describe("removeComments shields from directives that mention another tool's marker", () => {
+  it("keeps the next-line shield of a directive whose text mentions a JSX pragma", () => {
+    const source = "// nosemgrep: react-dangerously-set-inner-html -- @jsx h below\n// note\nrender();\n";
+
+    expect(removeComments(source).changed).toBe(false);
+  });
+
+  it("does not shield the line below a node:coverage range pragma", () => {
+    const source = "/* node:coverage ignore start */\n// gone\nfoo();\n/* node:coverage ignore stop */\n";
+
+    expect(removeComments(source).code).toBe(
+      "/* node:coverage ignore start */\nfoo();\n/* node:coverage ignore stop */\n",
+    );
+  });
+});
+
+describe("removeComments gaps before code no last-comment directive reads", () => {
+  it("removes the comments after fallthrough words outside a switch", () => {
+    const source = "// this helper falls through to the default handler\n// gone\nfoo();\n";
+
+    expect(removeComments(source).code).toBe("// this helper falls through to the default handler\nfoo();\n");
+  });
+
+  it("keeps the comments before a default clause or a case block's closing brace", () => {
+    const beforeDefault = "switch (x) {\n  case 1:\n    a();\n  // falls through\n  // kept\n  default:\n    b();\n}\n";
+    const beforeBrace =
+      "switch (x) {\n  case 1: {\n    a();\n    // falls through\n    // kept\n  }\n  case 2:\n    b();\n}\n";
+
+    expect(removeComments(beforeDefault).changed).toBe(false);
+    expect(removeComments(beforeBrace).changed).toBe(false);
+  });
+
+  it("removes the comments after a no-default comment that does not close a switch", () => {
+    const source = "// no default\n// gone\nfoo();\n";
+
+    expect(removeComments(source).code).toBe("// no default\nfoo();\n");
+  });
+
+  it("removes the comments after a last-comment directive with no code left to target", () => {
+    const source = 'foo();\n// @deno-types="./x.d.ts"\n// gone\n';
+
+    expect(removeComments(source).code).toBe('foo();\n// @deno-types="./x.d.ts"\n');
+  });
+});
+
+describe("removeComments below a tsc suppression that shares its line with code", () => {
+  it("keeps the first line tsc stops at below the line of the suppression and its code", () => {
+    const source = '/* @ts-expect-error */ const b = 1;\n\n/* stop */\nconst a: number = "x";\n';
+
+    expect(removeComments(source).changed).toBe(false);
+  });
+
+  it("looks past a block comment that opens on the suppression's line and closes below it", () => {
+    // The comment's closing line already stops tsc, so the comment stays and
+    // the block comment further down may go.
+    const source = '/* @ts-expect-error */ const b = 1; /* note\n */\n\n/* gone */\nconst a: number = "x";\n';
+
+    const result = removeComments(source);
+
+    expect(result.code).toBe('/* @ts-expect-error */ const b = 1; /* note\n */\n\nconst a: number = "x";\n');
+  });
+
+  it("finds nothing to keep below a suppression on the last line", () => {
+    const source = "/* gone */ foo(); // @ts-ignore";
+
+    expect(removeComments(source).code).toBe("foo(); // @ts-ignore");
+  });
+});

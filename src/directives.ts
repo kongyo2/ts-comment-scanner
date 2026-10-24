@@ -90,16 +90,6 @@ const RULES: DirectiveRule[] = [
   // same boundary. A JSDoc star in front of the label defeats both, and so
   // does a glued suffix (`eslint-disable-foo`, `eslint-disable:foo`).
   { pattern: /^(?:eslint|oxlint)-(?:disable(?:-next-line|-line)?|enable)(?=\s|$)/, keepStars: true },
-  // React Compiler (babel-plugin-react-compiler, and Bun's port of it) skips a
-  // component whose comments suppress its react-hooks rules: it searches each
-  // comment for `eslint-disable`/`-next-line`/`eslint-enable` followed by one
-  // of the rules, anywhere in the text — JSDoc blocks and mid-text mentions
-  // included.
-  {
-    pattern: /eslint-(disable(?:-next-line)?|enable)\s[^]*react-hooks\/(?:exhaustive-deps|rules-of-hooks)/,
-    rawText: true,
-    name: (match) => `eslint-${match[1] as string}`,
-  },
   // ESLint 10 reports `/* eslint-env */` comments as no longer supported, and
   // ESLint 9's eslintrc mode still applies them; both read block comments
   // only, like the configuration comments below.
@@ -258,17 +248,16 @@ const RULES: DirectiveRule[] = [
   { pattern: /^c8\s+ignore\b/, name: "c8-ignore" },
   { pattern: /^v8\s+ignore\s+([a-z]+)/, name: (match) => `v8-ignore-${match[1]}` },
   { pattern: /^v8\s+ignore\b/, name: "v8-ignore" },
+  // Node core reads `node:coverage` with `ignore next [N]`, `disable` and
+  // `enable`; Vitest's v8 provider also takes its `ignore` with `start`/`stop`
+  // as a range, which gets a range name like the other tools'
+  // (`node:coverage-ignore` stays the counted next-line pragma). Source text
+  // must never spell a range pragma out: the v8 provider finds one on any line
+  // of this file too, and would drop the rest of it from coverage.
   {
-    pattern: /^node:coverage\s+(disable|enable|ignore)\b/,
-    name: (match) => `node:coverage-${match[1]}`,
-  },
-  // ast-v8-to-istanbul finds `ignore start`/`stop` ranges with a plain text
-  // search over every line, so those count after any other text as well.
-  {
-    pattern: /(istanbul|[cv]8|node:coverage)\s+ignore\s+(start|stop)(?=\W|$)/,
+    pattern: /^node:coverage\s+(?:ignore\s+(start|stop)(?=\W|$)|(disable|enable|ignore)\b)/,
     name: (match) =>
-      match[1] === "node:coverage" ? "node:coverage-ignore" : `${match[1] as string}-ignore-${match[2] as string}`,
-    anyLine: true,
+      match[1] === undefined ? `node:coverage-${match[2] as string}` : `node:coverage-ignore-${match[1]}`,
   },
   // type-coverage: substring match in any comment. There is no ignore-file
   // comment — file-level ignores are a CLI option only.
@@ -314,13 +303,6 @@ const RULES: DirectiveRule[] = [
   {
     pattern: /^\$Flow(FixMe|ExpectedError|Issue|Ignore)(?:\[[a-z-]+\])?(?![\w-])/,
     name: (match) => `$Flow${match[1]}`,
-  },
-  // React Compiler also skips a component under a Flow suppression of its
-  // `react-rule-*` errors, found anywhere in a comment.
-  {
-    pattern: /\$(?:(FlowFixMe)\w*|(FlowExpectedError|FlowIssue))\[react-rule/,
-    rawText: true,
-    name: (match) => `$${match[1] ?? match[2]}`,
   },
   {
     pattern: /^flowlint(-line|-next-line)?\s+[a-z][a-z-]*\s*:\s*(?:off|warn|error)/,
@@ -393,24 +375,6 @@ const RULES: DirectiveRule[] = [
   {
     pattern: /^[#@]\s*(source(?:Mapping)?URL)\s*=/i,
     name: (match) => ((match[1] as string).toLowerCase() === "sourceurl" ? "sourceURL" : "sourceMappingURL"),
-  },
-  // JSX pragmas. esbuild and Bun look at every `@` of every comment, Babel at
-  // every comment line (its TypeScript plugin anywhere in the text), and the
-  // oxc transformer at the leading comments — line comments included, all
-  // case-sensitive, all needing whitespace and an argument after the name.
-  // tsc lowercases the name of a block-comment pragma, and deno_graph matches
-  // `@jsxImportSource(Types)` block comments in any case, so block comments
-  // also match case-insensitively.
-  {
-    pattern: /@(jsx(?:Frag|Runtime|ImportSource)?)\s+\S/,
-    joinLines: true,
-    name: (match) => `@${match[1] as string}`,
-  },
-  {
-    pattern: /@(jsx(?:frag|runtime|importsource(?:types)?)?)\s+\S/i,
-    blockOnly: true,
-    joinLines: true,
-    name: (match) => JSX_PRAGMAS.get((match[1] as string).toLowerCase()),
   },
   // Test runners. Jest reads these from the file's leading docblock, but
   // Vitest (which also honours the @jest- spellings) matches the pragma with
@@ -500,6 +464,51 @@ const RULES: DirectiveRule[] = [
   // comments (`^\s*//\s*#?region\b`), IntelliJ any comment that opens with
   // marker characters, blanks and `region` (`[/*#-]*\s*region.*`).
   { pattern: /^[/*#-]*\s*#?(region|endregion)\b/, rawText: true, name: (match) => `#${match[1] as string}` },
+  // Rules that match anywhere in the comment text come after every anchored
+  // rule, so a tool's own directive that merely mentions another tool's
+  // marker keeps its name — and, for a next-line directive, the shield that
+  // goes with it (`// nosemgrep: ... @jsx h` stays a Semgrep suppression).
+  //
+  // React Compiler (babel-plugin-react-compiler, and Bun's port of it) skips a
+  // component whose comments suppress its react-hooks rules: it searches each
+  // comment for `eslint-disable`/`-next-line`/`eslint-enable` followed by one
+  // of the rules, anywhere in the text — JSDoc blocks and mid-text mentions
+  // included — and for a Flow suppression of its `react-rule-*` errors.
+  {
+    pattern: /eslint-(disable(?:-next-line)?|enable)\s[^]*react-hooks\/(?:exhaustive-deps|rules-of-hooks)/,
+    rawText: true,
+    name: (match) => `eslint-${match[1] as string}`,
+  },
+  {
+    pattern: /\$(?:(FlowFixMe)\w*|(FlowExpectedError|FlowIssue))\[react-rule/,
+    rawText: true,
+    name: (match) => `$${match[1] ?? match[2]}`,
+  },
+  // ast-v8-to-istanbul finds `ignore start`/`stop` ranges with a plain text
+  // search over every line, so those count after any other text as well.
+  {
+    pattern: /(istanbul|[cv]8|node:coverage)\s+ignore\s+(start|stop)(?=\W|$)/,
+    name: (match) => `${match[1] as string}-ignore-${match[2] as string}`,
+    anyLine: true,
+  },
+  // JSX pragmas. esbuild and Bun look at every `@` of every comment, Babel at
+  // every comment line (its TypeScript plugin anywhere in the text), and the
+  // oxc transformer at the leading comments — line comments included, all
+  // case-sensitive, all needing whitespace and an argument after the name.
+  // tsc lowercases the name of a block-comment pragma, and deno_graph matches
+  // `@jsxImportSource(Types)` block comments in any case, so block comments
+  // also match case-insensitively.
+  {
+    pattern: /@(jsx(?:Frag|Runtime|ImportSource)?)\s+\S/,
+    joinLines: true,
+    name: (match) => `@${match[1] as string}`,
+  },
+  {
+    pattern: /@(jsx(?:frag|runtime|importsource(?:types)?)?)\s+\S/i,
+    blockOnly: true,
+    joinLines: true,
+    name: (match) => JSX_PRAGMAS.get((match[1] as string).toLowerCase()),
+  },
   // ESLint's no-fallthrough (in eslint:recommended) accepts a case that falls
   // through when the last comment before the next case matches
   // /falls?\s?through/iu anywhere in its value; oxlint's port and JSHint's

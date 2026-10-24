@@ -227,9 +227,10 @@ function shieldNextLineDirectives(source: string, removed: Comment[], kept: Comm
       processed.add(comment);
       const directive = comment.directive;
       if (directive === undefined) continue;
-      if (LAST_COMMENT_DIRECTIVES.has(directive)) {
+      const target = LAST_COMMENT_DIRECTIVES.get(directive);
+      if (target !== undefined) {
         const codeStart = codeStartAfter(source, comment.end, allComments);
-        if (codeStart > comment.end) {
+        if (codeStart > comment.end && codeStart < source.length && target.test(source.slice(codeStart))) {
           shieldedGaps.push([comment.end, codeStart]);
           added = true;
         }
@@ -303,13 +304,15 @@ function shieldNextLineDirectives(source: string, removed: Comment[], kept: Comm
 
 /**
  * Offset of the first character at or after `from` that is neither
- * whitespace nor inside one of the (sorted, non-overlapping) comments: where
- * the code a directive ending at `from` targets begins, or the source length
- * when only comments follow.
+ * whitespace nor inside one of the (sorted, non-overlapping) comments, or the
+ * source length when only comments follow. `from` lies past the start of at
+ * least one comment (the directive the search is for); when the closest of
+ * them runs past `from` — a block comment opened on the directive's line —
+ * the search resumes at its end.
  */
 function codeStartAfter(source: string, from: number, comments: readonly Comment[]): number {
   let next = firstIndexAtOrAfter(comments, from, (comment) => comment.start);
-  let index = from;
+  let index = Math.max(from, (comments[next - 1] as Comment).end);
   while (index < source.length) {
     const comment = comments[next];
     if (comment !== undefined && comment.start === index) {
@@ -338,14 +341,15 @@ function firstIndexAtOrAfter<T>(items: readonly T[], value: number, key: (item: 
 
 /**
  * For each TypeScript compiler, the first line between a tsc suppression and
- * the code below it that the compiler does not step over, if any. Looking for
- * the line a suppression applies to, a compiler skips the lines it reads as
- * blank or as a `//` comment (see TSC_PASSABLE_LINES); any other line — one
- * opening with a block comment, say — ends the search, leaving the
- * suppression without a target for that compiler. Deleting that line would
- * let the suppression reach the code instead, so it has to stay. The two
- * compilers can stop at different lines: a line holding only a vertical tab
- * stops tsc 7, while tsc 6 searches on to the next line it cannot pass.
+ * the code on the lines below it that the compiler does not step over, if
+ * any. Looking for the line a suppression applies to, a compiler skips the
+ * lines it reads as blank or as a `//` comment (see TSC_PASSABLE_LINES); any
+ * other line — one opening with a block comment, say — ends the search,
+ * leaving the suppression without a target for that compiler. Deleting that
+ * line would let the suppression reach the code instead, so it has to stay.
+ * The two compilers can stop at different lines: a line holding only a
+ * vertical tab stops tsc 7, while tsc 6 searches on to the next line it
+ * cannot pass.
  */
 function firstBlockingLines(
   source: string,
@@ -353,7 +357,9 @@ function firstBlockingLines(
   lineOffsets: readonly number[],
   comments: readonly Comment[],
 ): number[] {
-  const codeStart = codeStartAfter(source, comment.end, comments);
+  // A suppression applies from the line below it on, so code sharing its line
+  // (`/* @ts-ignore */ foo();`) does not end the search.
+  const codeStart = codeStartAfter(source, lineOffsets[comment.endLine] ?? source.length, comments);
   if (codeStart >= source.length) return [];
   const codeLine = firstIndexAtOrAfter(lineOffsets, codeStart + 1, (offset) => offset);
   const found: number[] = [];
@@ -444,14 +450,19 @@ const TSC_PASSABLE_LINES = [/^\s*(?:\/\/|$)/, /^[ \t]*(?:[\r\n]|\/\/)/];
 // leading comment, and ESLint's no-fallthrough and default-case from the last
 // comment before the next case or the closing brace. Deleting the comments in
 // that gap would newly activate such a directive, so the whole gap is
-// shielded — trailing comments in front of the code included.
-const LAST_COMMENT_DIRECTIVES = new Set([
-  "@deno-types",
-  "@ts-types",
-  "ts-prune-ignore-next",
-  "GraphQL",
-  "fallthrough",
-  "no-default",
+// shielded — trailing comments in front of the code included. Each maps to
+// the code its tool reads it in front of: a fallthrough comment counts only
+// before the next `case`/`default` or a case block's closing brace, and `no
+// default` only before the switch's closing brace, so the same words
+// elsewhere — or with no code left at all — shield nothing.
+const ANY_CODE = /^/;
+const LAST_COMMENT_DIRECTIVES: ReadonlyMap<string, RegExp> = new Map([
+  ["@deno-types", ANY_CODE],
+  ["@ts-types", ANY_CODE],
+  ["ts-prune-ignore-next", ANY_CODE],
+  ["GraphQL", ANY_CODE],
+  ["fallthrough", /^(?:case\b|default\b|\})/],
+  ["no-default", /^\}/],
 ]);
 
 // Directives that target the line or node directly below them. File- and

@@ -985,8 +985,32 @@ describe("detectDirective against the current tool sources", () => {
     expect(detectDirective("line", "// TODO: v8 ignore start")).toBe("v8-ignore-start");
     expect(detectDirective("block", "/* see c8 ignore stop */")).toBe("c8-ignore-stop");
     expect(detectDirective("line", "// legacy istanbul ignore start -- whole block")).toBe("istanbul-ignore-start");
-    expect(detectDirective("line", "// legacy node:coverage ignore stop")).toBe("node:coverage-ignore");
+    expect(detectDirective("line", "// legacy node:coverage ignore stop")).toBe("node:coverage-ignore-stop");
     expect(detectDirective("line", "// prose v8 ignore startup")).toBeUndefined();
+  });
+
+  it("names node:coverage ranges apart from Node's counted next-line pragma", () => {
+    expect(detectDirective("block", "/* node:coverage ignore start */")).toBe("node:coverage-ignore-start");
+    expect(detectDirective("line", "// node:coverage ignore stop")).toBe("node:coverage-ignore-stop");
+    expect(detectDirective("block", "/* node:coverage ignore next 3 */")).toBe("node:coverage-ignore");
+    expect(detectDirective("block", "/* node:coverage ignore startx */")).toBe("node:coverage-ignore");
+    expect(detectDirective("block", "/* node:coverage enable */")).toBe("node:coverage-enable");
+  });
+
+  it("keeps a directive's own name when it mentions a marker matched anywhere in the text", () => {
+    // The rules that match anywhere come after every anchored rule, so the
+    // anchored directive keeps its name (and next-line directives their
+    // shield).
+    expect(
+      detectDirective(
+        "line",
+        "// biome-ignore lint/correctness/useExhaustiveDependencies: eslint-disable react-hooks/exhaustive-deps is not enough",
+      ),
+    ).toBe("biome-ignore");
+    expect(detectDirective("line", "// nosemgrep: react-dangerously-set-inner-html -- @jsx h below")).toBe("nosemgrep");
+    expect(detectDirective("line", "// $FlowFixMe[incompatible-type] istanbul ignore start")).toBe("$FlowFixMe");
+    expect(detectDirective("line", "// skipcq: JS-0002 -- c8 ignore stop")).toBe("skipcq");
+    expect(detectDirective("line", "// nosemgrep: rule -- $FlowFixMe[react-rule-hook]")).toBe("nosemgrep");
   });
 
   it("lets a Stryker mutator list open with blanks or a comma", () => {

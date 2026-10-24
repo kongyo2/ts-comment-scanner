@@ -194,6 +194,8 @@ describe("comment removal below suppressions, against tsc 6", () => {
     `// @ts-expect-error\n\n/* stop */ // y\n${TYPE_ERROR}\n`,
     `// @ts-expect-error\n\n// gone\n/* stop */\n\n${TYPE_ERROR}\n`,
     `const b = 1; // @ts-expect-error\n\n/* stop */\n${TYPE_ERROR}\n`,
+    `/* @ts-expect-error */ const b = 1;\n\n/* stop */\n${TYPE_ERROR}\n`,
+    `/* @ts-expect-error */ const b = 1; /* note\n */\n\n/* gone */\n${TYPE_ERROR}\n`,
   ])("keeps what tsc reports for %j", (source) => {
     expect(diagnosticCodes("/main.ts", removeComments(source).code)).toEqual(diagnosticCodes("/main.ts", source));
   });
