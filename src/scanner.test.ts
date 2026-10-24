@@ -211,13 +211,28 @@ describe("scanComments", () => {
     expect(late[0]?.directive).toBeUndefined();
   });
 
-  it("keeps a stray dprint-ignore-file active below the header, as dprint's node pragma", () => {
+  it.each([
+    ["// dprint-ignore-file", "dprint"],
+    ["// deno-fmt-ignore-file", "deno-fmt"],
+  ])("reports a stray %s below the header as the node pragma it still is", (comment, tool) => {
     // Out of the leading comment run it no longer skips the file, but the
-    // node-level bounded substring check still matches, so it keeps a tag
-    // under the file-pragma name assigned by rule order.
-    const late = scanComments("const x = 1;\n// dprint-ignore-file");
+    // node-level bounded substring check still matches inside it.
+    const early = scanComments(`${comment}\nconst x = 1;`);
+    const late = scanComments(`const x = 1;\n${comment}`);
 
-    expect(late[0]?.directive).toBe("dprint-ignore-file");
+    expect(early[0]?.directive).toBe(`${tool}-ignore-file`);
+    expect(late[0]?.directive).toBe(`${tool}-ignore`);
+  });
+
+  it.each([
+    ["// biome-ignore-all lint: generated", "biome-ignore-all"],
+    ["// deno-lint-ignore-file no-explicit-any", "deno-lint-ignore-file"],
+  ])("treats %s as live only before the first token", (comment, name) => {
+    const early = scanComments(`#!/usr/bin/env node\n${comment}\nconst x = 1;`);
+    const late = scanComments(`const x = 1;\n${comment}`);
+
+    expect(early[0]?.directive).toBe(name);
+    expect(late[0]?.directive).toBeUndefined();
   });
 
   it("does not set the directive key on ordinary comments", () => {
@@ -286,13 +301,27 @@ describe("scanComments directive placement", () => {
     expect(comments[0]?.directive).toBe("@format");
   });
 
-  it("treats // @bun as a directive only at the very start of the file", () => {
+  it("treats // @bun as a directive only where Bun reads it: at the start or right after a shebang line", () => {
     const atStart = scanComments("// @bun\nconst x = 1;\n");
     const afterComment = scanComments("// lead\n// @bun\nconst x = 1;\n");
     const afterShebang = scanComments("#!/usr/bin/env bun\n// @bun\nconst x = 1;\n");
+    const afterCrlfShebang = scanComments("#!/usr/bin/env bun\r\n// @bun @bytecode\r\nconst x = 1;\r\n");
+    const afterBlankLine = scanComments("#!/usr/bin/env bun\n\n// @bun\nconst x = 1;\n");
+    const indented = scanComments("#!/usr/bin/env bun\n  // @bun\nconst x = 1;\n");
 
     expect(atStart[0]?.directive).toBe("@bun");
     expect(afterComment[1]?.directive).toBeUndefined();
-    expect(afterShebang[0]?.directive).toBeUndefined();
+    expect(afterShebang[0]?.directive).toBe("@bun");
+    expect(afterCrlfShebang[0]?.directive).toBe("@bun");
+    expect(afterBlankLine[0]?.directive).toBeUndefined();
+    expect(indented[0]?.directive).toBeUndefined();
+  });
+
+  it("only counts a deno-coverage-ignore-file that is the file's first comment", () => {
+    const first = scanComments("#!/usr/bin/env -S deno run\n// deno-coverage-ignore-file\nconst x = 1;\n");
+    const second = scanComments("// lead\n// deno-coverage-ignore-file\nconst x = 1;\n");
+
+    expect(first[0]?.directive).toBe("deno-coverage-ignore-file");
+    expect(second[1]?.directive).toBeUndefined();
   });
 });

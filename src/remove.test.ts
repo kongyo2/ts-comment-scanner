@@ -374,12 +374,18 @@ describe("removeComments", () => {
     expect(removeComments(source).code).toBe(source);
   });
 
-  it("removes a block @ts-ignore whose directive is not on the closing line, since tsc ignores it", () => {
-    const source = "/* @ts-ignore\n */\nconst x = 1;\n";
+  it("removes a block @ts-ignore that neither tsc nor Flow reads, being on neither its first nor its last line", () => {
+    const source = "/* note\n * @ts-ignore\n */\nconst x = 1;\n";
     const result = removeComments(source);
 
     expect(result.code).toBe("const x = 1;\n");
     expect(result.removed).toHaveLength(1);
+  });
+
+  it("keeps a block @ts-ignore that opens the comment, which Flow honours in TypeScript files", () => {
+    const source = "/* @ts-ignore\n */\nconst x = 1;\n";
+
+    expect(removeComments(source).changed).toBe(false);
   });
 
   it("keeps a byte-order mark when removing the first line", () => {
@@ -617,7 +623,7 @@ describe("removeComments position-dependent directive protection", () => {
     // detectDirective names this docblock "eslint" before and after the
     // removal, so the canonical name alone cannot reveal that the inert
     // @format underneath just became the file's first comment.
-    const source = "/* lead */\n/**\n * eslint no-console: 0\n * @format\n * @license\n */\nconst x={a:1}\n";
+    const source = "/* lead */\n/* eslint no-console: 0\n * @format\n * @license\n */\nconst x={a:1}\n";
 
     expect(scanComments(source).map((comment) => comment.directive)).toEqual([undefined, "eslint"]);
 
@@ -641,7 +647,7 @@ describe("removeComments position-dependent directive protection", () => {
   });
 
   it("applies the masked-pragma protection behind a shebang too", () => {
-    const source = "#!/usr/bin/env node\n// lead\n/**\n * eslint no-console: 0\n * @format\n */\nconst x = 1;\n";
+    const source = "#!/usr/bin/env node\n// lead\n/* eslint no-console: 0\n * @format\n */\nconst x = 1;\n";
 
     const result = removeComments(source);
 
@@ -650,11 +656,150 @@ describe("removeComments position-dependent directive protection", () => {
   });
 
   it("still removes comments behind a pragma that was already first and active", () => {
-    const source = "/**\n * eslint no-console: 0\n * @format\n */\n// gone\nconst x = 1;\n";
+    const source = "/* eslint no-console: 0\n * @format\n */\n// gone\nconst x = 1;\n";
 
     const result = removeComments(source);
 
-    expect(result.code).toBe("/**\n * eslint no-console: 0\n * @format\n */\nconst x = 1;\n");
+    expect(result.code).toBe("/* eslint no-console: 0\n * @format\n */\nconst x = 1;\n");
     expect(result.removed.map((comment) => comment.text)).toEqual(["// gone"]);
+  });
+});
+
+describe("removeComments positional protection for the October 2026 tool sources", () => {
+  it("keeps a leading comment whose removal would move // @bun to the line after a shebang", () => {
+    // Bun reads its marker at the file start or right after a `#!` line.
+    const source = "#!/usr/bin/env bun\n// lead\n// @bun @license\nconst x = 1;\n";
+
+    const result = removeComments(source);
+
+    expect(result.changed).toBe(false);
+    expect(result.kept.map((comment) => comment.text)).toEqual(["// lead", "// @bun @license"]);
+  });
+
+  it("keeps a leading comment whose removal would make deno-coverage-ignore-file the first comment", () => {
+    // Deno only honours the pragma as the file's first comment; the license
+    // keeps the inert one from going with the lead comment.
+    const source = "// lead\n// deno-coverage-ignore-file @license MIT\nconst x = 1;\n";
+
+    const result = removeComments(source);
+
+    expect(result.changed).toBe(false);
+    expect(result.kept.map((comment) => comment.text)).toEqual([
+      "// lead",
+      "// deno-coverage-ignore-file @license MIT",
+    ]);
+  });
+});
+
+describe("removeComments below tsc suppressions", () => {
+  it("keeps the first comment line tsc cannot step over between a suppression and its code", () => {
+    // tsc looks past blank and `//` lines for the line a suppression applies
+    // to; a block-comment line stops it, so the suppression has no target.
+    // Deleting that line would let it reach the assignment instead.
+    const source = '// @ts-expect-error\n\n/* blocker */\nconst a: number = "x";\n';
+
+    const result = removeComments(source);
+
+    expect(result.changed).toBe(false);
+  });
+
+  it("still removes the `//` lines tsc steps over, below the line Flow targets", () => {
+    const source = "// @ts-ignore\n// note\n\n// gone\nfoo();\n";
+
+    const result = removeComments(source);
+
+    expect(result.code).toBe("// @ts-ignore\n// note\n\nfoo();\n");
+  });
+
+  it("treats a line tsc 7 does not step over as blocking, though tsc 6 would", () => {
+    // tsc 7 skips only spaces and tabs before the `//` of a comment line.
+    const source = "// @ts-ignore\n\n\u00a0// note\nfoo();\n";
+
+    expect(removeComments(source).changed).toBe(false);
+  });
+
+  it("removes comments on a blocking line that a kept comment opens", () => {
+    const source = "// @ts-ignore\n\n/*! legal */ /* gone */\nfoo();\n";
+
+    const result = removeComments(source);
+
+    expect(result.code).toBe("// @ts-ignore\n\n/*! legal */\nfoo();\n");
+  });
+
+  it("keeps the line each compiler stops at when the two stop at different lines", () => {
+    // tsc 7 stops at the vertical-tab line, which tsc 6 trims away and steps
+    // over before stopping at the block comment.
+    const source = "// @ts-ignore\n\v\n/* stop */\nfoo();\n";
+
+    expect(removeComments(source).changed).toBe(false);
+  });
+
+  it("still removes the `//` lines both compilers step over behind a whitespace-only blocking line", () => {
+    const source = "// @ts-ignore\n\v\n// gone\nfoo();\n";
+
+    const result = removeComments(source);
+
+    expect(result.code).toBe("// @ts-ignore\n\v\nfoo();\n");
+  });
+
+  it("keeps a multi-line comment that starts on the suppression's line and blocks the next one", () => {
+    const source = "/* @ts-ignore */ /* note\n   more */\nfoo();\n";
+
+    expect(removeComments(source).changed).toBe(false);
+  });
+
+  it("removes blocking comments when no code follows the suppression at all", () => {
+    const source = "// @ts-ignore\n\n/* gone */\n";
+
+    const result = removeComments(source);
+
+    expect(result.code).toBe("// @ts-ignore\n\n");
+  });
+});
+
+describe("removeComments for directives that must stay the last comment before their target", () => {
+  it("keeps every comment between @deno-types and its import, trailing ones included", () => {
+    // deno_graph reads the directive from the import's last leading comment:
+    // with another comment after it the directive is inert, and deleting
+    // that comment would activate it.
+    const apart = '// @deno-types="./x.d.ts"\n\n// note\nimport y from "./y.js";\n';
+    const inline = '// @deno-types="./x.d.ts"\n/* note */ import y from "./y.js";\n';
+
+    expect(removeComments(apart).changed).toBe(false);
+    expect(removeComments(inline).changed).toBe(false);
+  });
+
+  it("keeps the comments between a GraphQL tag and its template", () => {
+    const source = "const q = /* GraphQL */ /* note */ `query { a }`;\n";
+
+    expect(removeComments(source).changed).toBe(false);
+  });
+
+  it("keeps the comments between ESLint's fallthrough and default-case comments and their target", () => {
+    const source = [
+      "switch (x) {",
+      "  case 1:",
+      "    a();",
+      "    // falls through",
+      "",
+      "    // TODO: split",
+      "  case 2:",
+      "    b();",
+      "    break;",
+      "  // no default",
+      "  // reviewed",
+      "}",
+      "",
+    ].join("\n");
+
+    expect(removeComments(source).changed).toBe(false);
+  });
+
+  it("removes ordinary comments after the target as usual", () => {
+    const spaced = "const q = /* GraphQL */ `query { a }`; // gone\n";
+    const tight = "const q = /* GraphQL */`query { a }`; // gone\n";
+
+    expect(removeComments(spaced).code).toBe("const q = /* GraphQL */ `query { a }`;\n");
+    expect(removeComments(tight).code).toBe("const q = /* GraphQL */`query { a }`;\n");
   });
 });

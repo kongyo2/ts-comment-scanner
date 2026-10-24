@@ -150,7 +150,8 @@ ts-comment-scanner --remove --remove-directives --remove-legal src
 - `@ts-expect-error` / `eslint-disable` などの指示子は、削除するとビルドやリントが壊れるため**デフォルトで保持**
 - `/*! ... */` や `@license` / `@preserve` / `@copyright`、`SPDX-License-Identifier:` / `SPDX-FileCopyrightText:` タグを含む法的コメントも**デフォルトで保持**
 - `@ts-expect-error` や `eslint-disable-next-line` など**次行を対象にする指示子の直下の行構造を保持**: 削除すると行が消えて指示子の適用先がずれる場合(コメントだけの行など)、その行のコメントは削除せずに保持
-- **位置依存ディレクティブを削除で有効化しない**: prettier の `@format`/`@prettier` pragma(ファイル最初のコメントでのみ有効)や Bun の `// @bun`(ファイル先頭でのみ有効)が、手前のコメント削除によって保持コメント内で新たに効き始める場合は、その手前のコメントも保持
+- **指示子が対象を探す途中のコメントも保持**: 空行と `//` 行を読み飛ばして対象行を探す tsc の `@ts-ignore`/`@ts-expect-error` では、tsc 6・tsc 7 がそれぞれ読み飛ばせずに止まる最初の行(ブロックコメントの行など)を保持。対象の直前にある最後のコメントでのみ有効な指示子(`@deno-types`・`/* GraphQL */`・ESLint の `// falls through` など)では、指示子と対象の間のコメントをすべて保持
+- **位置依存ディレクティブを削除で有効化しない**: prettier の `@format`/`@prettier` pragma や Deno の `deno-coverage-ignore-file`(ファイル最初のコメントでのみ有効)、Bun の `// @bun`(ファイル先頭か shebang の次の行でのみ有効)が、手前のコメント削除によって保持コメント内で新たに効き始める場合は、その手前のコメントも保持
 - ブロックコメント除去でトークンが結合してしまう位置には空白を挿入(`a/* x */b` → `a b`)
 - コメントだけの行は行ごと削除、行末コメントは手前の空白ごと削除
 - 削除後のソースを再スキャンし、残ったコメントが保持対象とディレクティブの意味ごと一致することを検証。想定外の結果になる場合はファイルを変更せずエラー報告
@@ -177,18 +178,20 @@ ts-comment-scanner --fail-on-comment --diff a1b2c3..d4e5f6 src
 
 ### 検出できるディレクティブ(抜粋)
 
-各ディレクティブは実ツールのパーサー実装(正規表現・文字列比較)に合わせて判定されます。
+各ディレクティブは実ツールのパーサー実装(正規表現・文字列比較)に合わせて判定されます。ツールやバージョンによって解釈が分かれる場合は、いずれかが有効とみなす形をすべてディレクティブとして扱います(削除時は保持側に倒れます)。
 
-- **コンパイラ / 型**: `@ts-ignore` `@ts-expect-error` `@ts-nocheck` `@ts-check` / `/// <reference>` / `@ts-strict-ignore`・`@ts-strict`(typescript-strict-plugin) / `@deno-types=`・`@ts-types=`・`@ts-self-types=`(Deno)
-- **リンター**: `eslint-disable` 系・`eslint-env`・`/* global */`・`/* exported */` / `oxlint-disable` 系 / `biome-ignore` 系・`rome-ignore` / `deno-lint-ignore` 系 / `stylelint-disable`・`stylelint-disable-line`・`stylelint-disable-next-line`・`stylelint-enable`(stylelint) / `@flow`・`@noflow`・`$FlowFixMe` 系・`flowlint` 系(Flow) / `tslint:`・`jshint`・`jscs:`・`jslint`(レガシー)
-- **フォーマッタ**: `prettier-ignore`・`@format`/`@prettier`/`@noformat`/`@noprettier` pragma・`/** @type */`/`/** @satisfies */` 型キャストコメント(prettier) / `oxfmt-ignore` / `dprint-ignore`・`dprint-ignore-file` / `organize-imports-ignore` / `beautify ignore/preserve`(レガシー)
-- **カバレッジ / テスト**: `istanbul ignore`・`c8 ignore`・`v8 ignore`・`node:coverage` / `@jest-environment(-options)`・`@vitest-environment(-options)`・`@module-tag`(Vitest 4) / `Stryker disable/restore` / `type-coverage:ignore-line/-next-line` / `ts-prune-ignore-next`
-- **バンドラ / ランタイム**: `webpackChunkName:` などの webpack・turbopack マジックコメント / `@vite-ignore` / `#__PURE__`・`@__NO_SIDE_EFFECTS__`・`@__INLINE__`・`@__KEY__`・`@__MANGLE_PROP__`(terser/rollup 注釈) / `// @bun`(Bun) / `@refresh reset/skip/reload`(react-refresh / solid-refresh) / `million-ignore` / `nx-ignore-next-line`(Nx) / `@unocss-include/-ignore/-skip-start/-skip-end` / `@next-codemod-error/-ignore`(Next.js) / `/* GraphQL */`・`/* HTML */` タグコメント / `//# sourceMappingURL=`・`//# sourceURL=` / `@jsx` 系プラグマ
+- **コンパイラ / 型**: `@ts-ignore` `@ts-expect-error` `@ts-nocheck` `@ts-check`(tsc 6・tsc 7、TypeScript ファイルを検査する Flow) / `/// <reference>` 系 / `@ts-strict-ignore`・`@ts-strict`(typescript-strict-plugin の CLI と IDE プラグイン) / `@deno-types=`・`@ts-types=`・`@ts-self-types=`(Deno)
+- **リンター**: `eslint-disable` 系・`eslint-env`・`/* global */`・`/* exported */`・`// falls through`(no-fallthrough)・`// no default`(default-case) / React Compiler が読む `eslint-disable … react-hooks/…`・`$FlowFixMe[react-rule…]` / `oxlint-disable` 系 / `biome-ignore` 系・`rome-ignore` / `deno-lint-ignore` 系 / `stylelint-disable`・`stylelint-disable-line`・`stylelint-disable-next-line`・`stylelint-enable`(stylelint) / `@flow`・`@noflow`・`$FlowFixMe` 系・`flowlint` 系(Flow) / `tslint:`・`jshint`・`jscs:`・`jslint`(レガシー)
+- **フォーマッタ**: `prettier-ignore`・`@format`/`@prettier`/`@noformat`/`@noprettier` pragma・`/** @type */`/`/** @satisfies */` 型キャストコメント(prettier) / `oxfmt-ignore` / `dprint-ignore`・`dprint-ignore-file`・`deno-fmt-ignore`・`deno-fmt-ignore-file`(dprint / deno fmt) / `organize-imports-ignore`・`sort-imports-ignore` / `beautify ignore/preserve`(レガシー)
+- **カバレッジ / テスト**: `istanbul ignore`・`c8 ignore`・`v8 ignore`・`node:coverage`・`deno-coverage-ignore` 系 / `@jest-environment(-options)`・`@vitest-environment(-options)`・`@module-tag`(Vitest 4 以降) / `Stryker disable/restore` / `type-coverage:ignore-line/-next-line` / `ts-prune-ignore-next`
+- **バンドラ / ランタイム**: `webpackChunkName:` などの webpack・turbopack マジックコメント / `@vite-ignore` / `#__PURE__`・`@__NO_SIDE_EFFECTS__`・`@__INLINE__`・`@__KEY__`・`@__MANGLE_PROP__`(terser/rollup 注釈) / `// @bun`(Bun) / `@refresh reset/skip/reload/jsx-skip`(react-refresh / solid-refresh) / `million-ignore` / `nx-ignore-next-line`(Nx) / `@unocss-include/-ignore/-ide-include/-skip-start/-skip-end` / `@next-codemod-error/-ignore`(Next.js) / `/* GraphQL */`・`/* HTML */` タグコメント / `//# sourceMappingURL=`・`//# sourceURL=` / `@jsx` 系プラグマ(Deno の `@jsxImportSourceTypes` を含む)
 - **セキュリティ / 静的解析**: `NOSONAR`(SonarQube) / `nosemgrep`(Semgrep) / `lgtm[...]`・`codeql[...]`(CodeQL) / `skipcq`(DeepSource) / `deepcode ignore`(Snyk Code) / `no-dd-sa`・`datadog-disable`(Datadog) / `gitleaks:allow` / `trufflehog:ignore` / `pragma: allowlist secret`(detect-secrets)
 - **スペルチェック**: `cspell:` 系(`cSpell:`・`spell-checker:`・`spellchecker:` 別名込み)・`LocalWords` / `codespell:ignore`
-- **エディタ / IDE**: `#region`・`#endregion` / `noinspection`・`<editor-fold>`・`language=`(JetBrains) / `ReSharper disable/restore`
+- **エディタ / IDE**: `#region`・`#endregion`・`// region`(VS Code / JetBrains) / `noinspection`・`//file:noinspection`・`<editor-fold>`・`language=`(JetBrains) / `ReSharper disable/restore`
 
 prettier 関連のルールは prettier 本体の実装をそのまま写しています。`prettier-ignore` はコメント本文を trim した完全一致(JS/TS に `prettier-ignore-start`/`-end` はなく、普通のコメント扱い)、`@format` 系 pragma は jest-docblock と同じ docblock 解析(ファイル最初のブロックコメントのみ、`@` は行頭、行頭の空白はスペースのみ)、`/** @type */`・`/** @satisfies */` は prettier が直後の括弧を保持する型キャストコメント(tsc も JavaScript で解釈)、先頭コメントの `@flow`/`@noflow` は babel パーサーを Flow 構文に切り替える判定です。テストスイートはこれらを実際の prettier と突き合わせて検証しています。
+
+TypeScript 関連のルールは tsc 6(JavaScript 実装)と tsc 7(Go 移植版)の両方の実装に合わせています。たとえば `//// @ts-ignore` や閉じ `/>` のない `/// <reference types="node">` は tsc 7 だけが、`//` の直後に NBSP を挟んだ `@ts-ignore` は tsc 6 だけが有効とみなしますが、いずれもディレクティブとして扱います。テストスイートは実際の tsc 6 とも突き合わせて検証しています。
 
 ## ライブラリとして使う
 

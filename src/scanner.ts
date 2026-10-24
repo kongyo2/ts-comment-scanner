@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { detectDirective, type DirectivePlacement } from "./directives.js";
+import { bunMarkerOffset, detectDirective, type DirectivePlacement } from "./directives.js";
 import type { Comment, CommentKind } from "./types.js";
 
 export interface ScanOptions {
@@ -77,10 +77,11 @@ export function scanComments(source: string, options: ScanOptions = {}): Comment
   const firstTokenStart = sourceFile.getStart(sourceFile);
   const shebangEnd = ts.getShebang(source)?.length ?? 0;
   const firstCommentPos = sorted.length > 0 ? (sorted[0] as ts.CommentRange).pos : -1;
+  const bunMarkerPos = bunMarkerOffset(source);
   const placementOf = (pos: number): DirectivePlacement => ({
     header: pos < firstTokenStart,
     firstComment: pos === firstCommentPos && /^\s*$/.test(source.slice(shebangEnd, pos)),
-    fileStart: pos === 0,
+    fileStart: pos === bunMarkerPos,
   });
 
   return sorted.map((range) => {
