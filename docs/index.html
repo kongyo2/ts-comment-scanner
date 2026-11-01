@@ -341,8 +341,13 @@
               <span class="en">deleting a comment line between blank lines leaves two in a row</span>
             </div>
             <div class="fix">
-              <span class="ja">前後の空行を元の間隔まで詰め、ファイルやブロックの端にも空行を残さない</span>
-              <span class="en">the blank lines close ranks to the original gap — none left at file or block edges</span>
+              <span class="ja"
+                >前後の空行を元の間隔まで詰め、ファイルやブロックの端ではコメントとコードを隔てていただけの空行も削除</span
+              >
+              <span class="en"
+                >the blank lines close ranks to the original gap; at file or block edges, those that only held the
+                comment off the code go too</span
+              >
             </div>
           </div>
           <div class="guard">

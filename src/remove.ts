@@ -57,7 +57,8 @@ export interface RemoveResult {
  *   TypeScript, esbuild and Babel alike.
  * - Blank lines that only separated a removed comment from the code around it
  *   go with it: no pile-up of blank lines where a comment stood between two
- *   of them, none left at the start or end of the file or of a block.
+ *   of them, and at the start or end of the file or of a block only the blank
+ *   lines already against that edge stay.
  * - A leading byte-order mark is preserved. Reported positions index into the
  *   `source` string exactly as `scanComments(source)` reports them (a BOM
  *   counts as its first character).
@@ -510,11 +511,6 @@ function shieldNextLineDirectives(
       processed.add(comment);
       const directive = comment.directive;
       if (directive === undefined) continue;
-      const holder = context.containerOf.get(comment);
-      if (holder?.next !== undefined && !siblingTargets.has(holder.next)) {
-        siblingTargets.add(holder.next);
-        added = true;
-      }
       if (LAST_COMMENT_DIRECTIVES.has(directive)) {
         const codeStart = codeStartAfter(source, comment.end, context.skippable);
         if (codeStart > comment.end && codeStart < source.length) {
@@ -531,6 +527,15 @@ function shieldNextLineDirectives(
         }
       }
       if (!isNextLineDirective(directive)) continue;
+      // In JSX, such a directive in braces applies to the sibling after it,
+      // whatever line that is on (prettier leaves the element after
+      // `{/* prettier-ignore */}` as is): a comment-only container standing
+      // between them has to stay. Range and file pragmas target no sibling.
+      const holder = context.containerOf.get(comment);
+      if (holder?.next !== undefined && !siblingTargets.has(holder.next)) {
+        siblingTargets.add(holder.next);
+        added = true;
+      }
       // A trailing formatter or scanner suppression (`a = [1]; // oxfmt-ignore`,
       // `secret(); // nosemgrep`) targets its own line, so it shields nothing
       // below it. In JSX, the container holding the comment is what has to

@@ -135,6 +135,18 @@ describe("removeComments keeps JSX containers that directives reach", () => {
     expect(strip(source).changed).toBe(false);
   });
 
+  it("does not keep a container after a range or file pragma, which targets no sibling", () => {
+    const source = "const e = <div>{/* c8 ignore start */}{/* note */}<A />{/* c8 ignore stop */}</div>;\n";
+
+    expect(strip(source).code).toBe("const e = <div>{/* c8 ignore start */}<A />{/* c8 ignore stop */}</div>;\n");
+  });
+
+  it("keeps the container after a trailing {/* prettier-ignore */}, which still applies to the next sibling", () => {
+    const source = tsx("<div>", "  <B /> {/* prettier-ignore */}{/* note */}", "  <A   b />", "</div>");
+
+    expect(strip(source).changed).toBe(false);
+  });
+
   it("leaves a sibling container alone when its comment is kept anyway", () => {
     const source = "const e = <div>{/* prettier-ignore */}{/*! legal */}<A />\n</div>;\n";
 
