@@ -315,6 +315,38 @@
           </div>
           <div class="guard">
             <div class="danger">
+              <span class="ja"
+                >JSX の <code>{/* … */}</code> を消すと
+                <code>{ }</code> が残る。外すとテキストの描画が変わることも</span
+              >
+              <span class="en"
+                >removing JSX's <code>{/* … */}</code> leaves <code>{ }</code> behind — dropping it can change rendered
+                text</span
+              >
+            </div>
+            <div class="fix">
+              <span class="ja"
+                >波かっこごと削除。描画が変わる位置だけ <code>{" "}</code> か
+                <code>{}</code> を残し、TypeScript・esbuild・Babel の規則で描画を検証</span
+              >
+              <span class="en"
+                >removed braces and all; only where rendering would change does <code>{" "}</code> or
+                <code>{}</code> stay, verified under TypeScript, esbuild and Babel rules</span
+              >
+            </div>
+          </div>
+          <div class="guard">
+            <div class="danger">
+              <span class="ja">空行に挟まれたコメント行を消すと、空行が 2 行続く</span>
+              <span class="en">deleting a comment line between blank lines leaves two in a row</span>
+            </div>
+            <div class="fix">
+              <span class="ja">前後の空行を元の間隔まで詰め、ファイルやブロックの端にも空行を残さない</span>
+              <span class="en">the blank lines close ranks to the original gap — none left at file or block edges</span>
+            </div>
+          </div>
+          <div class="guard">
+            <div class="danger">
               <span class="ja"><code>@ts-expect-error</code> 直下の行が消えると適用先がズレる</span>
               <span class="en">deleting the line under <code>@ts-expect-error</code> shifts its target</span>
             </div>

@@ -1,5 +1,6 @@
 import ts from "typescript";
 import { bunMarkerOffset, detectDirective, type DirectivePlacement } from "./directives.js";
+import { jsxLayout, type JsxLayout } from "./jsx.js";
 import type { Comment, CommentKind } from "./types.js";
 
 export interface ScanOptions {
@@ -7,12 +8,23 @@ export interface ScanOptions {
 }
 
 export function scanComments(source: string, options: ScanOptions = {}): Comment[] {
+  return analyzeSource(source, options).comments;
+}
+
+/** A source's comments together with the layout of its JSX children, from a single parse. */
+export interface SourceAnalysis {
+  comments: Comment[];
+  jsx: JsxLayout;
+}
+
+export function analyzeSource(source: string, options: ScanOptions = {}): SourceAnalysis {
   const jsx = options.jsx === true;
   const fileName = jsx ? "module.tsx" : "module.ts";
   const scriptKind = jsx ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
   const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, scriptKind);
 
   const jsxTextSpans: Array<[number, number]> = [];
+  const jsxParents: Array<ts.JsxElement | ts.JsxFragment> = [];
   const ranges: ts.CommentRange[] = [];
   const seen = new Set<number>();
 
@@ -31,6 +43,7 @@ export function scanComments(source: string, options: ScanOptions = {}): Comment
   const pending: ts.Node[] = [sourceFile];
   while (pending.length > 0) {
     const node = pending.pop() as ts.Node;
+    if (ts.isJsxElement(node) || ts.isJsxFragment(node)) jsxParents.push(node);
     // JSDoc nodes start inside the comment text itself; descending into them
     // would hide the comment (e.g. a trailing JSDoc attached to the
     // end-of-file token). Treat them as trivia like any other comment.
@@ -96,7 +109,7 @@ export function scanComments(source: string, options: ScanOptions = {}): Comment
     nextToken: nextTokens[index] as string,
   });
 
-  return sorted.map((range, index) => {
+  const comments = sorted.map((range, index): Comment => {
     const kind: CommentKind = range.kind === ts.SyntaxKind.SingleLineCommentTrivia ? "line" : "block";
     const text = source.slice(range.pos, range.end);
     const startPosition = sourceFile.getLineAndCharacterOfPosition(range.pos);
@@ -114,4 +127,6 @@ export function scanComments(source: string, options: ScanOptions = {}): Comment
       ...(directive === undefined ? {} : { directive }),
     };
   });
+
+  return { comments, jsx: jsxLayout(source, sourceFile, jsxParents, comments) };
 }
