@@ -74,7 +74,7 @@ describe("removeComments", () => {
   it("still collapses a single-line block comment between code without a line break", () => {
     const result = removeComments("const x = f(/* arg */ 1);\n");
 
-    expect(result.code).toBe("const x = f( 1);\n");
+    expect(result.code).toBe("const x = f(1);\n");
   });
 
   it("handles several comments on the same line", () => {
@@ -142,10 +142,10 @@ describe("removeComments", () => {
     expect(result.changed).toBe(false);
   });
 
-  it("leaves an empty JSX expression when removing a JSX comment", () => {
+  it("removes a JSX comment together with its braces", () => {
     const result = removeComments("const e = <div>{/* gone */}</div>;\n", { jsx: true });
 
-    expect(result.code).toBe("const e = <div>{ }</div>;\n");
+    expect(result.code).toBe("const e = <div></div>;\n");
   });
 
   it("keeps directives by default and reports them as kept", () => {
@@ -447,7 +447,7 @@ describe("removeComments", () => {
       [
         "import ts from 'typescript';",
         "",
-        "export function f( a: number): number {",
+        "export function f(a: number): number {",
         "  const url = 'http://example.com';",
         "  return a + 1;",
         "}",
