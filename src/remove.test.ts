@@ -928,6 +928,15 @@ describe("removeComments keeps what tools read in large real-world codebases", (
     expect(removeComments(source).changed).toBe(false);
   });
 
+  it("shields the line below an ast-grep block comment that code follows but nothing precedes", () => {
+    // ast-grep only asks what precedes the comment on its line: nothing does,
+    // so it suppresses the next line, not `foo()`. Dropping `// filler` would
+    // move `bar()` onto that line.
+    const source = "/* ast-grep-ignore */ foo();\n// filler\nbar();\n";
+
+    expect(removeComments(source).changed).toBe(false);
+  });
+
   it("shields nothing below an ast-grep suppression that trails code", () => {
     const source = "eval(x); // ast-grep-ignore: no-eval\n// gone\nfoo();\n";
 

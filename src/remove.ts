@@ -557,10 +557,13 @@ function shieldNextLineDirectives(
       // A trailing formatter or scanner suppression (`a = [1]; // oxfmt-ignore`,
       // `secret(); // nosemgrep`) targets its own line, so it shields nothing
       // below it. In JSX, the container holding the comment is what has to
-      // stand on lines of its own.
-      if (TRAILING_TARGETS_OWN_LINE.has(directive) && !occupiesWholeLines(source, holder ?? comment)) {
-        continue;
-      }
+      // stand on lines of its own. ast-grep looks only at what precedes the
+      // comment on its line: with nothing there it suppresses the next line,
+      // even when code follows the comment (`/* ast-grep-ignore *​/ foo();`).
+      const trailing = LINE_PREFIX_SENSITIVE.has(directive)
+        ? !opensItsLine(source, comment)
+        : TRAILING_TARGETS_OWN_LINE.has(directive) && !occupiesWholeLines(source, holder ?? comment);
+      if (trailing) continue;
       // Counted pragmas like `c8 ignore next 3` cover several lines.
       for (let offset = 1; offset <= shieldedLineCount(comment); offset += 1) {
         const line = comment.endLine + offset;
@@ -771,14 +774,14 @@ const TRAILING_TARGETS_OWN_LINE = new Set([
   "codeql",
   "skipcq",
   "nosemgrep",
-  "ast-grep-ignore",
 ]);
 
 // ast-grep tells a trailing suppression from a standalone one by whether the
 // node before the comment — a comment counts — ends on the comment's line,
-// and keys a trailing one to where that node starts. Deleting a comment in
-// front of it on its line can therefore turn it into a next-line suppression
-// or move what it trails, so those comments stay.
+// and keys a trailing one to where that node starts; what follows the comment
+// plays no part. Deleting a comment in front of it on its line can therefore
+// turn it into a next-line suppression or move what it trails, so those
+// comments stay.
 const LINE_PREFIX_SENSITIVE = new Set(["ast-grep-ignore"]);
 
 // The suppressions tsc looks past blank and `//` lines for (see
@@ -889,12 +892,18 @@ function shieldedLineCount(comment: Comment): number {
  * scanner numbers them (a lone `\r`, U+2028 and U+2029 count too).
  */
 function occupiesWholeLines(source: string, range: Range): boolean {
-  for (let index = range.start - 1; index >= 0; index -= 1) {
+  if (!opensItsLine(source, range)) return false;
+  for (let index = range.end; index < source.length; index += 1) {
     const char = source[index] as string;
     if (LINE_TERMINATOR.test(char)) break;
     if (!isBlank(char)) return false;
   }
-  for (let index = range.end; index < source.length; index += 1) {
+  return true;
+}
+
+/** True when nothing but whitespace precedes the range on its first line. */
+function opensItsLine(source: string, range: Range): boolean {
+  for (let index = range.start - 1; index >= 0; index -= 1) {
     const char = source[index] as string;
     if (LINE_TERMINATOR.test(char)) break;
     if (!isBlank(char)) return false;
