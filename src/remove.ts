@@ -2,7 +2,7 @@ import { activePositionalDirectives, bunMarkerOffset, isLegalComment, type Direc
 import type { JsxContainer } from "./jsx.js";
 import { LINE_TERMINATOR, isBlank, lineStartOffsets } from "./lines.js";
 import { firstIndexAtOrAfter, type Range } from "./ranges.js";
-import { analyzeSource, isFileWidePosition } from "./scanner.js";
+import { analyzeSource, isFileWidePosition, opensFirstRow } from "./scanner.js";
 import { applyEdits, blankLineEdits, type Edit } from "./splice.js";
 import type { Comment } from "./types.js";
 
@@ -513,6 +513,8 @@ function shieldNextLineDirectives(
   const siblingTargets = new Set<Container>();
   /** Directives whose own line, up to where they start, has to stay as it is. */
   const linePrefixes: Comment[] = [];
+  /** Directives whose last line, from where they end, has to stay as it is. */
+  const lineSuffixes: Comment[] = [];
   const processed = new Set<Comment>();
   let stillRemoved = removed;
   let units: RemovalUnit[] | undefined;
@@ -540,8 +542,9 @@ function shieldNextLineDirectives(
           added = true;
         }
       }
-      if (LINE_PREFIX_SENSITIVE.has(directive)) {
+      if (SIBLING_SENSITIVE.has(directive)) {
         linePrefixes.push(comment);
+        if (opensFirstRow(source, comment.start)) lineSuffixes.push(comment);
         added = true;
       }
       if (!isNextLineDirective(directive)) continue;
@@ -560,7 +563,7 @@ function shieldNextLineDirectives(
       // stand on lines of its own. ast-grep looks only at what precedes the
       // comment on its line: with nothing there it suppresses the next line,
       // even when code follows the comment (`/* ast-grep-ignore *​/ foo();`).
-      const trailing = LINE_PREFIX_SENSITIVE.has(directive)
+      const trailing = SIBLING_SENSITIVE.has(directive)
         ? !opensItsLine(source, comment)
         : TRAILING_TARGETS_OWN_LINE.has(directive) && !occupiesWholeLines(source, holder ?? comment);
       if (trailing) continue;
@@ -615,6 +618,16 @@ function shieldNextLineDirectives(
       // that make it a trailing suppression, or that it trails.
       const lineStart = lineOffsets[directive.line - 1] as number;
       const group = currentUnits().filter((unit) => unit.end > lineStart && unit.end <= directive.start);
+      if (group.length === 0) continue;
+      protect(group.flatMap((unit) => unit.comments));
+      changed = true;
+    }
+    for (const directive of lineSuffixes) {
+      // Whatever follows the directive on the line it ends on, when it opens
+      // the file: deleting the node after it there can leave the next one two
+      // lines down, which makes the suppression file-wide.
+      const lineEnd = lineOffsets[directive.endLine] ?? source.length;
+      const group = currentUnits().filter((unit) => unit.start >= directive.end && unit.start < lineEnd);
       if (group.length === 0) continue;
       protect(group.flatMap((unit) => unit.comments));
       changed = true;
@@ -776,13 +789,15 @@ const TRAILING_TARGETS_OWN_LINE = new Set([
   "nosemgrep",
 ]);
 
-// ast-grep tells a trailing suppression from a standalone one by whether the
-// node before the comment — a comment counts — ends on the comment's line,
-// and keys a trailing one to where that node starts; what follows the comment
-// plays no part. Deleting a comment in front of it on its line can therefore
-// turn it into a next-line suppression or move what it trails, so those
-// comments stay.
-const LINE_PREFIX_SENSITIVE = new Set(["ast-grep-ignore"]);
+// ast-grep reads a suppression's reach from the nodes beside it, comments
+// included. It tells a trailing suppression from a standalone one by whether
+// the node before it ends on its line, and keys a trailing one to where that
+// node starts. On the file's first line, a standalone one covers the whole
+// file when the node after it starts two or more lines down. Deleting a
+// comment in front of it on its line can therefore turn it into a next-line
+// suppression or move what it trails, and on the first line deleting the
+// comment after it can make it file-wide — so those comments stay.
+const SIBLING_SENSITIVE = new Set(["ast-grep-ignore"]);
 
 // The suppressions tsc looks past blank and `//` lines for (see
 // firstBlockingLines). They stay next-line directives as well: Flow, which

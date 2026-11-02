@@ -960,6 +960,21 @@ describe("removeComments keeps what tools read in large real-world codebases", (
     expect(result.kept.map((comment) => comment.text)).toEqual(["// lead", "// ast-grep-ignore"]);
   });
 
+  it("keeps the comment after an ast-grep suppression opening the file on the line it ends on", () => {
+    // Deleting `/* stays */` would leave `foo()` two lines down: file-wide.
+    const oneLine = "/* ast-grep-ignore */ /* stays */\n\nfoo(); // gone\n";
+    const multiLine = "/* ast-grep-ignore\n */ /* stays */\nfoo(); // gone\n";
+    // With nothing at all after it, ast-grep makes it file-wide too.
+    const wholeFile = "/* ast-grep-ignore */ /* stays */";
+    // Anywhere but on the first line, what follows it does not matter.
+    const later = "x();\n/* ast-grep-ignore */ /* gone */\n\nfoo();\n";
+
+    expect(removeComments(oneLine).code).toBe("/* ast-grep-ignore */ /* stays */\n\nfoo();\n");
+    expect(removeComments(multiLine).code).toBe("/* ast-grep-ignore\n */ /* stays */\nfoo();\n");
+    expect(removeComments(wholeFile).changed).toBe(false);
+    expect(removeComments(later).code).toBe("x();\n/* ast-grep-ignore */\n\nfoo();\n");
+  });
+
   it("removes the comment in front of an ast-grep suppression that stays a next-line one on the first line", () => {
     // With code right below, it suppresses that line before and after alike.
     const source = "// lead\n// ast-grep-ignore\neval(x);\n";

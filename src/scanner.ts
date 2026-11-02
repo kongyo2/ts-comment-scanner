@@ -154,10 +154,15 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
  * counts its rows, by line feeds alone.
  */
 export function isFileWidePosition(text: string, start: number, end: number): boolean {
-  const before = text.slice(0, start);
-  if (!isBlank(before) || before.includes("\n")) return false;
+  if (!opensFirstRow(text, start)) return false;
   const next = text.slice(end).search(/\S/);
   return next === -1 || lineFeedCount(text.slice(0, end + next)) >= 2;
+}
+
+/** Whether nothing but whitespace, and no line feed, precedes the offset: the start of tree-sitter's first row. */
+export function opensFirstRow(text: string, offset: number): boolean {
+  const before = text.slice(0, offset);
+  return isBlank(before) && !before.includes("\n");
 }
 
 function lineFeedCount(text: string): number {
