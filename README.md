@@ -18,100 +18,157 @@
 
 ## 日本語
 
-TypeScript プロジェクト内のコメントを検出・一覧・集計し、安全に削除もできる CLI / ライブラリです。TypeScript の AST を使って解析するため、文字列・テンプレートリテラル・正規表現・JSX テキストを誤検出しません。
+TypeScript のコメントを一覧し、不要なものを安全に削除する CLI とライブラリです。コーディングエージェントがコードに書き足した「レビューの指摘に従い修正」のような経緯のコメントを、エージェントが触ったファイルから取り除く用途を想定しています。
 
-### 特徴
-
-- `.ts` `.tsx` `.mts` `.cts` を再帰的にスキャン(`node_modules` と `.git` は除外)。シンボリックリンクは明示指定時と同様に走査中も追跡し、循環は自動検知して停止
-- 行コメント (`//`) とブロックコメント (`/* */`) を位置情報つきで報告
-- テキスト / JSON / **GitHub Actions アノテーション**の 3 形式で出力
-- `@ts-ignore` や `eslint-disable` などの**コンパイラ・リンター指示子(ディレクティブ)を自動判別**し、絞り込み・除外が可能
-- **安全なコメント削除**(コードクリーンアップ): ディレクティブとライセンスヘッダーはデフォルトで保持
-- UTF-8(BOM 付き可)と BOM 付き UTF-16(LE/BE)に対応。削除時もエンコーディングと BOM を保持し、不正なエンコーディングのファイルは**変更せずに**エラー報告
-- Glob による**カスタム無視パターン** (`--ignore`、`dist/` のような末尾スラッシュでディレクトリ限定)、対象拡張子の変更 (`--ext`、JavaScript は JSX を有効にして解析)
-- **git 連携 (`--diff`)**: 特定コミット間や未コミットの変更で触れられたファイルだけに対象を絞り込み
-- CI 向けの `--fail-on-comment`(コメント検出時に終了コード 1)
-- CLI としても、ライブラリとしても利用可能
+- コメントは TypeScript のパーサーで取り出すので、文字列・テンプレートリテラル・正規表現・JSX テキストの中の `//` や `/*` をコメントと取り違えません。
+- `@ts-expect-error`・`eslint-disable`・`webpackChunkName:` のように、消すとビルドやリントの結果が変わるコメント(ディレクティブ)と、ライセンス表記は残します。
+- `--diff` を付けると、git で変更があったファイルだけを対象にします。
+- 結果はテキスト・JSON・GitHub Actions のアノテーションで出力します。`--fail-on-comment` を付けると、コメントがあるときに CI を失敗させられます。
 
 ### インストール
 
 ```bash
-npm install @kongyo2/ts-comment-scanner
+npm install --save-dev @kongyo2/ts-comment-scanner
 ```
 
-インストールせずに実行する場合:
+インストールすると、npm scripts や `npx` から `ts-comment-scanner` コマンドを実行できます。インストールせずに `npx @kongyo2/ts-comment-scanner` で実行することもできます。
 
-```bash
-npx @kongyo2/ts-comment-scanner src
+### 使い方
+
+#### コメントを一覧する
+
+`src/range.ts` を例にします。
+
+```ts
+import { normalize } from "./normalize.js";
+
+// レビューの指摘に従い、空の範囲では HEAD を返すようにした
+export function resolveRange(input: string) {
+  if (input === "") return "HEAD"; // 指摘どおり修正
+  // @ts-expect-error 上流から null が渡ることがある
+  return normalize(input);
+}
 ```
 
-### CLI の使い方
+パスを渡すと、コメントを `ファイル:行:桁` の位置つきで一覧します。ディレクティブには `[@ts-expect-error]` のように名前が付きます。
 
-```
-ts-comment-scanner [options] [paths...]
-
-出力:
-  --format <fmt>       出力形式: text / json / github(既定: text)
-  --json               --format json の短縮形
-
-フィルタリング:
-  --ignore <glob>      Glob に一致するファイル・ディレクトリを除外(複数指定可)
-  --ext <list>         スキャン対象の拡張子(カンマ区切り、既定: .ts,.tsx,.mts,.cts)
-  --diff <range>       git で変更されたファイルのみを対象(例: HEAD, main..HEAD)
-  --skip-directives    コンパイラ・リンター指示子を結果から除外
-  --only-directives    指示子のみを報告
-
-CI:
-  --fail-on-comment    コメントが報告された場合に終了コード 1 で終了
-
-削除:
-  --remove             報告対象のコメントをファイルから削除(インプレース)
-  --dry-run            --remove と併用: 変更せずに削除対象のみ表示
-  --remove-directives  --remove と併用: 指示子コメントも削除
-  --remove-legal       --remove と併用: ライセンス・法的コメントも削除
-  --keep <regex>       --remove と併用: 正規表現に一致するコメントも指示子と同様に保持(複数指定可)
-
-その他:
-  -h, --help           ヘルプを表示
-  -v, --version        バージョンを表示
-```
-
-パスを省略するとカレントディレクトリを対象にします。スラッシュを含まない Glob(例: `*.test.ts`)はファイル名に、含むもの(例: `src/legacy/**`)はパスに一致します。`.gitignore` と同様に、末尾がスラッシュのパターン(例: `dist/`)はディレクトリだけに一致します。明示的に指定したファイルは `--ignore` の対象になりません。
-
-`--ext` で JavaScript(`.js` `.jsx` `.mjs` `.cjs`)を追加した場合は、TypeScript 本体と同じく JSX を有効にして解析するため、React コンポーネント内の `<div>http://…</div>` のようなテキストをコメントと誤検出しません。
-
-**終了コード**: `0` 成功 / `1` `--fail-on-comment` 指定時にコメントを検出 / `2` 引数・実行時エラー
-
-#### 出力例
-
-```bash
+```console
 $ ts-comment-scanner src
-src/index.ts:1:1 [line] // エントリーポイント
-src/scanner.ts:8:3 [block] /* AST を走査する */
-src/legacy.ts:3:1 [line] [@ts-ignore] // @ts-ignore 後で直す
+src/range.ts:3:1 [line] // レビューの指摘に従い、空の範囲では HEAD を返すようにした
+src/range.ts:5:36 [line] // 指摘どおり修正
+src/range.ts:6:3 [line] [@ts-expect-error] // @ts-expect-error 上流から null が渡ることがある
 
-3 comments across 3 files
+3 comments across 1 file
 ```
 
-JSON 出力:
+#### コメントを削除する
+
+`--remove --dry-run` で、ファイルを変えずに削除対象を確かめます。
+
+```console
+$ ts-comment-scanner --remove --dry-run src
+src/range.ts: would remove 2 (kept 1)
+
+Would remove 2 comments across 1 file. Kept 1 protected comment.
+```
+
+`--dry-run` を外すと削除します。経緯のコメントが消え、`@ts-expect-error` は残ります。
+
+```ts
+import { normalize } from "./normalize.js";
+
+export function resolveRange(input: string) {
+  if (input === "") return "HEAD";
+  // @ts-expect-error 上流から null が渡ることがある
+  return normalize(input);
+}
+```
+
+ディレクティブも消すときは `--remove-directives`、ライセンス表記も消すときは `--remove-legal` を付けます。プロジェクト独自のツールが読む目印のように、ほかにも残したいコメントがあれば `--keep` に正規表現で指定します。
 
 ```bash
-$ ts-comment-scanner --json src
+ts-comment-scanner --remove --keep "@skipMangle" --keep "^// INJECT" src
+```
+
+何を残し、削除後のコードをどう整えるかは[削除の動作](#削除の動作)にまとめています。
+
+#### 変更したファイルだけを対象にする
+
+`--diff <range>` を付けると、git が変更ありと報告するファイルだけを対象にします。`<range>` には `git diff` に渡すリビジョンをそのまま書きます。
+
+- `HEAD` のようにリビジョンを 1 つだけ書くと、作業ツリーと比べます。まだ追跡していない新しいファイルも対象です(`.gitignore` に一致するものは除きます)。
+- `main..HEAD` や `main...HEAD` のように書くと、コミット同士を比べます。
+
+```bash
+# 未コミットの変更があるファイルで、削除対象を確かめる
+ts-comment-scanner --remove --dry-run --diff HEAD
+
+# ブランチで変更したファイルからコメントを削除する
+ts-comment-scanner --remove --diff main...HEAD
+```
+
+範囲内で削除されたファイルは対象外になり、名前を変えたファイルは新しいパスで扱います。`--diff` は、コマンドラインで直接指定したファイルにも適用します。git は、最初に指定したパスがあるリポジトリで実行します。
+
+#### CI で使う
+
+`--format github` を付けると、コメントを GitHub Actions のアノテーションとして出力し、PR の該当行に表示します。`--fail-on-comment` を付けると、コメントを 1 件でも報告したときに終了コード 1 で終わります。
+
+```yaml
+- name: Check for stray comments
+  run: npx @kongyo2/ts-comment-scanner --format github --skip-directives --fail-on-comment src
+```
+
+### 削除の動作
+
+`--remove` が削除するのは、TypeScript のパーサーがコメントと判定した範囲だけです。次のコメントは残します。
+
+- **ディレクティブ**: 対象のツールは[ディレクティブの判定](#ディレクティブの判定)にまとめています。`/** @internal */` も、消すと `stripInternal` で除いていた宣言が `.d.ts` に出てしまうので残します。`--remove-directives` を付けると削除します。
+- **ライセンス表記**: `/*! … */`・`//! …` の形のコメント、`@license`・`@preserve`・`@copyright` や `SPDX-License-Identifier:` などの SPDX タグを含むコメント、`Copyright (c) …`・`© 2024 …`・`Licensed under …`・`All rights reserved` のような著作権表示、MIT・BSD・MPL・GPL の許諾文です。`--remove-legal` を付けると削除します。
+- **`--keep` の正規表現に一致するコメント**: `--remove-directives` や `--remove-legal` を付けても残ります。
+- **消すとディレクティブの効き方が変わるコメント**: たとえば `eslint-disable-next-line` の直下にあるコメント行を消すと、ディレクティブの適用先が次の行にずれます。ファイルの最初のコメントでだけ効く prettier の `@format` は、手前のコメントを消すと効き始めます。このように効き方が変わる削除はせず、そのコメントを残します。
+
+削除した後のコードは次のように整えます。
+
+- コメントだけの行は行ごと、行末のコメントは手前の空白ごと削除します。空行に挟まれたコメント行を消したときは空行を 1 行にまとめ、ファイルやブロックの先頭・末尾でコメントとコードを隔てていた空行は一緒に削除します。
+- トークンがつながる位置には空白を入れます(`a/* x */b` → `a b`)。コードに挟まれた、改行を含むブロックコメントは改行に置き換え、自動セミコロン挿入による文の区切りを保ちます。
+- JSX の `{/* … */}` は波かっこごと削除します。波かっこを外すと表示されるテキストが変わる位置では、`{" "}` か `{}` を残します。
+
+書き込む前に削除後のソースを解析し直し、残したコメントの内容とディレクティブとしての意味、JSX の表示内容が変わっていないことを確かめます。一致しないファイルは書き換えず、エラーとして報告します。書き込みは一時ファイルを経由した置き換えなので、途中で失敗しても元のファイルは壊れません。
+
+ファイルは UTF-8(BOM の有無は問いません)か BOM 付きの UTF-16 として読み、削除後も元の文字コードと BOM のまま書き戻します。正しくデコードできないファイルからはコメントを削除せず、エラーとして報告します。
+
+### 対象ファイルの指定
+
+パスを省略するとカレントディレクトリが対象です。ディレクトリは再帰的にたどり、`node_modules` と `.git` は除外します。シンボリックリンクもたどります。
+
+- `--ext` は対象の拡張子をカンマ区切りで指定します(既定: `.ts,.tsx,.mts,.cts`)。指定した一覧が既定の一覧に置き換わるので、JavaScript も対象にするなら `--ext .ts,.tsx,.js,.jsx` のようにすべて並べます。`.js`・`.jsx`・`.mjs`・`.cjs` は JSX を有効にして解析します。
+- `--ignore` は Glob に一致するファイルとディレクトリを除外します。スラッシュを含まないパターン(`*.test.ts`)はファイル名に、含むパターン(`src/legacy/**`)はパスに一致します。`dist/` のように末尾をスラッシュにすると、ディレクトリだけに一致します。コマンドラインで直接指定したファイルには適用しません。
+
+### 出力形式
+
+`--format` で `text`(既定)・`json`・`github` を選びます。
+
+- `text`: 1 件を 1 行で `ファイル:行:桁 [line|block] [ディレクティブ名] 本文` の形に出力し、最後に件数を出力します。複数行のコメントは 1 行にまとめます。
+- `json`: 下の形で出力します。`--json` は `--format json` と同じです。
+- `github`: 各コメントを GitHub Actions の `::notice` コマンドとして出力します。
+
+```json
 {
-  "summary": { "files": 1, "comments": 1, "directives": 0 },
+  "summary": { "files": 1, "comments": 1, "directives": 1 },
   "files": [
     {
-      "file": "src/index.ts",
+      "file": "src/range.ts",
       "comments": [
         {
           "kind": "line",
-          "text": "// エントリーポイント",
-          "start": 0,
-          "end": 12,
-          "line": 1,
-          "column": 1,
-          "endLine": 1,
-          "endColumn": 13
+          "text": "// @ts-expect-error 上流から null が渡ることがある",
+          "start": 174,
+          "end": 212,
+          "line": 6,
+          "column": 3,
+          "endLine": 6,
+          "endColumn": 41,
+          "directive": "@ts-expect-error"
         }
       ]
     }
@@ -119,126 +176,82 @@ $ ts-comment-scanner --json src
 }
 ```
 
-ディレクティブと判定されたコメントには `"directive": "@ts-ignore"` のように名前が付きます。
+`line`・`column` は 1 始まりで、`endColumn` はコメントの最後の文字の次の桁です。`start`・`end` は、ファイルをデコードして BOM を除いたテキストでの 0 始まりの位置(JavaScript の文字列のインデックス)です。`directive` は、ディレクティブと判定したコメントにだけ付きます。
 
-#### GitHub Actions で使う
+`--remove` と組み合わせると、`files` の各要素は `removed`・`kept`・`skipped` の 3 つの配列を持ちます。`skipped` は、`--skip-directives` か `--only-directives` で対象から外したコメントです。`summary` には、それぞれの件数(`removed`・`kept`・`skipped`)、`files` 配列の要素数(`files`)、実際にコメントを削除したファイル数(`changedFiles`)、`dryRun` が入ります。
 
-`--format github` は各コメントを [workflow command](https://docs.github.com/actions/reference/workflow-commands-for-github-actions) として出力するため、PR の該当行にアノテーションが表示されます。
+### オプション
 
-```yaml
-- name: Check for stray comments
-  run: npx @kongyo2/ts-comment-scanner --format github --skip-directives --fail-on-comment src
-```
+| オプション | 説明 |
+| --- | --- |
+| `--format <fmt>` | 出力形式。`text`・`json`・`github`(既定: `text`) |
+| `--json` | `--format json` と同じ |
+| `--ignore <glob>` | Glob に一致するファイル・ディレクトリを除外する(複数指定可) |
+| `--ext <list>` | 対象の拡張子(カンマ区切り、既定: `.ts,.tsx,.mts,.cts`) |
+| `--diff <range>` | git で変更があったファイルだけを対象にする |
+| `--skip-directives` | ディレクティブを結果から除く |
+| `--only-directives` | ディレクティブだけを報告する |
+| `--fail-on-comment` | コメントを報告したら終了コード 1 で終わる |
+| `--remove` | 報告したコメントをファイルから削除する |
+| `--dry-run` | `--remove` と併用。ファイルを変えずに削除対象を表示する |
+| `--remove-directives` | `--remove` と併用。ディレクティブも削除する |
+| `--remove-legal` | `--remove` と併用。ライセンス表記も削除する |
+| `--keep <regex>` | `--remove` と併用。正規表現に一致するコメントを残す(複数指定可) |
+| `-h`, `--help` | ヘルプを表示する |
+| `-v`, `--version` | バージョンを表示する |
 
-```
-::notice file=src/index.ts,line=1,endLine=1,col=1,endColumn=12,title=line comment::// エントリーポイント
-```
+終了コードは、`0` が正常終了、`1` が `--fail-on-comment` を付けてコメントを報告したとき、`2` が引数の誤りや実行時のエラーです。
 
-JSON 出力の `endColumn` が排他的(コメント末尾の次の桁)なのに対し、GitHub アノテーションの列は両端含みのため、ここでは最後の文字の桁(この例では 12)が出力されます。64 KiB を超える巨大なコメントは、GitHub の上限に収まるよう安全に切り詰められます。
+### ディレクティブの判定
 
-#### コメントの一括削除(コードクリーンアップ)
+次のツールが読むコメントを、ディレクティブとして判定します。
 
-```bash
-# まず削除対象を確認
-ts-comment-scanner --remove --dry-run src
+- **コンパイラ・型**: TypeScript(`@ts-ignore`・`@ts-expect-error`・`@ts-nocheck`・`@ts-check`・`/// <reference>`・`@internal`)、Deno(`@deno-types=`・`@ts-types=`・`@ts-self-types=`)、typescript-strict-plugin(`@ts-strict`・`@ts-strict-ignore`)、Flow(`@flow`・`@noflow`・`$FlowFixMe` 系・`flowlint`)
+- **リンター**: ESLint(`eslint-disable` 系・`/* eslint … */`・`eslint-env`・`/* global */`・`/* exported */`・`// falls through`・`// no default`)、React Compiler(react-hooks のルールを止める `eslint-disable`・`$FlowFixMe[react-rule…]`)、oxlint(`oxlint-disable` 系)、Biome(`biome-ignore` 系・`rome-ignore`)、deno lint(`deno-lint-ignore` 系)、stylelint(`stylelint-disable` 系)、ast-grep(`ast-grep-ignore`)、TSLint・JSHint・JSCS・JSLint
+- **フォーマッタ**: prettier(`prettier-ignore`・`@format` などの pragma・`/** @type */` の型キャスト)、oxfmt(`oxfmt-ignore`)、dprint・deno fmt(`dprint-ignore`・`deno-fmt-ignore` とそれぞれの `-file` 版)、import の並べ替え(`organize-imports-ignore`・`sort-imports-ignore`)、js-beautify
+- **カバレッジ・テスト**: istanbul・c8・v8(`istanbul ignore` など)、Node.js(`node:coverage`)、Deno(`deno-coverage-ignore` 系)、Jest・Vitest(`@jest-environment`・`@vitest-environment`・`@module-tag`)、Stryker、type-coverage、ts-prune
+- **バンドラ・ランタイム**: webpack・Turbopack のマジックコメント(`webpackChunkName:` など)、Vite(`@vite-ignore`)、terser・Rollup の注釈(`#__PURE__`・`@__NO_SIDE_EFFECTS__` など)、Bun(`// @bun`)、React Refresh・solid-refresh(`@refresh`)、Million.js、Nx、UnoCSS、Next.js の codemod、`/* GraphQL */`・`/* HTML */` タグ、`//# sourceMappingURL=`、`@jsx` 系の pragma
+- **セキュリティ・静的解析**: SonarQube(`NOSONAR`)、Semgrep(`nosemgrep`)、CodeQL(`lgtm[…]`・`codeql[…]`)、DeepSource(`skipcq`)、Snyk Code(`deepcode ignore`)、Datadog(`no-dd-sa`)、gitleaks、TruffleHog、detect-secrets
+- **スペルチェック**: cspell(`cspell:` など)、`LocalWords`、codespell
+- **エディタ・IDE**: VS Code・JetBrains(`#region`)、JetBrains(`noinspection`・`<editor-fold>`・`language=`)、ReSharper
 
-# 実際に削除(ディレクティブとライセンスヘッダーは保持される)
-ts-comment-scanner --remove src
-
-# 指示子・ライセンスも含めて完全に削除
-ts-comment-scanner --remove --remove-directives --remove-legal src
-
-# プロジェクト独自のツールが読むマーカーも保持
-ts-comment-scanner --remove --keep "@skipMangle" --keep "^// INJECT" src
-```
-
-削除は AST のコメント範囲に基づいて行われるため、文字列やコードには影響しません。さらに:
-
-- `@ts-expect-error` / `eslint-disable` などの指示子は、削除するとビルドやリントが壊れるため**デフォルトで保持**。tsc の `stripInternal` が宣言ファイルから除外する目印の `@internal` も、消すと内部 API が `.d.ts` に漏れるため保持
-- 法的コメントも**デフォルトで保持**: terser・esbuild が残すもの(`/*! ... */`・`/**! ... */`・`//! ...`、`@license`・`@licence`・`@preserve`・`@copyright`)、`SPDX-License-Identifier:` / `SPDX-FileCopyrightText:` タグ、そしてタグのない慣用的な著作権表示・ライセンス文(`Copyright (c) …`・`Copyright 2011 …`・`© 2024 …`・`Licensed under …`・`All rights reserved`・MIT / BSD / MPL / GPL の許諾文)
-- **プロジェクト独自のマーカーは `--keep` で保持**: ビルドテンプレートの置換位置や独自リンターのタグなど、汎用ツールの指示子ではないマーカーは、正規表現で指定すると指示子と同様に保持(`--remove-directives` より優先)
-- `@ts-expect-error` や `eslint-disable-next-line` など**次行を対象にする指示子の直下の行構造を保持**: 削除すると行が消えて指示子の適用先がずれる場合(コメントだけの行など)、その行のコメントは削除せずに保持
-- **指示子が対象を探す途中のコメントも保持**: 空行と `//` 行を読み飛ばして対象行を探す tsc の `@ts-ignore`/`@ts-expect-error` では、tsc 6・tsc 7 がそれぞれ読み飛ばせずに止まる最初の行(ブロックコメントの行など)を保持。対象の直前にある最後のコメントでのみ有効な指示子(`@deno-types`・`/* GraphQL */`・ESLint の `// falls through` など)では、指示子と対象の間のコメントをすべて保持
-- **位置依存ディレクティブを削除で有効化しない**: prettier の `@format`/`@prettier` pragma や Jest の docblock の `@jest-environment`、Deno の `deno-coverage-ignore-file`(ファイル最初のコメントでのみ有効)、Bun の `// @bun`(ファイル先頭か shebang の次の行でのみ有効)、ast-grep の `ast-grep-ignore`(1 行目にあって次の行が空ならファイル全体に効く)が、手前のコメント削除によって保持コメント内で新たに効き始める場合は、その手前のコメントも保持。ast-grep は同じ行の手前にあるコメントの有無で「行末の抑制」か「次行の抑制」かが変わり、1 行目では後ろに続くノードの位置でファイル全体に効くかが変わるため、その行の手前のコメントと、1 行目では後ろに続くコメントも保持
-- ブロックコメント除去でトークンが結合してしまう位置には空白を挿入(`a/* x */b` → `a b`)。括弧や区切り記号との間を空けていただけの空白は残さない(`f(/* x */ a)` → `f(a)`、`{/* x */}` → `{}`)
-- コメントだけの行は行ごと削除、行末コメントは手前の空白ごと削除
-- **空行を重複させない**: コメント行が消えた位置では、前後の空行を元のソースにあった最も広い間隔まで詰める(空行に挟まれたコメントを消しても空行は 1 行)。ファイルやブロック(`{`・`(`・`[`・JSX タグ)の先頭・末尾で、コメントとコードを隔てていただけの空行も一緒に削除。次行指示子の適用先になる空行は保持
-- **JSX のコメントは波かっこごと削除**: `{/* … */}` は `{ }` を残さず丸ごと削除(単独の行なら行ごと)。ただし波かっこが前後のテキストを区切っている場合は、外すと JSX のテキスト結合・空白除去で描画が変わるため、同じ描画になるなら `{" "}` に置き換え(行末の `<a /> {/* x */}` → `<a />{" "}`)、それ以外は `{}` を残す。削除後のソースを再解析し、各要素の子要素の描画結果を TypeScript・esbuild・Babel の空白規則で比較して検証。`{/* prettier-ignore */}` など次の兄弟要素に効く波かっこ内の指示子の直後にあるコメントコンテナは保持
-- 削除後のソースを再スキャンし、残ったコメントが保持対象とディレクティブの意味ごと一致することを検証。想定外の結果になる場合はファイルを変更せずエラー報告
-- 書き込みは一時ファイル経由のアトミック置換(書き込み失敗やディスクフルで元ファイルが壊れない)
-
-`--remove --json` の `summary.files` は `files` 配列の件数(削除・保持・スキップのいずれかがあったファイル数)、`summary.changedFiles` は実際にコメントを削除したファイル数です。
-
-#### 変更されたファイルだけを対象にする(`--diff`)
-
-`--diff <range>` を付けると、git が変更ありと報告するファイルだけにスキャン・削除を絞り込めます。範囲は `git diff` がリビジョンとして受け付ける書式そのままで、単一リビジョンなら作業ツリーとの比較(未追跡の新規ファイルも含む・`.gitignore` は尊重)、`a..b` / `a...b` ならコミット同士の比較になります。
-
-```bash
-# 未コミットの変更があるファイルだけをスキャン
-ts-comment-scanner --diff HEAD
-
-# ブランチで変更されたファイルだけからコメントを削除
-ts-comment-scanner --remove --diff main...HEAD
-
-# 特定コミット間で変更されたファイルのみを CI でチェック
-ts-comment-scanner --fail-on-comment --diff a1b2c3..d4e5f6 src
-```
-
-コーディングエージェントに作業させた後、その変更範囲だけを対象にノイズコメントを掃除する、といった使い方を想定しています。範囲内で削除されたファイルは対象外になり、リネームは新しいパスで扱われます。git は最初の入力パスが属するリポジトリで実行されるため、別リポジトリのパスを指定しても動作します。なお `--ignore` と異なり、明示的に指定したファイルにも絞り込みが適用されます。
-
-#### 検出できるディレクティブ(抜粋)
-
-各ディレクティブは実ツールのパーサー実装(正規表現・文字列比較)に合わせて判定されます。ツールやバージョンによって解釈が分かれる場合は、いずれかが有効とみなす形をすべてディレクティブとして扱います(削除時は保持側に倒れます)。
-
-- **コンパイラ / 型**: `@ts-ignore` `@ts-expect-error` `@ts-nocheck` `@ts-check`(tsc 6・tsc 7、TypeScript ファイルを検査する Flow) / `/// <reference>` 系 / `@internal`(tsc の `stripInternal`、knip の本番モード) / `@ts-strict-ignore`・`@ts-strict`(typescript-strict-plugin の CLI と IDE プラグイン) / `@deno-types=`・`@ts-types=`・`@ts-self-types=`(Deno)
-- **リンター**: `eslint-disable` 系・`eslint-env`・`/* global */`・`/* exported */`・`// falls through`(no-fallthrough)・`// no default`(default-case) / React Compiler が読む `eslint-disable … react-hooks/…`・`$FlowFixMe[react-rule…]` / `oxlint-disable` 系 / `biome-ignore` 系・`rome-ignore` / `deno-lint-ignore` 系 / `ast-grep-ignore`(ast-grep) / `stylelint-disable`・`stylelint-disable-line`・`stylelint-disable-next-line`・`stylelint-enable`(stylelint) / `@flow`・`@noflow`・`$FlowFixMe` 系・`flowlint` 系(Flow) / `tslint:`・`jshint`・`jscs:`・`jslint`(レガシー)。`// falls through` は ESLint・oxlint・deno_lint が読む位置(2 番目以降の `case`/`default` の直前、後に別の節が続く節の最後の文であるブロックの `}` の直前)、`// no default` は default 節のない switch の最後の節以降(ESLint は閉じ `}` の直前、oxlint は最後の節の中も)でのみ有効で、`if` ブロックやオブジェクトリテラルの `}` の直前では普通のコメント扱い
-- **フォーマッタ**: `prettier-ignore`・`@format`/`@prettier`/`@noformat`/`@noprettier` pragma・`/** @type */`/`/** @satisfies */` 型キャストコメント(prettier) / `oxfmt-ignore` / `dprint-ignore`・`dprint-ignore-file`・`deno-fmt-ignore`・`deno-fmt-ignore-file`(dprint / deno fmt) / `organize-imports-ignore`・`sort-imports-ignore` / `beautify ignore/preserve`(レガシー)
-- **カバレッジ / テスト**: `istanbul ignore`・`c8 ignore`・`v8 ignore`・`node:coverage`・`deno-coverage-ignore` 系 / `@jest-environment(-options)`・`@vitest-environment(-options)`・`@module-tag`(Vitest 4 以降。Jest がファイル先頭の docblock から読む `@jest-environment @edge-runtime/jest-environment` のようなスコープ付きパッケージやパス指定も含む) / `Stryker disable/restore` / `type-coverage:ignore-line/-next-line` / `ts-prune-ignore-next`
-- **バンドラ / ランタイム**: `webpackChunkName:` などの webpack・turbopack マジックコメント / `@vite-ignore` / `#__PURE__`・`@__NO_SIDE_EFFECTS__`・`@__INLINE__`・`@__KEY__`・`@__MANGLE_PROP__`(terser/rollup 注釈) / `// @bun`(Bun) / `@refresh reset/skip/reload/jsx-skip`(react-refresh / solid-refresh) / `million-ignore` / `nx-ignore-next-line`(Nx) / `@unocss-include/-ignore/-ide-include/-skip-start/-skip-end` / `@next-codemod-error/-ignore`(Next.js) / `/* GraphQL */`・`/* HTML */` タグコメント / `//# sourceMappingURL=`・`//# sourceURL=` / `@jsx` 系プラグマ(Deno の `@jsxImportSourceTypes` を含む)
-- **セキュリティ / 静的解析**: `NOSONAR`(SonarQube) / `nosemgrep`(Semgrep) / `lgtm[...]`・`codeql[...]`(CodeQL) / `skipcq`(DeepSource) / `deepcode ignore`(Snyk Code) / `no-dd-sa`・`datadog-disable`(Datadog) / `gitleaks:allow` / `trufflehog:ignore` / `pragma: allowlist secret`(detect-secrets)
-- **スペルチェック**: `cspell:` 系(`cSpell:`・`spell-checker:`・`spellchecker:` 別名込み)・`LocalWords` / `codespell:ignore`
-- **エディタ / IDE**: `#region`・`#endregion`・`// region`(VS Code / JetBrains) / `noinspection`・`//file:noinspection`・`<editor-fold>`・`language=`(JetBrains) / `ReSharper disable/restore`
-
-prettier 関連のルールは prettier 本体の実装をそのまま写しています。`prettier-ignore` はコメント本文を trim した完全一致(JS/TS に `prettier-ignore-start`/`-end` はなく、普通のコメント扱い)、`@format` 系 pragma は jest-docblock と同じ docblock 解析(ファイル最初のブロックコメントのみ、`@` は行頭、行頭の空白はスペースのみ)、`/** @type */`・`/** @satisfies */` は prettier が直後の括弧を保持する型キャストコメント(tsc も JavaScript で解釈)、先頭コメントの `@flow`/`@noflow` は babel パーサーを Flow 構文に切り替える判定です。テストスイートはこれらを実際の prettier と突き合わせて検証しています。
-
-TypeScript 関連のルールは tsc 6(JavaScript 実装)と tsc 7(Go 移植版)の両方の実装に合わせています。たとえば `//// @ts-ignore` や閉じ `/>` のない `/// <reference types="node">` は tsc 7 だけが、`//` の直後に NBSP を挟んだ `@ts-ignore` は tsc 6 だけが有効とみなしますが、いずれもディレクティブとして扱います。テストスイートは実際の tsc 6 とも突き合わせて検証しています。
+判定は、各ツールのパーサーと同じ規則で行います。ファイルの先頭や `switch` 文の特定の位置でだけ効くディレクティブは、その位置にあるときだけディレクティブとして扱います。ツールやバージョンによって解釈が分かれる書き方は、どれか 1 つでも有効とみなせばディレクティブとして扱うので、`--remove` では残ります。TypeScript のディレクティブは、tsc 6 と tsc 7 のどちらかが有効とみなすものが対象です。
 
 ### ライブラリとして使う
 
 ```ts
 import { scanPaths, scanComments, removeComments, changedFiles, formatText } from "@kongyo2/ts-comment-scanner";
 
-// ファイル / ディレクトリをまとめてスキャン
+// ファイルやディレクトリをまとめてスキャンする
 const results = await scanPaths(["src"], { ignore: ["**/*.test.ts"] });
 console.log(formatText(results));
 
-// ソース文字列を直接スキャン
+// ソース文字列をスキャンする
 const comments = scanComments("// hello\nconst x = 1;");
 
-// コメントを安全に削除
+// コメントを削除する
 const { code, removed, kept } = removeComments("// note\nconst x = 1;\n");
 
-// git のリビジョン範囲で変更されたファイルの絶対パスを取得
+// git のリビジョン範囲で変更されたファイルの絶対パスを得る
 const changed = await changedFiles("main..HEAD");
 ```
 
-#### 主な API
-
-| 関数 | 概要 |
+| 関数 | 説明 |
 | --- | --- |
-| `scanComments(source, options?)` | ソース文字列からコメント配列を取得(`options.jsx` で TSX を解析) |
-| `scanFile(file)` | 1 ファイルをスキャン |
-| `scanPaths(inputs, options?)` | ファイル / ディレクトリ群を再帰的にスキャン(`ignore` / `extensions` 対応) |
-| `collectFiles(inputs, options?)` | 対象ファイルのパス一覧を収集 |
-| `changedFiles(range, cwd?)` | git のリビジョン範囲で変更された作業ツリーのファイルを絶対パスで返す |
-| `removeComments(source, options?)` | コメントを安全に削除(`removeDirectives` / `removeLegal` / `keep` / `shouldRemove`) |
-| `detectDirective(kind, text, placement?)` | コメントがディレクティブなら正規化した名前を返す(`placement` で位置依存の判定が可能) |
-| `isLegalComment(text)` | ライセンス・法的コメントかどうかを判定 |
-| `formatText(results)` / `formatJson(results)` / `formatGitHub(results)` | スキャン結果を整形 |
-| `readFileText(file)` / `decodeFileText(data)` / `encodeFileText(text, target)` | UTF-8 / UTF-16 と BOM を保持するファイル読み書きヘルパー |
-| `writeFileAtomic(file, data)` | 一時ファイル経由でファイルをアトミックに置換 |
+| `scanComments(source, options?)` | ソース文字列のコメントを返す。`options.jsx` で JSX を有効にする |
+| `scanFile(file)` | 1 ファイルをスキャンする |
+| `scanPaths(inputs, options?)` | ファイルとディレクトリをまとめてスキャンする。`ignore`・`extensions`・`ignoreDirs` を指定できる |
+| `collectFiles(inputs, options?)` | スキャン対象のファイルパスを集める |
+| `changedFiles(range, cwd?)` | git のリビジョン範囲で変更されたファイルの絶対パスを返す |
+| `removeComments(source, options?)` | コメントを削除する。`removeDirectives`・`removeLegal`・`keep`・`shouldRemove` を指定できる |
+| `detectDirective(kind, text, placement?)` | ディレクティブなら正規化した名前を返す。`placement` を渡すと位置に依存する判定もする |
+| `isLegalComment(text)` | ライセンス表記かどうかを返す |
+| `isJsxFile(file)` | JSX を有効にして解析する拡張子かどうかを返す |
+| `formatText(results)`・`formatJson(results)`・`formatGitHub(results)` | スキャン結果を各出力形式の文字列にする |
+| `readFileText(file)`・`decodeFileText(data)`・`encodeFileText(text, target)` | 文字コードと BOM を保ってファイルの内容を読み書きする |
+| `writeFileAtomic(file, data)` | 一時ファイルを経由してファイルを置き換える |
 
-型: `Comment` / `CommentKind` / `FileScanResult` / `ScanOptions` / `CollectOptions` / `RemoveOptions` / `RemoveResult` / `FileText` / `FileEncoding` / `DirectivePlacement`
+型: `Comment`・`CommentKind`・`FileScanResult`・`ScanOptions`・`CollectOptions`・`RemoveOptions`・`RemoveResult`・`FileText`・`FileEncoding`・`DirectivePlacement`
 
 ### 必要環境
 
@@ -250,100 +263,157 @@ MIT
 
 ## English
 
-A CLI / library that detects, lists, and summarizes comments in a TypeScript project — and can also remove them safely. It analyzes code through the TypeScript AST, so it never mistakes strings, template literals, regular expressions, or JSX text for comments.
+A CLI and library that lists the comments in a TypeScript project and safely removes the ones you don't want. It is built for sweeping the narration coding agents add to code ("fixed per the review feedback") out of the files the agent touched.
 
-### Features
-
-- Recursively scans `.ts` `.tsx` `.mts` `.cts` (excluding `node_modules` and `.git`); symlinks are followed during the walk just like explicit inputs, with cycles detected automatically
-- Reports line comments (`//`) and block comments (`/* */`) with position information
-- Outputs in three formats: text / JSON / **GitHub Actions annotations**
-- **Automatically identifies compiler and linter directives** such as `@ts-ignore` and `eslint-disable`, so you can filter them in or out
-- **Safe comment removal** (code cleanup): directives and license headers are kept by default
-- Handles UTF-8 (with or without BOM) and BOM-marked UTF-16 (LE/BE); removal preserves the encoding and BOM, and files with a broken encoding are reported as errors **without being modified**
-- **Custom ignore patterns** via glob (`--ignore`, with a trailing slash such as `dist/` restricting a pattern to directories) and configurable target extensions (`--ext`, parsing JavaScript with JSX enabled)
-- **git integration (`--diff`)**: narrow the scan to files touched between specific commits or in uncommitted work
-- `--fail-on-comment` for CI (exit code 1 when comments are detected)
-- Usable both as a CLI and as a library
+- Comments come from the TypeScript parser, so `//` and `/*` inside strings, template literals, regular expressions and JSX text are never mistaken for comments.
+- Directives such as `@ts-expect-error`, `eslint-disable` and `webpackChunkName:`, whose removal would change what your build or linter does, are kept, and so are license notices.
+- `--diff` limits the work to the files git reports as changed.
+- Results come out as text, JSON or GitHub Actions annotations, and `--fail-on-comment` fails a CI job when comments are found.
 
 ### Installation
 
 ```bash
-npm install @kongyo2/ts-comment-scanner
+npm install --save-dev @kongyo2/ts-comment-scanner
 ```
 
-To run without installing:
+Once it is installed, npm scripts and `npx` can run the `ts-comment-scanner` command. To run it without installing, use `npx @kongyo2/ts-comment-scanner`.
 
-```bash
-npx @kongyo2/ts-comment-scanner src
+### Usage
+
+#### Listing comments
+
+Take `src/range.ts` as an example:
+
+```ts
+import { normalize } from "./normalize.js";
+
+// Per the review feedback, return HEAD for an empty range
+export function resolveRange(input: string) {
+  if (input === "") return "HEAD"; // fixed as the reviewer asked
+  // @ts-expect-error upstream may pass null
+  return normalize(input);
+}
 ```
 
-### CLI usage
+Given a path, the command lists each comment with its `file:line:column` position. Directives are tagged with their name, such as `[@ts-expect-error]`.
 
-```
-ts-comment-scanner [options] [paths...]
-
-Output:
-  --format <fmt>       Output format: text / json / github (default: text)
-  --json               Shorthand for --format json
-
-Filtering:
-  --ignore <glob>      Exclude files/directories matching the glob (repeatable)
-  --ext <list>         Extensions to scan (comma-separated, default: .ts,.tsx,.mts,.cts)
-  --diff <range>       Only files git reports changed (e.g. HEAD, main..HEAD)
-  --skip-directives    Exclude compiler/linter directives from the results
-  --only-directives    Report only directives
-
-CI:
-  --fail-on-comment    Exit with code 1 if any comment is reported
-
-Removal:
-  --remove             Remove reported comments from files (in place)
-  --dry-run            With --remove: show what would be removed without changing files
-  --remove-directives  With --remove: also remove directive comments
-  --remove-legal       With --remove: also remove license/legal comments
-  --keep <regex>       With --remove: also keep comments matching the regular expression, like directives (repeatable)
-
-Other:
-  -h, --help           Show help
-  -v, --version        Show version
-```
-
-If no paths are given, the current directory is used. A glob without a slash (e.g. `*.test.ts`) matches against file names, while one that contains a slash (e.g. `src/legacy/**`) matches against paths. As in `.gitignore`, a pattern ending in a slash (e.g. `dist/`) matches directories only. Files passed explicitly are never subject to `--ignore`.
-
-JavaScript files added through `--ext` (`.js`, `.jsx`, `.mjs`, `.cjs`) are parsed with JSX enabled, just as TypeScript itself parses them, so text such as `<div>http://…</div>` inside a React component is never mistaken for a comment.
-
-**Exit codes**: `0` success / `1` comments detected when `--fail-on-comment` is set / `2` argument or runtime error
-
-#### Example output
-
-```bash
+```console
 $ ts-comment-scanner src
-src/index.ts:1:1 [line] // entry point
-src/scanner.ts:8:3 [block] /* walk the AST */
-src/legacy.ts:3:1 [line] [@ts-ignore] // @ts-ignore fix later
+src/range.ts:3:1 [line] // Per the review feedback, return HEAD for an empty range
+src/range.ts:5:36 [line] // fixed as the reviewer asked
+src/range.ts:6:3 [line] [@ts-expect-error] // @ts-expect-error upstream may pass null
 
-3 comments across 3 files
+3 comments across 1 file
 ```
 
-JSON output:
+#### Removing comments
+
+`--remove --dry-run` shows what would be removed without changing any file.
+
+```console
+$ ts-comment-scanner --remove --dry-run src
+src/range.ts: would remove 2 (kept 1)
+
+Would remove 2 comments across 1 file. Kept 1 protected comment.
+```
+
+Drop `--dry-run` to remove them. The narration goes, and the `@ts-expect-error` stays:
+
+```ts
+import { normalize } from "./normalize.js";
+
+export function resolveRange(input: string) {
+  if (input === "") return "HEAD";
+  // @ts-expect-error upstream may pass null
+  return normalize(input);
+}
+```
+
+Add `--remove-directives` to remove directives too, and `--remove-legal` to remove license notices too. To keep other comments, such as markers your project's own tooling reads, pass a regular expression to `--keep`:
 
 ```bash
-$ ts-comment-scanner --json src
+ts-comment-scanner --remove --keep "@skipMangle" --keep "^// INJECT" src
+```
+
+[How removal works](#how-removal-works) covers what is kept and how the code is tidied up afterwards.
+
+#### Targeting changed files only
+
+With `--diff <range>`, only the files git reports as changed are scanned or cleaned. The range is anything `git diff` accepts as revisions:
+
+- A single revision such as `HEAD` compares the working tree against it. Untracked new files count too, unless `.gitignore` matches them.
+- `main..HEAD` or `main...HEAD` compares two commits.
+
+```bash
+# Preview the removal in files with uncommitted changes
+ts-comment-scanner --remove --dry-run --diff HEAD
+
+# Remove comments from the files changed on the branch
+ts-comment-scanner --remove --diff main...HEAD
+```
+
+Files deleted within the range are skipped, and renamed files are handled at their new path. `--diff` also applies to files listed explicitly on the command line. git runs in the repository that contains the first path given.
+
+#### Using it in CI
+
+`--format github` emits each comment as a GitHub Actions annotation, which shows up on the relevant line of the PR. With `--fail-on-comment`, the command exits with code 1 when it reports any comment.
+
+```yaml
+- name: Check for stray comments
+  run: npx @kongyo2/ts-comment-scanner --format github --skip-directives --fail-on-comment src
+```
+
+### How removal works
+
+`--remove` deletes only the ranges the TypeScript parser reports as comments. These comments stay:
+
+- **Directives.** [Directive detection](#directive-detection) lists the tools covered. `/** @internal */` stays as well, because without it `stripInternal` would let the declaration into the `.d.ts`. `--remove-directives` removes them.
+- **License notices.** Comments shaped `/*! … */` or `//! …`; comments containing `@license`, `@preserve`, `@copyright` or an SPDX tag such as `SPDX-License-Identifier:`; copyright lines such as `Copyright (c) …`, `© 2024 …`, `Licensed under …` and `All rights reserved`; and the MIT, BSD, MPL and GPL grant texts. `--remove-legal` removes them.
+- **Comments matching a `--keep` pattern,** even with `--remove-directives` or `--remove-legal`.
+- **Comments whose removal would change how a directive applies.** Removing a comment line right below `eslint-disable-next-line`, for example, would move the directive onto the next line, and removing the comments in front of prettier's `@format`, which only counts in the file's first comment, would switch it on. Such comments are kept.
+
+The code left behind is tidied up:
+
+- Comment-only lines go entirely, and trailing comments go with the whitespace before them. Removing a comment line between two blank lines leaves one blank line, and at the start or end of the file or of a block, the blank lines that only separated the comment from the code go with it.
+- A space is inserted where tokens would otherwise join (`a/* x */b` → `a b`). A multi-line block comment with code on both sides is replaced with a line break, so automatic semicolon insertion still splits the statements the same way.
+- A JSX `{/* … */}` goes with its braces. Where dropping the braces would change the rendered text, `{" "}` or `{}` takes their place.
+
+Before writing, the result is parsed again to confirm that the kept comments, their directive meaning and the rendered JSX are unchanged. A file that fails the check is left untouched and reported as an error. Files are replaced through a temporary file, so a failed write never truncates the original.
+
+Files are read as UTF-8 (with or without a BOM) or as UTF-16 with a BOM, and written back in the same encoding with the same BOM. A file that does not decode cleanly is reported as an error instead of being rewritten.
+
+### Choosing files
+
+With no paths, the current directory is scanned. Directories are walked recursively, skipping `node_modules` and `.git`, and symlinks are followed.
+
+- `--ext` sets the extensions to scan, comma-separated (default: `.ts,.tsx,.mts,.cts`). The list replaces the default, so to include JavaScript, list every extension: `--ext .ts,.tsx,.js,.jsx`. `.js`, `.jsx`, `.mjs` and `.cjs` files are parsed with JSX enabled.
+- `--ignore` excludes files and directories matching a glob. A pattern without a slash (`*.test.ts`) matches file names, and one with a slash (`src/legacy/**`) matches paths. A trailing slash, as in `dist/`, matches directories only. Files listed explicitly on the command line are not subject to `--ignore`.
+
+### Output formats
+
+`--format` selects `text` (default), `json` or `github`.
+
+- `text`: one line per comment, `file:line:column [line|block] [directive] text`, followed by a count. A multi-line comment is shown on one line.
+- `json`: the shape below. `--json` is shorthand for `--format json`.
+- `github`: one `::notice` workflow command per comment.
+
+```json
 {
-  "summary": { "files": 1, "comments": 1, "directives": 0 },
+  "summary": { "files": 1, "comments": 1, "directives": 1 },
   "files": [
     {
-      "file": "src/index.ts",
+      "file": "src/range.ts",
       "comments": [
         {
           "kind": "line",
-          "text": "// entry point",
-          "start": 0,
-          "end": 14,
-          "line": 1,
-          "column": 1,
-          "endLine": 1,
-          "endColumn": 15
+          "text": "// @ts-expect-error upstream may pass null",
+          "start": 218,
+          "end": 260,
+          "line": 6,
+          "column": 3,
+          "endLine": 6,
+          "endColumn": 45,
+          "directive": "@ts-expect-error"
         }
       ]
     }
@@ -351,126 +421,82 @@ $ ts-comment-scanner --json src
 }
 ```
 
-Comments identified as directives get a name attached, such as `"directive": "@ts-ignore"`.
+`line` and `column` are 1-based, and `endColumn` is the column just past the comment's last character. `start` and `end` are 0-based offsets into the decoded text with any BOM stripped (JavaScript string indices). `directive` appears only on comments detected as directives.
 
-#### Using it in GitHub Actions
+With `--remove`, each entry of `files` carries three arrays: `removed`, `kept` and `skipped`, where `skipped` holds the comments left out by `--skip-directives` or `--only-directives`. `summary` has their counts (`removed`, `kept`, `skipped`), the number of entries in `files` (`files`), the number of files that actually had comments removed (`changedFiles`), and `dryRun`.
 
-`--format github` emits each comment as a [workflow command](https://docs.github.com/actions/reference/workflow-commands-for-github-actions), so annotations appear on the relevant lines of a PR.
+### Options
 
-```yaml
-- name: Check for stray comments
-  run: npx @kongyo2/ts-comment-scanner --format github --skip-directives --fail-on-comment src
-```
+| Option | Description |
+| --- | --- |
+| `--format <fmt>` | Output format: `text`, `json` or `github` (default: `text`) |
+| `--json` | Shorthand for `--format json` |
+| `--ignore <glob>` | Exclude files and directories matching the glob (repeatable) |
+| `--ext <list>` | Extensions to scan, comma-separated (default: `.ts,.tsx,.mts,.cts`) |
+| `--diff <range>` | Only target files git reports as changed in the range |
+| `--skip-directives` | Leave directives out of the results |
+| `--only-directives` | Report directives only |
+| `--fail-on-comment` | Exit with code 1 when any comment is reported |
+| `--remove` | Remove the reported comments from the files |
+| `--dry-run` | With `--remove`: show what would be removed without changing files |
+| `--remove-directives` | With `--remove`: remove directives too |
+| `--remove-legal` | With `--remove`: remove license notices too |
+| `--keep <regex>` | With `--remove`: keep comments matching the regular expression (repeatable) |
+| `-h`, `--help` | Show help |
+| `-v`, `--version` | Show the version |
 
-```
-::notice file=src/index.ts,line=1,endLine=1,col=1,endColumn=14,title=line comment::// entry point
-```
+Exit codes: `0` on success, `1` when `--fail-on-comment` is set and comments are reported, `2` on a usage or runtime error.
 
-While the JSON output's `endColumn` is exclusive (the column after the comment), GitHub annotation columns are inclusive, so the annotation reports the column of the last character (14 in this example). Comments larger than GitHub's 64 KiB annotation limit are truncated safely.
+### Directive detection
 
-#### Bulk comment removal (code cleanup)
+Comments read by these tools are detected as directives:
 
-```bash
-# First, check what would be removed
-ts-comment-scanner --remove --dry-run src
+- **Compilers and types**: TypeScript (`@ts-ignore`, `@ts-expect-error`, `@ts-nocheck`, `@ts-check`, `/// <reference>`, `@internal`), Deno (`@deno-types=`, `@ts-types=`, `@ts-self-types=`), typescript-strict-plugin (`@ts-strict`, `@ts-strict-ignore`), Flow (`@flow`, `@noflow`, the `$FlowFixMe` family, `flowlint`)
+- **Linters**: ESLint (the `eslint-disable` family, `/* eslint … */`, `eslint-env`, `/* global */`, `/* exported */`, `// falls through`, `// no default`), React Compiler (`eslint-disable` of the react-hooks rules, `$FlowFixMe[react-rule…]`), oxlint (the `oxlint-disable` family), Biome (the `biome-ignore` family, `rome-ignore`), deno lint (the `deno-lint-ignore` family), stylelint (the `stylelint-disable` family), ast-grep (`ast-grep-ignore`), TSLint, JSHint, JSCS, JSLint
+- **Formatters**: prettier (`prettier-ignore`, pragmas such as `@format`, `/** @type */` type casts), oxfmt (`oxfmt-ignore`), dprint and deno fmt (`dprint-ignore`, `deno-fmt-ignore` and their `-file` forms), import sorting (`organize-imports-ignore`, `sort-imports-ignore`), js-beautify
+- **Coverage and testing**: istanbul, c8, v8 (`istanbul ignore` and the like), Node.js (`node:coverage`), Deno (the `deno-coverage-ignore` family), Jest and Vitest (`@jest-environment`, `@vitest-environment`, `@module-tag`), Stryker, type-coverage, ts-prune
+- **Bundlers and runtimes**: webpack and Turbopack magic comments (`webpackChunkName:` and others), Vite (`@vite-ignore`), terser and Rollup annotations (`#__PURE__`, `@__NO_SIDE_EFFECTS__` and others), Bun (`// @bun`), React Refresh and solid-refresh (`@refresh`), Million.js, Nx, UnoCSS, Next.js codemods, `/* GraphQL */` and `/* HTML */` tags, `//# sourceMappingURL=`, `@jsx` pragmas
+- **Security and static analysis**: SonarQube (`NOSONAR`), Semgrep (`nosemgrep`), CodeQL (`lgtm[…]`, `codeql[…]`), DeepSource (`skipcq`), Snyk Code (`deepcode ignore`), Datadog (`no-dd-sa`), gitleaks, TruffleHog, detect-secrets
+- **Spell checkers**: cspell (`cspell:` and its aliases), `LocalWords`, codespell
+- **Editors and IDEs**: VS Code and JetBrains (`#region`), JetBrains (`noinspection`, `<editor-fold>`, `language=`), ReSharper
 
-# Actually remove (directives and license headers are kept)
-ts-comment-scanner --remove src
-
-# Remove everything, including directives and legal comments
-ts-comment-scanner --remove --remove-directives --remove-legal src
-
-# Also keep the markers a project's own tooling reads
-ts-comment-scanner --remove --keep "@skipMangle" --keep "^// INJECT" src
-```
-
-Removal is driven by the AST's comment ranges, so it never touches strings or code. In addition:
-
-- Directives such as `@ts-expect-error` / `eslint-disable` are **kept by default**, because removing them would break the build or the linter. So is `@internal`, the marker tsc's `stripInternal` leaves declarations out of the emitted `.d.ts` by: removing it would leak internal APIs into the declarations
-- Legal comments are also **kept by default**: the ones terser and esbuild keep (`/*! ... */`, `/**! ... */`, `//! ...`, `@license`, `@licence`, `@preserve`, `@copyright`), the `SPDX-License-Identifier:` / `SPDX-FileCopyrightText:` tags, and copyright notices and license grants in their conventional, untagged wording (`Copyright (c) …`, `Copyright 2011 …`, `© 2024 …`, `Licensed under …`, `All rights reserved`, the MIT / BSD / MPL / GPL grant texts)
-- **Project-specific markers stay with `--keep`**: markers no general-purpose tool reads — a build template's placeholder, a custom linter tag — are kept like directives when a regular expression matches them (winning over `--remove-directives`)
-- **The line structure below next-line directives** (`@ts-expect-error`, `eslint-disable-next-line`, ...) **is preserved**: when removing comments would delete a line and shift the directive's target (e.g. a comment-only line), those comments are kept instead
-- **Comments a directive looks past for its target are kept too**: below tsc's `@ts-ignore`/`@ts-expect-error`, which skip blank and `//` lines to find their target, the first line tsc 6 or tsc 7 stops at (a block-comment line, say) is kept; between a directive that only counts as the last comment before its target (`@deno-types`, `/* GraphQL */`, ESLint's `// falls through`, ...) and that target, every comment is kept
-- **Position-dependent directives are never activated by a removal**: when deleting a leading comment would make prettier's `@format`/`@prettier` pragma, a `@jest-environment` in Jest's docblock or Deno's `deno-coverage-ignore-file` (honoured only in the file's first comment), Bun's `// @bun` marker (honoured only at the very start of the file or on the line after a shebang) or ast-grep's `ast-grep-ignore` (file-wide on the first line when the line below it is empty) newly take effect in a kept comment, the leading comment is kept as well. Whether an ast-grep suppression trails something or stands alone depends on the comments before it on its line, and on the first line whether it covers the whole file depends on the node after it, so the comments before it on its line stay, and on the first line the ones after it too
-- Whitespace is inserted where removing a block comment would otherwise join tokens together (`a/* x */b` → `a b`), and none is left where it only held the comment off a bracket or punctuation (`f(/* x */ a)` → `f(a)`, `{/* x */}` → `{}`)
-- Comment-only lines are removed entirely, and trailing comments are removed together with the preceding whitespace
-- **No blank-line pile-ups**: where comment-only lines vanish, the blank lines around them close ranks to the widest gap the source had there (removing a comment that sat between two blank lines leaves one, not two). At the start or end of the file or of a block (`{`, `(`, `[`, JSX tags), the blank lines that only separated the comment from the code go with it, while those already against the edge stay. Blank lines a next-line directive reaches stay put
-- **JSX comments go with their braces**: `{/* ... */}` is removed as a whole — its line too, when it stands alone — instead of leaving `{ }` behind. Where the braces also keep rendered text apart, dropping them would change what the element renders (JSX merges and trims text across them), so `{" "}` takes their place when that renders the same (`<a /> {/* x */}` at the end of a line → `<a />{" "}`), and otherwise `{}` stays. The output is re-parsed and every element's rendered children compared under the whitespace rules of TypeScript, esbuild and Babel. A comment container right after a directive in braces that applies to the next sibling (`{/* prettier-ignore */}`, ...) is kept
-- The result is re-scanned to verify that the surviving comments match the protected set, directive meaning included; if the outcome is unexpected the file is left unchanged and an error is reported
-- Writes go through a temporary file and an atomic rename, so a failed write or a full disk can never truncate the original
-
-With `--remove --json`, `summary.files` counts the entries of the `files` array (every file with removed, kept or skipped comments) and `summary.changedFiles` counts the files that actually had comments removed.
-
-#### Scanning only changed files (`--diff`)
-
-With `--diff <range>`, scanning and removal are limited to the files git reports as changed. The range is exactly what `git diff` accepts as revisions: a single revision compares the working tree against it (untracked new files included, honouring `.gitignore`), while `a..b` / `a...b` compare two commits.
-
-```bash
-# Scan only files with uncommitted changes
-ts-comment-scanner --diff HEAD
-
-# Remove comments only from files changed on the branch
-ts-comment-scanner --remove --diff main...HEAD
-
-# Check only files changed between two commits in CI
-ts-comment-scanner --fail-on-comment --diff a1b2c3..d4e5f6 src
-```
-
-This is designed for workflows like letting a coding agent do some work and then sweeping noise comments out of just the files it touched. Files deleted within the range are excluded, and renames are handled at their new path. git runs in the repository that contains the first input path, so pointing at another repository's checkout works too. Note that unlike `--ignore`, the narrowing also applies to explicitly listed files.
-
-#### Detectable directives (excerpt)
-
-Each directive is matched the way the real tool's parser matches it (its regex or string comparison). Where tools or versions disagree, every form any of them honours counts as a directive, so removal errs on the side of keeping the comment.
-
-- **Compiler / types**: `@ts-ignore` `@ts-expect-error` `@ts-nocheck` `@ts-check` (tsc 6, tsc 7, and Flow checking TypeScript files) / the `/// <reference>` family / `@internal` (tsc's `stripInternal`, knip's production mode) / `@ts-strict-ignore`, `@ts-strict` (typescript-strict-plugin's CLI and IDE plugin) / `@deno-types=`, `@ts-types=`, `@ts-self-types=` (Deno)
-- **Linters**: the `eslint-disable` family, `eslint-env`, `/* global */`, `/* exported */`, `// falls through` (no-fallthrough), `// no default` (default-case) / the `eslint-disable … react-hooks/…` and `$FlowFixMe[react-rule…]` suppressions React Compiler reads / the `oxlint-disable` family / the `biome-ignore` family, `rome-ignore` / the `deno-lint-ignore` family / `ast-grep-ignore` (ast-grep) / `stylelint-disable`, `stylelint-disable-line`, `stylelint-disable-next-line`, `stylelint-enable` (stylelint) / `@flow`, `@noflow`, the `$FlowFixMe` family, `flowlint` (Flow) / `tslint:`, `jshint`, `jscs:`, `jslint` (legacy). `// falls through` only counts where ESLint, oxlint and deno_lint read it — in front of a `case`/`default` other than the first, or of the `}` of a block that ends a clause another follows — and `// no default` only after the last clause of a switch without a default (in front of its closing `}` for ESLint, anywhere in that clause for oxlint); in front of an `if` block's or an object literal's `}` they are ordinary comments
-- **Formatters**: `prettier-ignore`, the `@format`/`@prettier`/`@noformat`/`@noprettier` pragmas, `/** @type */` / `/** @satisfies */` type-cast comments (prettier) / `oxfmt-ignore` / `dprint-ignore`, `dprint-ignore-file`, `deno-fmt-ignore`, `deno-fmt-ignore-file` (dprint / deno fmt) / `organize-imports-ignore`, `sort-imports-ignore` / `beautify ignore/preserve` (legacy)
-- **Coverage / testing**: `istanbul ignore`, `c8 ignore`, `v8 ignore`, `node:coverage`, the `deno-coverage-ignore` family / `@jest-environment(-options)`, `@vitest-environment(-options)`, `@module-tag` (Vitest 4+; including the scoped packages and paths Jest reads from the docblock opening the file, such as `@jest-environment @edge-runtime/jest-environment`) / `Stryker disable/restore` / `type-coverage:ignore-line/-next-line` / `ts-prune-ignore-next`
-- **Bundlers / runtimes**: webpack and turbopack magic comments such as `webpackChunkName:` / `@vite-ignore` / `#__PURE__`, `@__NO_SIDE_EFFECTS__`, `@__INLINE__`, `@__KEY__`, `@__MANGLE_PROP__` (terser/rollup annotations) / `// @bun` (Bun) / `@refresh reset/skip/reload/jsx-skip` (react-refresh / solid-refresh) / `million-ignore` / `nx-ignore-next-line` (Nx) / `@unocss-include/-ignore/-ide-include/-skip-start/-skip-end` / `@next-codemod-error/-ignore` (Next.js) / `/* GraphQL */`, `/* HTML */` tag comments / `//# sourceMappingURL=`, `//# sourceURL=` / `@jsx`-family pragmas (Deno's `@jsxImportSourceTypes` included)
-- **Security / static analysis**: `NOSONAR` (SonarQube) / `nosemgrep` (Semgrep) / `lgtm[...]`, `codeql[...]` (CodeQL) / `skipcq` (DeepSource) / `deepcode ignore` (Snyk Code) / `no-dd-sa`, `datadog-disable` (Datadog) / `gitleaks:allow` / `trufflehog:ignore` / `pragma: allowlist secret` (detect-secrets)
-- **Spell checkers**: the `cspell:` family (including the `cSpell:`, `spell-checker:`, `spellchecker:` aliases), `LocalWords` / `codespell:ignore`
-- **Editors / IDEs**: `#region`, `#endregion`, `// region` (VS Code / JetBrains) / `noinspection`, `//file:noinspection`, `<editor-fold>`, `language=` (JetBrains) / `ReSharper disable/restore`
-
-The prettier rules copy prettier's own implementation: `prettier-ignore` is an exact match on the trimmed comment body (JS/TS has no `prettier-ignore-start`/`-end`, so those stay ordinary comments), the `@format`-family pragmas go through the same docblock parsing as jest-docblock (the file's first block comment only, `@` at the start of a line, spaces only before it), `/** @type */` and `/** @satisfies */` are the type-cast comments whose following parentheses prettier keeps (and which tsc honours in JavaScript), and `@flow`/`@noflow` in the leading comments is what switches its babel parser to Flow syntax. The test suite cross-checks these rules against the real prettier.
-
-The TypeScript rules follow both tsc 6 (the JavaScript compiler) and tsc 7 (the Go port). `//// @ts-ignore` and a `/// <reference types="node">` without its closing `/>` are live to tsc 7 alone, and an `@ts-ignore` behind a no-break space after `//` to tsc 6 alone; all of them count as directives. The test suite cross-checks these rules against the real tsc 6 as well.
+Each rule matches a comment the way the tool's own parser does. Directives that only work in certain positions, such as at the top of the file or at particular points in a `switch`, are detected only there. Where tools or versions read a comment differently, it counts as a directive if any of them honours it, so `--remove` keeps it. For TypeScript, a directive counts if either tsc 6 or tsc 7 honours it.
 
 ### Using it as a library
 
 ```ts
 import { scanPaths, scanComments, removeComments, changedFiles, formatText } from "@kongyo2/ts-comment-scanner";
 
-// Scan files / directories together
+// Scan files and directories together
 const results = await scanPaths(["src"], { ignore: ["**/*.test.ts"] });
 console.log(formatText(results));
 
-// Scan a source string directly
+// Scan a source string
 const comments = scanComments("// hello\nconst x = 1;");
 
-// Remove comments safely
+// Remove comments
 const { code, removed, kept } = removeComments("// note\nconst x = 1;\n");
 
-// Absolute paths of files changed in a git revision range
+// Absolute paths of the files changed in a git revision range
 const changed = await changedFiles("main..HEAD");
 ```
 
-#### Main API
-
-| Function | Summary |
+| Function | Description |
 | --- | --- |
-| `scanComments(source, options?)` | Get an array of comments from a source string (parse TSX with `options.jsx`) |
-| `scanFile(file)` | Scan a single file |
-| `scanPaths(inputs, options?)` | Recursively scan files / directories (supports `ignore` / `extensions`) |
-| `collectFiles(inputs, options?)` | Collect the list of target file paths |
-| `changedFiles(range, cwd?)` | Absolute paths of working-tree files changed in a git revision range |
-| `removeComments(source, options?)` | Remove comments safely (`removeDirectives` / `removeLegal` / `keep` / `shouldRemove`) |
-| `detectDirective(kind, text, placement?)` | Return a normalized name if the comment is a directive (`placement` enables position-sensitive rules) |
-| `isLegalComment(text)` | Determine whether a comment is a license/legal comment |
-| `formatText(results)` / `formatJson(results)` / `formatGitHub(results)` | Format scan results |
-| `readFileText(file)` / `decodeFileText(data)` / `encodeFileText(text, target)` | Read/decode/encode helpers that preserve UTF-8 / UTF-16 and BOMs |
-| `writeFileAtomic(file, data)` | Replace a file atomically through a temporary sibling |
+| `scanComments(source, options?)` | Returns the comments in a source string; `options.jsx` enables JSX |
+| `scanFile(file)` | Scans one file |
+| `scanPaths(inputs, options?)` | Scans files and directories; accepts `ignore`, `extensions` and `ignoreDirs` |
+| `collectFiles(inputs, options?)` | Collects the paths of the files to scan |
+| `changedFiles(range, cwd?)` | Returns the absolute paths of the files changed in a git revision range |
+| `removeComments(source, options?)` | Removes comments; accepts `removeDirectives`, `removeLegal`, `keep` and `shouldRemove` |
+| `detectDirective(kind, text, placement?)` | Returns the normalized name if the comment is a directive; `placement` enables the position-dependent rules |
+| `isLegalComment(text)` | Returns whether the comment is a license notice |
+| `isJsxFile(file)` | Returns whether the file's extension is parsed with JSX enabled |
+| `formatText(results)`, `formatJson(results)`, `formatGitHub(results)` | Formats scan results in each output format |
+| `readFileText(file)`, `decodeFileText(data)`, `encodeFileText(text, target)` | Reads and writes file contents, preserving the encoding and BOM |
+| `writeFileAtomic(file, data)` | Replaces a file through a temporary file |
 
-Types: `Comment` / `CommentKind` / `FileScanResult` / `ScanOptions` / `CollectOptions` / `RemoveOptions` / `RemoveResult` / `FileText` / `FileEncoding` / `DirectivePlacement`
+Types: `Comment`, `CommentKind`, `FileScanResult`, `ScanOptions`, `CollectOptions`, `RemoveOptions`, `RemoveResult`, `FileText`, `FileEncoding`, `DirectivePlacement`
 
 ### Requirements
 
