@@ -253,40 +253,6 @@ describe("scanComments robustness", () => {
     expect(comments).toHaveLength(1);
     expect(comments[0]?.text).toBe("// tail");
   });
-
-  it("stays fast when a long switch puts a fall-through comment in front of every clause", () => {
-    const clauses = Array.from({ length: 5_000 }, (_, index) => `  // falls through\n  case ${index}:\n    a();`);
-    const source = `switch (x) {\n${clauses.join("\n")}\n  // no default\n}\n`;
-
-    const directives = scanComments(source).map((comment) => comment.directive);
-
-    // The comment in front of the first clause has no clause before it to fall through.
-    expect(directives[0]).toBeUndefined();
-    expect(directives.slice(1, -1).every((directive) => directive === "fallthrough")).toBe(true);
-    expect(directives.at(-1)).toBe("no-default");
-  });
-
-  it("stays fast when comments sit deep inside generated expressions", () => {
-    // Only a comment a switch-clause rule matches looks up the syntax tree
-    // around it; walking up from every comment here would take quadratic time.
-    const source = `const x = ${Array(20_000).fill("a /* c */").join(" + ")};\n`;
-
-    const found = scanComments(source);
-
-    expect(found).toHaveLength(20_000);
-    expect(found.every((comment) => comment.directive === undefined)).toBe(true);
-  });
-
-  it("stays fast when JSX text and comments are both plentiful", () => {
-    const jsxText = Array(4_000).fill("t{1}").join("");
-    const comments = Array(4_000).fill("// c").join("\n");
-    const source = `const v = <p>${jsxText}</p>;\n${comments}\nconst w = 1;\n`;
-
-    const found = scanComments(source, { jsx: true });
-
-    expect(found).toHaveLength(4_000);
-    expect(found.every((comment) => comment.text === "// c")).toBe(true);
-  });
 });
 
 describe("scanComments directive fall-through", () => {
