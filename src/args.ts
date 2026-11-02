@@ -135,9 +135,18 @@ export function parseArgs(argv: string[]): CliOptions {
         rejectValue();
         removeLegal = true;
         break;
-      case "--keep":
+      case "--keep": {
+        // A forgotten pattern must not swallow the next flag: `--keep --dry-run`
+        // would turn a preview into an in-place removal. A pattern that does
+        // start with `-` can still be given inline, as `--keep=-x`.
+        if (inlineValue === undefined && argv[index + 1]?.startsWith("-") === true) {
+          throw new UsageError(
+            `option ${flag} requires a regular expression (use ${flag}=<regex> for one starting with "-")`,
+          );
+        }
         keep.push(parsePattern(flag, readValue()));
         break;
+      }
       case "--dry-run":
         rejectValue();
         dryRun = true;

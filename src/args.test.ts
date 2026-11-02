@@ -114,6 +114,15 @@ describe("parseArgs", () => {
     expect(keep[1]?.test("// INJECT:nextConfigOutput")).toBe(true);
   });
 
+  it("refuses to take the next flag as a --keep pattern, so --dry-run is never swallowed", () => {
+    expect(() => parseArgs(["--remove", "--keep", "--dry-run", "src"])).toThrow(
+      'option --keep requires a regular expression (use --keep=<regex> for one starting with "-")',
+    );
+    expect(() => parseArgs(["--remove", "--keep", "-x"])).toThrow(UsageError);
+    // Inline, a pattern may start with a dash.
+    expect(parseArgs(["--remove", "--keep=-->"]).keep.map((pattern) => pattern.source)).toEqual(["-->"]);
+  });
+
   it("rejects an empty or invalid --keep pattern", () => {
     expect(() => parseArgs(["--remove", "--keep", ""])).toThrow(/--keep requires a regular expression/);
     expect(() => parseArgs(["--remove", "--keep", "(unclosed"])).toThrow(

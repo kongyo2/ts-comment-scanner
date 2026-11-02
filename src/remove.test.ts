@@ -942,13 +942,20 @@ describe("removeComments keeps what tools read in large real-world codebases", (
     expect(removeComments(trailing).changed).toBe(false);
   });
 
-  it("keeps the comment whose removal would move an ast-grep suppression onto the first line", () => {
+  it("keeps the comment whose removal would move an ast-grep suppression into its file-wide position", () => {
     // On the first line, with nothing on the line below, it suppresses the whole file.
     const source = "// lead\n// ast-grep-ignore\n\neval(x);\n";
     const result = removeComments(source);
 
     expect(result.changed).toBe(false);
     expect(result.kept.map((comment) => comment.text)).toEqual(["// lead", "// ast-grep-ignore"]);
+  });
+
+  it("removes the comment in front of an ast-grep suppression that stays a next-line one on the first line", () => {
+    // With code right below, it suppresses that line before and after alike.
+    const source = "// lead\n// ast-grep-ignore\neval(x);\n";
+
+    expect(removeComments(source).code).toBe("// ast-grep-ignore\neval(x);\n");
   });
 
   it("keeps copyright headers in their conventional wording", () => {

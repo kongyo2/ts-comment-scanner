@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { scanComments } from "./scanner.js";
+import { isFileWidePosition, scanComments } from "./scanner.js";
 
 describe("scanComments", () => {
   it("detects a single-line comment", () => {
@@ -254,6 +254,18 @@ describe("scanComments robustness", () => {
     expect(comments[0]?.text).toBe("// tail");
   });
 
+  it("stays fast when a long switch puts a fall-through comment in front of every clause", () => {
+    const clauses = Array.from({ length: 5_000 }, (_, index) => `  // falls through\n  case ${index}:\n    a();`);
+    const source = `switch (x) {\n${clauses.join("\n")}\n  // no default\n}\n`;
+
+    const directives = scanComments(source).map((comment) => comment.directive);
+
+    // The comment in front of the first clause has no clause before it to fall through.
+    expect(directives[0]).toBeUndefined();
+    expect(directives.slice(1, -1).every((directive) => directive === "fallthrough")).toBe(true);
+    expect(directives.at(-1)).toBe("no-default");
+  });
+
   it("stays fast when comments sit deep inside generated expressions", () => {
     // Only a comment a switch-clause rule matches looks up the syntax tree
     // around it; walking up from every comment here would take quadratic time.
@@ -463,5 +475,30 @@ describe("scanComments switch-clause slots", () => {
     ].join("\n");
 
     expect(directivesOf(source)).toEqual(["fallthrough", "no-default"]);
+  });
+});
+
+describe("isFileWidePosition", () => {
+  const at = (text: string, comment: string): boolean => {
+    const start = text.indexOf(comment);
+    return isFileWidePosition(text, start, start + comment.length);
+  };
+
+  it("needs the comment to open the first line, with the next node two or more lines down", () => {
+    expect(at("// a\n\nfoo();\n", "// a")).toBe(true);
+    expect(at("  // a\n\nfoo();\n", "// a")).toBe(true);
+    expect(at("// a", "// a")).toBe(true);
+    expect(at("// a\nfoo();\n", "// a")).toBe(false);
+    expect(at("// a\n// b\n\nfoo();\n", "// a")).toBe(false);
+    expect(at("foo(); // a\n\nbar();\n", "// a")).toBe(false);
+    expect(at("\n// a\n\nfoo();\n", "// a")).toBe(false);
+  });
+
+  it("counts rows by line feeds, as tree-sitter does", () => {
+    expect(at("/* a\n\n */\nfoo();\n", "/* a\n\n */")).toBe(true);
+    expect(at("// a\r\n\r\nfoo();\r\n", "// a")).toBe(true);
+    // A lone CR or a line separator starts no new row for tree-sitter.
+    expect(at("\r// a\n\nfoo();\n", "// a")).toBe(true);
+    expect(at("// a\u2028\u2028foo();\n", "// a")).toBe(false);
   });
 });

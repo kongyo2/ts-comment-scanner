@@ -1,7 +1,7 @@
 import ts from "typescript";
 import { bunMarkerOffset, detectDirective, type DirectivePlacement } from "./directives.js";
 import { jsxLayout, type JsxLayout } from "./jsx.js";
-import { LINE_TERMINATOR, isBlank } from "./lines.js";
+import { isBlank } from "./lines.js";
 import { firstIndexAtOrAfter } from "./ranges.js";
 import type { Comment, CommentKind } from "./types.js";
 
@@ -113,7 +113,7 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
       header: range.pos < firstTokenStart,
       firstComment: firstComment && /^\s*$/.test(source.slice(shebangEnd, range.pos)),
       fileStart: range.pos === bunMarkerPos,
-      firstLine: firstComment && isFirstLinePosition(source, range.pos),
+      fileWide: firstComment && isFileWidePosition(source, range.pos, range.end),
       get fallthroughSlot() {
         return slotsOf().fallthroughSlot;
       },
@@ -145,10 +145,23 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
   return { comments, jsx: jsxLayout(source, sourceFile, jsxParents, comments) };
 }
 
-/** Whether the offset lies on the text's first line with nothing but whitespace before it. */
-export function isFirstLinePosition(text: string, offset: number): boolean {
-  const before = text.slice(0, offset);
-  return isBlank(before) && !LINE_TERMINATOR.test(before);
+/**
+ * Whether a comment from `start` to `end` sits where ast-grep's suppression
+ * comment covers the whole file (`get_suppression_kind` in its `combined.rs`):
+ * on the first line with nothing but whitespace in front of it, and with the
+ * next node — code or another comment — starting two or more lines further
+ * down, or with nothing after it at all. Lines are counted the way tree-sitter
+ * counts its rows, by line feeds alone.
+ */
+export function isFileWidePosition(text: string, start: number, end: number): boolean {
+  const before = text.slice(0, start);
+  if (!isBlank(before) || before.includes("\n")) return false;
+  const next = text.slice(end).search(/\S/);
+  return next === -1 || lineFeedCount(text.slice(0, end + next)) >= 2;
+}
+
+function lineFeedCount(text: string): number {
+  return text.split("\n").length - 1;
 }
 
 /**
@@ -166,7 +179,7 @@ function switchSlots(token: ts.Node): { fallthroughSlot: boolean; noDefaultSlot:
   ) {
     // In front of a clause: where ESLint, oxlint and deno_lint read the
     // comment saying the clause before it falls through — so not the first.
-    fallthroughSlot = parent.parent.clauses.indexOf(parent) > 0;
+    fallthroughSlot = parent.parent.clauses[0] !== parent;
   } else if (
     token.kind === ts.SyntaxKind.CloseBraceToken &&
     ts.isBlock(parent) &&

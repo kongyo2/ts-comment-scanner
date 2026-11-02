@@ -1189,11 +1189,11 @@ describe("activePositionalDirectives for the docblock and first-line markers", (
     expect(activePositionalDirectives("line", `// ${vitestPragma} jsdom`, first)).toEqual([]);
   });
 
-  it("marks an ast-grep suppression on the first line as file-wide", () => {
-    expect(activePositionalDirectives("line", "// ast-grep-ignore", { ...first, firstLine: true })).toEqual([
+  it("marks an ast-grep suppression in the file-wide position as file-wide", () => {
+    expect(activePositionalDirectives("line", "// ast-grep-ignore", { ...first, fileWide: true })).toEqual([
       "ast-grep-ignore:file",
     ]);
-    expect(activePositionalDirectives("line", "// ast-grep-ignore", { ...first, firstLine: false })).toEqual([]);
+    expect(activePositionalDirectives("line", "// ast-grep-ignore", { ...first, fileWide: false })).toEqual([]);
     expect(activePositionalDirectives("line", "// ast-grep-ignore", first)).toEqual([]);
   });
 });

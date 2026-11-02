@@ -169,8 +169,8 @@ const RULES: DirectiveRule[] = [
   // `combined.rs`), so the comment marker, stars and other punctuation may
   // precede it while a word in front makes it prose; `: rule-id, ...` limits
   // it to the rules named. Standing alone it suppresses the next line, after
-  // code it suppresses the statement it trails, and on the file's first line
-  // with nothing on the line below it the whole file.
+  // code it suppresses the statement it trails, and in the file-wide position
+  // (on the first line, with the next node two or more lines down) the file.
   { pattern: /^\P{Alphabetic}*ast-grep-ignore/u, rawText: true, name: "ast-grep-ignore" },
   // Deno. deno_lint compares the first whitespace-delimited token of the
   // trimmed comment text with the directive, so a JSDoc star in front defeats
@@ -599,11 +599,12 @@ export interface DirectivePlacement {
    */
   fileStart: boolean;
   /**
-   * The comment starts on the file's first line with nothing but whitespace
-   * before it, where ast-grep's suppression comment can apply to the whole
-   * file. Left out, the comment is assumed not to.
+   * The comment sits where ast-grep's suppression comment applies to the
+   * whole file: it starts the file's first line (nothing but whitespace before
+   * it) and whatever follows it starts two or more lines further down, or
+   * nothing does. Left out, the comment is assumed not to.
    */
-  firstLine?: boolean;
+  fileWide?: boolean;
   /**
    * The comment sits where a linter reads a switch fall-through comment
    * (`// falls through`): in front of a `case` or `default` clause other than
@@ -833,10 +834,11 @@ function* ruleMatches(kind: CommentKind, text: string): Generator<RuleMatch> {
   }
 }
 
-// ast-grep suppresses the whole file from a suppression comment on the first
-// line (with nothing on the line below it), and only the next line from one
-// anywhere else — so a comment moving onto the first line changes its reach.
-const FILE_WIDE_ON_FIRST_LINE: ReadonlySet<string> = new Set(["ast-grep-ignore"]);
+// ast-grep suppresses the whole file from a suppression comment in the
+// file-wide position (see DirectivePlacement.fileWide), and only the next line
+// from one anywhere else — so a comment moving into that position changes its
+// reach.
+const FILE_WIDE_SUPPRESSIONS: ReadonlySet<string> = new Set(["ast-grep-ignore"]);
 
 /**
  * The position-dependent directives (prettier's first-comment pragmas, Jest's
@@ -846,15 +848,15 @@ const FILE_WIDE_ON_FIRST_LINE: ReadonlySet<string> = new Set(["ast-grep-ignore"]
  * canonical name — this sees through masking: an eslint config block can also
  * hold a `@format` pragma, and whether that pragma is live must not hide
  * behind the name an earlier rule already claimed. Only first-comment,
- * file-start and first-line gates are consulted; header-gated directives
+ * file-start and file-wide gates are consulted; header-gated directives
  * cannot change activation when the comments around them change.
  */
 export function activePositionalDirectives(kind: CommentKind, text: string, placement: DirectivePlacement): string[] {
   const names = new Set<string>();
   for (const match of ruleMatches(kind, text)) {
     const { name } = match;
-    if (FILE_WIDE_ON_FIRST_LINE.has(name)) {
-      if (placement.firstLine === true) names.add(`${name}:file`);
+    if (FILE_WIDE_SUPPRESSIONS.has(name)) {
+      if (placement.fileWide === true) names.add(`${name}:file`);
       continue;
     }
     const positional =

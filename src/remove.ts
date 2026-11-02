@@ -2,7 +2,7 @@ import { activePositionalDirectives, bunMarkerOffset, isLegalComment, type Direc
 import type { JsxContainer } from "./jsx.js";
 import { LINE_TERMINATOR, isBlank, lineStartOffsets } from "./lines.js";
 import { firstIndexAtOrAfter, type Range } from "./ranges.js";
-import { analyzeSource, isFirstLinePosition } from "./scanner.js";
+import { analyzeSource, isFileWidePosition } from "./scanner.js";
 import { applyEdits, blankLineEdits, type Edit } from "./splice.js";
 import type { Comment } from "./types.js";
 
@@ -199,10 +199,10 @@ function firstChangedSurvivor(
  * without a parse: the comment is the file's first comment when nothing but
  * whitespace (or a shebang) precedes it — any earlier comment's text keeps
  * the slice non-blank — it sits at the file start when it begins where Bun
- * reads its marker, and on the first line when no line break precedes it
- * either. Header status needs the token structure, but removing comments
- * never moves a comment across the first token, so the positional check does
- * not consult it.
+ * reads its marker, and in ast-grep's file-wide position when it also opens
+ * the first line with the next node two or more lines down. Header status
+ * needs the token structure, but removing comments never moves a comment
+ * across the first token, so the positional check does not consult it.
  */
 function positionalPlacement(text: string, comment: Comment): DirectivePlacement {
   const shebangLength = /^#!.*/.exec(text)?.[0].length ?? 0;
@@ -210,7 +210,7 @@ function positionalPlacement(text: string, comment: Comment): DirectivePlacement
     header: false,
     firstComment: isBlank(text.slice(shebangLength, comment.start)),
     fileStart: comment.start === bunMarkerOffset(text),
-    firstLine: isFirstLinePosition(text, comment.start),
+    fileWide: isFileWidePosition(text, comment.start, comment.end),
   };
 }
 
