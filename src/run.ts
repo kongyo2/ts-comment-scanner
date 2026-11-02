@@ -48,6 +48,8 @@ Removal:
   --dry-run            With --remove: show what would be removed, change nothing
   --remove-directives  With --remove: also delete directive comments
   --remove-legal       With --remove: also delete license/legal comments
+  --keep <regex>       With --remove: also keep comments matching the regular
+                       expression, like directives (repeatable)
 
 General:
   -h, --help           Show this help
@@ -58,7 +60,8 @@ skipping node_modules and .git. Ignore globs without a slash match file names,
 and a trailing slash (dist/) restricts a glob to directories. JavaScript files
 (.js, .jsx, .mjs, .cjs) added with --ext are parsed with JSX enabled. Removal
 keeps directives and license headers unless explicitly requested, so builds
-and linters keep working.
+and linters keep working; --keep protects the markers only a project's own
+tooling reads, e.g. --keep "@skipMangle" or --keep "^// INJECT".
 
 --diff narrows any scan or removal to files changed in git: a single revision
 compares the working tree against it (HEAD covers all uncommitted work,
@@ -229,6 +232,7 @@ async function runRemove(options: CliOptions, collectOptions: CollectOptions, io
         jsx: isJsxFile(file),
         removeDirectives: options.removeDirectives,
         removeLegal: options.removeLegal,
+        keep: (comment) => options.keep.some((pattern) => pattern.test(comment.text)),
         shouldRemove: (comment) => inScope(comment, options.directives),
       });
       if (result.changed) {

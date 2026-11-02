@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { scanComments } from "./scanner.js";
+import { isFileWidePosition, scanComments } from "./scanner.js";
 
 describe("scanComments", () => {
   it("detects a single-line comment", () => {
@@ -254,6 +254,29 @@ describe("scanComments robustness", () => {
     expect(comments[0]?.text).toBe("// tail");
   });
 
+  it("stays fast when a long switch puts a fall-through comment in front of every clause", () => {
+    const clauses = Array.from({ length: 5_000 }, (_, index) => `  // falls through\n  case ${index}:\n    a();`);
+    const source = `switch (x) {\n${clauses.join("\n")}\n  // no default\n}\n`;
+
+    const directives = scanComments(source).map((comment) => comment.directive);
+
+    // The comment in front of the first clause has no clause before it to fall through.
+    expect(directives[0]).toBeUndefined();
+    expect(directives.slice(1, -1).every((directive) => directive === "fallthrough")).toBe(true);
+    expect(directives.at(-1)).toBe("no-default");
+  });
+
+  it("stays fast when comments sit deep inside generated expressions", () => {
+    // Only a comment a switch-clause rule matches looks up the syntax tree
+    // around it; walking up from every comment here would take quadratic time.
+    const source = `const x = ${Array(20_000).fill("a /* c */").join(" + ")};\n`;
+
+    const found = scanComments(source);
+
+    expect(found).toHaveLength(20_000);
+    expect(found.every((comment) => comment.directive === undefined)).toBe(true);
+  });
+
   it("stays fast when JSX text and comments are both plentiful", () => {
     const jsxText = Array(4_000).fill("t{1}").join("");
     const comments = Array(4_000).fill("// c").join("\n");
@@ -351,5 +374,131 @@ describe("scanComments switch-clause comments", () => {
       undefined,
       undefined,
     ]);
+  });
+});
+
+describe("scanComments switch-clause slots", () => {
+  const directivesOf = (source: string) => scanComments(source).map((comment) => comment.directive);
+
+  it("reads a fall-through comment only in front of a later clause or a case block's closing brace", () => {
+    const source = [
+      "switch (x) {",
+      "  // falls through (nothing comes before the first clause)",
+      "  case 0:",
+      "    a(); // falls through",
+      "  case 1: {",
+      "    b();",
+      "    // falls through",
+      "  }",
+      "  case 2:",
+      "    c();",
+      "    { d(); /* falls through */ }",
+      "  default: {",
+      "    e();",
+      "    // falls through (the last clause has nothing to fall into)",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+
+    expect(directivesOf(source)).toEqual([undefined, "fallthrough", "fallthrough", "fallthrough", undefined]);
+  });
+
+  it("keeps fall-through words in front of other closing braces ordinary", () => {
+    const ifBlock = [
+      "function f() {",
+      "  if (isSymbol(component)) {",
+      "    return // other built-in components: fallthrough",
+      "  }",
+      "  try {",
+      "    g();",
+      "  } catch {",
+      "    // Failed to find symbol, fall through to use the first definition",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    const nestedInCase =
+      "switch (x) {\n  case 0:\n    if (y) {\n      a(); // falls through\n    }\n  case 1:\n    b();\n}\n";
+
+    expect(directivesOf(ifBlock)).toEqual([undefined, undefined]);
+    expect(directivesOf(nestedInCase)).toEqual([undefined]);
+  });
+
+  it("reads a no-default comment only after the last clause of a switch without a default", () => {
+    const afterLast = "switch (x) {\n  case 1:\n    a();\n  // no default\n}\n";
+    const withDefault = "switch (x) {\n  case 1:\n    a();\n    break;\n  default:\n    b();\n  // no default\n}\n";
+    const objectLiteral = "const schema = {\n  size: { type: 'number' }, // no default\n};\n";
+    const emptySwitch = "switch (x) {\n  // no default\n}\n";
+
+    expect(directivesOf(afterLast)).toEqual(["no-default"]);
+    expect(directivesOf(withDefault)).toEqual([undefined]);
+    expect(directivesOf(objectLiteral)).toEqual([undefined]);
+    expect(directivesOf(emptySwitch)).toEqual([undefined]);
+  });
+
+  it("also reads a no-default comment anywhere inside the last clause, as oxlint does", () => {
+    const source = [
+      "switch (x) {",
+      "  case 1:",
+      "    // no default",
+      "    a();",
+      "  // no default",
+      "  case 2:",
+      "    if (y) {",
+      "      // no default",
+      "    }",
+      "}",
+      "",
+    ].join("\n");
+
+    expect(directivesOf(source)).toEqual([undefined, undefined, "no-default"]);
+  });
+
+  it("reads the slots of a nested switch's clauses on their own", () => {
+    const source = [
+      "switch (x) {",
+      "  case 0:",
+      "    switch (y) {",
+      "      case 1:",
+      "        a();",
+      "      // falls through",
+      "      case 2:",
+      "        b();",
+      "      // no default",
+      "    }",
+      "    break;",
+      "  default:",
+      "    c();",
+      "}",
+      "",
+    ].join("\n");
+
+    expect(directivesOf(source)).toEqual(["fallthrough", "no-default"]);
+  });
+});
+
+describe("isFileWidePosition", () => {
+  const at = (text: string, comment: string): boolean => {
+    const start = text.indexOf(comment);
+    return isFileWidePosition(text, start, start + comment.length);
+  };
+
+  it("needs the comment to open the first line, with the next node two or more lines down", () => {
+    expect(at("// a\n\nfoo();\n", "// a")).toBe(true);
+    expect(at("  // a\n\nfoo();\n", "// a")).toBe(true);
+    expect(at("// a", "// a")).toBe(true);
+    expect(at("// a\nfoo();\n", "// a")).toBe(false);
+    expect(at("// a\n// b\n\nfoo();\n", "// a")).toBe(false);
+    expect(at("foo(); // a\n\nbar();\n", "// a")).toBe(false);
+    expect(at("\n// a\n\nfoo();\n", "// a")).toBe(false);
+  });
+
+  it("counts rows by line feeds, as tree-sitter does", () => {
+    expect(at("/* a\n\n */\nfoo();\n", "/* a\n\n */")).toBe(true);
+    expect(at("// a\r\n\r\nfoo();\r\n", "// a")).toBe(true);
+    // A lone CR or a line separator starts no new row for tree-sitter.
+    expect(at("\r// a\n\nfoo();\n", "// a")).toBe(true);
+    expect(at("// a\u2028\u2028foo();\n", "// a")).toBe(false);
   });
 });

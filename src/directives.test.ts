@@ -1106,3 +1106,127 @@ describe("detectDirective against the current tool sources", () => {
     expect(detectDirective("line", "// the region below")).toBeUndefined();
   });
 });
+
+// Markers found in the comments of large real-world codebases (VS Code,
+// TypeScript, Next.js, Vue, MUI) that the removal used to delete although a
+// tool reads them.
+describe("detectDirective for markers real codebases rely on", () => {
+  const jestPragma = ["@jest", "environment"].join("-");
+  const vitestPragma = ["@vitest", "environment"].join("-");
+  const midFile = { header: false, firstComment: false, fileStart: false };
+  const first = { header: true, firstComment: true, fileStart: true };
+
+  it("detects tsc's stripInternal marker as the bare substring tsc checks", () => {
+    expect(detectDirective("block", "/** @internal */")).toBe("@internal");
+    expect(detectDirective("block", "/**\n * Exported for tests.\n * @internal\n */")).toBe("@internal");
+    expect(detectDirective("line", "// @internal")).toBe("@internal");
+    expect(detectDirective("block", "/** @internal - required to exclude zod types from the build */")).toBe(
+      "@internal",
+    );
+    // hasInternalAnnotation is `comment.includes("@internal")`, nothing more.
+    expect(detectDirective("block", "/* see @internalApi */")).toBe("@internal");
+    expect(detectDirective("line", "// internal helper")).toBeUndefined();
+  });
+
+  it("detects ast-grep suppressions whose first alphabetic text is the marker", () => {
+    expect(detectDirective("line", "// ast-grep-ignore")).toBe("ast-grep-ignore");
+    expect(detectDirective("line", "// ast-grep-ignore: no-typeof-window-require-tsx")).toBe("ast-grep-ignore");
+    expect(detectDirective("line", "//ast-grep-ignore: a, b")).toBe("ast-grep-ignore");
+    expect(detectDirective("block", "/* ast-grep-ignore: rule-id */")).toBe("ast-grep-ignore");
+    expect(detectDirective("block", "/** ast-grep-ignore */")).toBe("ast-grep-ignore");
+    // Only non-alphabetic text may come first: digits and punctuation do not count.
+    expect(detectDirective("line", "// 1. ast-grep-ignore")).toBe("ast-grep-ignore");
+    expect(detectDirective("line", "// note: ast-grep-ignore is prose here")).toBeUndefined();
+    expect(detectDirective("line", "// é ast-grep-ignore")).toBeUndefined();
+  });
+
+  it("reads Jest's docblock pragmas with any value, in the file's first comment only", () => {
+    const scoped = `/**\n * ${jestPragma} @edge-runtime/jest-environment\n */`;
+    const path = `/** ${jestPragma} ./test/environment.js */`;
+    const options = `/**\n * ${jestPragma}-options {"url": "https://example.com"}\n */`;
+
+    expect(detectDirective("block", scoped, first)).toBe(jestPragma);
+    expect(detectDirective("block", path, first)).toBe(jestPragma);
+    expect(detectDirective("block", options, first)).toBe(`${jestPragma}-options`);
+    // Jest reads no other comment, and Vitest's `[\w-]+` value misses these.
+    expect(detectDirective("block", scoped, midFile)).toBeUndefined();
+    expect(detectDirective("block", path, midFile)).toBeUndefined();
+    expect(detectDirective("line", `// ${jestPragma} @edge-runtime/jest-environment`, first)).toBeUndefined();
+    // Vitest's own reading is unaffected: a plain value counts anywhere.
+    expect(detectDirective("block", `/** ${jestPragma} jsdom */`, midFile)).toBe(jestPragma);
+    expect(detectDirective("block", `/** ${vitestPragma} jsdom */`, midFile)).toBe(vitestPragma);
+    // Jest knows no @vitest- keys.
+    expect(detectDirective("block", `/** ${vitestPragma} @scope/env */`, first)).toBeUndefined();
+  });
+
+  it("lets the switch slots decide ESLint's switch comments, over the coarse next token", () => {
+    expect(detectDirective("line", "// falls through", { ...midFile, fallthroughSlot: true })).toBe("fallthrough");
+    expect(detectDirective("line", "// falls through", { ...midFile, fallthroughSlot: false, nextToken: "}" })).toBe(
+      undefined,
+    );
+    expect(detectDirective("line", "// no default", { ...midFile, noDefaultSlot: true })).toBe("no-default");
+    expect(detectDirective("line", "// no default", { ...midFile, noDefaultSlot: false, nextToken: "}" })).toBe(
+      undefined,
+    );
+    // A slot for the other comment says nothing about this one.
+    expect(detectDirective("line", "// falls through", { ...midFile, noDefaultSlot: true, nextToken: "}" })).toBe(
+      "fallthrough",
+    );
+  });
+});
+
+describe("activePositionalDirectives for the docblock and first-line markers", () => {
+  const jestPragma = ["@jest", "environment"].join("-");
+  const vitestPragma = ["@vitest", "environment"].join("-");
+  const first = { header: true, firstComment: true, fileStart: true };
+
+  it("includes Jest's docblock pragmas, which only count in the first comment", () => {
+    const docblock = `/** ${jestPragma} @edge-runtime/jest-environment */`;
+
+    expect(activePositionalDirectives("block", docblock, first)).toEqual([jestPragma]);
+    expect(activePositionalDirectives("block", docblock, { ...first, firstComment: false })).toEqual([]);
+    // Vitest reads its pragma anywhere, so it never depends on the position.
+    expect(activePositionalDirectives("line", `// ${vitestPragma} jsdom`, first)).toEqual([]);
+  });
+
+  it("marks an ast-grep suppression in the file-wide position as file-wide", () => {
+    expect(activePositionalDirectives("line", "// ast-grep-ignore", { ...first, fileWide: true })).toEqual([
+      "ast-grep-ignore:file",
+    ]);
+    expect(activePositionalDirectives("line", "// ast-grep-ignore", { ...first, fileWide: false })).toEqual([]);
+    expect(activePositionalDirectives("line", "// ast-grep-ignore", first)).toEqual([]);
+  });
+});
+
+describe("isLegalComment beyond the bundler conventions", () => {
+  it.each([
+    "/*---------------------------------------------------------------------------------------------\n *  Copyright (c) Microsoft Corporation. All rights reserved.\n *  Licensed under the MIT License. See License.txt in the project root for license information.\n *--------------------------------------------------------------------------------------------*/",
+    "/*\n * Copyright 2011 Mozilla Foundation and contributors\n * Licensed under the New BSD license. See LICENSE or:\n * http://opensource.org/licenses/BSD-3-Clause\n */",
+    "// Copyright Joyent, Inc. and other Node contributors.",
+    "// Copyright (C) 2008 Microsoft Corporation",
+    "/* © 2024 Example Corp */",
+    '// Licensed under the Apache License, Version 2.0 (the "License");',
+    "/* Permission is hereby granted, free of charge, to any person obtaining a copy */",
+    "// All rights reserved.",
+    "/* Redistribution and use in source and binary forms, with or without modification, are permitted */",
+    "/* This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. */",
+    "/* This program is free software: see the GNU General Public License for more details. */",
+  ])("recognises the conventional notice %s", (text) => {
+    expect(isLegalComment(text)).toBe(true);
+  });
+
+  it("keeps the comments terser keeps: `!` after any stars, and @lic… tags", () => {
+    expect(isLegalComment("/**! banner */")).toBe(true);
+    expect(isLegalComment("//*! banner")).toBe(true);
+    expect(isLegalComment("/* @licence MIT */")).toBe(true);
+    expect(isLegalComment("/* @preserveDefaults */")).toBe(true);
+    expect(isLegalComment("/// ! not a banner")).toBe(false);
+  });
+
+  it("does not treat prose mentioning copyright or licenses as legal", () => {
+    expect(isLegalComment("// update the copyright year on release")).toBe(false);
+    expect(isLegalComment("// Copyright headers are checked by the hygiene task")).toBe(false);
+    expect(isLegalComment("// the license field must be set")).toBe(false);
+    expect(isLegalComment("// (c) is the third option")).toBe(false);
+  });
+});
