@@ -12,6 +12,8 @@ export interface CliOptions {
   remove: boolean;
   removeDirectives: boolean;
   removeLegal: boolean;
+  /** Patterns of comments --remove keeps anyway (--keep). */
+  keep: RegExp[];
   dryRun: boolean;
   help: boolean;
   version: boolean;
@@ -32,6 +34,7 @@ export function parseArgs(argv: string[]): CliOptions {
   const paths: string[] = [];
   const ignore: string[] = [];
   const extensions: string[] = [];
+  const keep: RegExp[] = [];
   let format: OutputFormat = "text";
   let diff: string | undefined;
   let directives: DirectiveMode = "include";
@@ -132,6 +135,9 @@ export function parseArgs(argv: string[]): CliOptions {
         rejectValue();
         removeLegal = true;
         break;
+      case "--keep":
+        keep.push(parsePattern(flag, readValue()));
+        break;
       case "--dry-run":
         rejectValue();
         dryRun = true;
@@ -156,6 +162,7 @@ export function parseArgs(argv: string[]): CliOptions {
       [dryRun, "--dry-run"],
       [removeDirectives, "--remove-directives"],
       [removeLegal, "--remove-legal"],
+      [keep.length > 0, "--keep"],
     ] as const) {
       if (set) throw new UsageError(`${flag} requires --remove`);
     }
@@ -186,10 +193,22 @@ export function parseArgs(argv: string[]): CliOptions {
     remove,
     removeDirectives,
     removeLegal,
+    keep,
     dryRun,
     help,
     version,
   };
+}
+
+/** Compiles a pattern-valued option, reporting an invalid regular expression as a usage error. */
+function parsePattern(flag: string, value: string): RegExp {
+  if (value === "") throw new UsageError(`option ${flag} requires a regular expression`);
+  try {
+    return new RegExp(value);
+  } catch (error) {
+    // The engine's message names the problem: "Invalid regular expression: /(/: Unterminated group".
+    throw new UsageError(`option ${flag}: ${(error as Error).message}`);
+  }
 }
 
 function splitFlag(arg: string): [string, string | undefined] {

@@ -882,3 +882,111 @@ describe("removeComments keeps the shields of directives that open a comment", (
     expect(removeComments(source).changed).toBe(false);
   });
 });
+
+describe("removeComments keeps what tools read in large real-world codebases", () => {
+  const jestPragma = ["@jest", "environment"].join("-");
+
+  it("keeps stripInternal's @internal markers, so the emitted declarations stay as narrow", () => {
+    const source = "/** @internal */\nexport function track(): void {}\n// gone\nexport const x = 1;\n";
+
+    expect(removeComments(source).code).toBe(
+      "/** @internal */\nexport function track(): void {}\nexport const x = 1;\n",
+    );
+    expect(removeComments(source, { removeDirectives: true }).code).toBe(
+      "export function track(): void {}\nexport const x = 1;\n",
+    );
+  });
+
+  it("keeps a Jest docblock that picks a scoped-package environment", () => {
+    const source = `/**\n * ${jestPragma} @edge-runtime/jest-environment\n */\n// gone\nimport { x } from "y";\n`;
+
+    expect(removeComments(source).code).toBe(
+      `/**\n * ${jestPragma} @edge-runtime/jest-environment\n */\nimport { x } from "y";\n`,
+    );
+  });
+
+  it("keeps the comment in front of a kept Jest docblock that removing it would make the first", () => {
+    // The docblock stays for its license tag; as the second comment Jest
+    // ignores its pragma, so the comment holding it there stays too.
+    const docblock = `/**\n * @license MIT\n * ${jestPragma} ./env.js\n */`;
+    const source = `// lead\n${docblock}\ntest("x", () => {});\n`;
+    const result = removeComments(source);
+
+    expect(result.changed).toBe(false);
+    expect(result.kept.map((comment) => comment.text)).toEqual(["// lead", docblock]);
+  });
+
+  it("removes an inert Jest docblock that is not the first comment along with the rest", () => {
+    const source = `// lead\n/** ${jestPragma} ./env.js */\ntest("x", () => {});\n`;
+
+    expect(removeComments(source).code).toBe('test("x", () => {});\n');
+  });
+
+  it("shields the line below a standalone ast-grep suppression", () => {
+    const source = "// ast-grep-ignore: no-eval\n// why\neval(x);\n";
+
+    expect(removeComments(source).changed).toBe(false);
+  });
+
+  it("shields nothing below an ast-grep suppression that trails code", () => {
+    const source = "eval(x); // ast-grep-ignore: no-eval\n// gone\nfoo();\n";
+
+    expect(removeComments(source).code).toBe("eval(x); // ast-grep-ignore: no-eval\nfoo();\n");
+  });
+
+  it("keeps the comments in front of an ast-grep suppression on its line, which make it trailing", () => {
+    const standalone = "foo();\n/* note */ // ast-grep-ignore\neval(x); // gone\n";
+    const trailing = "foo(\n  1,\n); /* note */ // ast-grep-ignore\n";
+
+    expect(removeComments(standalone).code).toBe("foo();\n/* note */ // ast-grep-ignore\neval(x);\n");
+    expect(removeComments(trailing).changed).toBe(false);
+  });
+
+  it("keeps the comment whose removal would move an ast-grep suppression onto the first line", () => {
+    // On the first line, with nothing on the line below, it suppresses the whole file.
+    const source = "// lead\n// ast-grep-ignore\n\neval(x);\n";
+    const result = removeComments(source);
+
+    expect(result.changed).toBe(false);
+    expect(result.kept.map((comment) => comment.text)).toEqual(["// lead", "// ast-grep-ignore"]);
+  });
+
+  it("keeps copyright headers in their conventional wording", () => {
+    const header = [
+      "/*---------------------------------------------------------------------------------------------",
+      " *  Copyright (c) Microsoft Corporation. All rights reserved.",
+      " *  Licensed under the MIT License. See License.txt in the project root for license information.",
+      " *--------------------------------------------------------------------------------------------*/",
+    ].join("\n");
+    const source = `${header}\n\n// gone\nexport const x = 1;\n`;
+
+    expect(removeComments(source).code).toBe(`${header}\n\nexport const x = 1;\n`);
+    expect(removeComments(source, { removeLegal: true }).code).toBe("export const x = 1;\n");
+  });
+
+  it("removes fall-through words in front of a block's closing brace outside a case", () => {
+    const source = [
+      "if (ready) {",
+      "  run();",
+      "  // Listed but not yet valid: fall through to wait and re-poll.",
+      "  // Deliberately no early give-up here.",
+      "} else {",
+      "  wait();",
+      "}",
+      "",
+    ].join("\n");
+
+    expect(removeComments(source).code).toBe("if (ready) {\n  run();\n} else {\n  wait();\n}\n");
+  });
+
+  it("keeps what the keep predicate claims, like a directive, and reports it as kept", () => {
+    const source = "// INJECT:nextConfigOutput\n// gone\nconst x = 1;\n";
+    const result = removeComments(source, {
+      removeDirectives: true,
+      keep: (comment) => comment.text.startsWith("// INJECT"),
+    });
+
+    expect(result.code).toBe("// INJECT:nextConfigOutput\nconst x = 1;\n");
+    expect(result.kept.map((comment) => comment.text)).toEqual(["// INJECT:nextConfigOutput"]);
+  });
+});

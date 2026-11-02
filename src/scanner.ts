@@ -1,6 +1,8 @@
 import ts from "typescript";
 import { bunMarkerOffset, detectDirective, type DirectivePlacement } from "./directives.js";
 import { jsxLayout, type JsxLayout } from "./jsx.js";
+import { LINE_TERMINATOR, isBlank } from "./lines.js";
+import { firstIndexAtOrAfter } from "./ranges.js";
 import type { Comment, CommentKind } from "./types.js";
 
 export interface ScanOptions {
@@ -27,6 +29,8 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
   const jsxParents: Array<ts.JsxElement | ts.JsxFragment> = [];
   const ranges: ts.CommentRange[] = [];
   const seen = new Set<number>();
+  /** Every token, in document order. */
+  const tokens: ts.Node[] = [];
 
   const collect = (found: readonly ts.CommentRange[] | undefined): void => {
     if (!found) return;
@@ -49,6 +53,7 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
     // end-of-file token). Treat them as trivia like any other comment.
     const children = node.getChildren(sourceFile).filter((child) => !ts.isJSDoc(child));
     if (children.length === 0) {
+      tokens.push(node);
       if (node.kind === ts.SyntaxKind.JsxText) {
         jsxTextSpans.push([node.getFullStart(), node.getEnd()]);
       }
@@ -91,30 +96,39 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
   const shebangEnd = ts.getShebang(source)?.length ?? 0;
   const firstCommentPos = sorted.length > 0 ? (sorted[0] as ts.CommentRange).pos : -1;
   const bunMarkerPos = bunMarkerOffset(source);
-  // The token after each comment, past the comments that follow it (`""` when
-  // only comments do): walking back from the last comment, a gap holding code
-  // supplies its first token and a blank one passes on the next comment's.
-  const nextTokens: string[] = [];
-  let following = "";
-  for (let index = sorted.length - 1; index >= 0; index -= 1) {
-    const gapEnd = sorted[index + 1]?.pos ?? source.length;
-    const gap = source.slice((sorted[index] as ts.CommentRange).end, gapEnd);
-    following = /^\s*([A-Za-z_$][\w$]*|\S)/.exec(gap)?.[1] ?? following;
-    nextTokens[index] = following;
-  }
-  const placementOf = (pos: number, index: number): DirectivePlacement => ({
-    header: pos < firstTokenStart,
-    firstComment: pos === firstCommentPos && /^\s*$/.test(source.slice(shebangEnd, pos)),
-    fileStart: pos === bunMarkerPos,
-    nextToken: nextTokens[index] as string,
-  });
+  // The token after a comment, past any further comments: no token overlaps
+  // a comment, so it is the first one ending at or past the comment's end
+  // (the end-of-file token ends at the text's end). Token ends never
+  // decrease in document order, so a binary search finds it — without
+  // skipping the leading trivia a token start would need.
+  const tokenAfter = (offset: number): ts.Node =>
+    tokens[firstIndexAtOrAfter(tokens, offset, (token) => token.end)] as ts.Node;
+  const placementOf = (range: ts.CommentRange): DirectivePlacement => {
+    // The switch slots walk the syntax tree, so they are worked out only for
+    // the comments a switch-clause rule matched, when it asks.
+    let slots: ReturnType<typeof switchSlots> | undefined;
+    const slotsOf = (): ReturnType<typeof switchSlots> => (slots ??= switchSlots(tokenAfter(range.end)));
+    const firstComment = range.pos === firstCommentPos;
+    return {
+      header: range.pos < firstTokenStart,
+      firstComment: firstComment && /^\s*$/.test(source.slice(shebangEnd, range.pos)),
+      fileStart: range.pos === bunMarkerPos,
+      firstLine: firstComment && isFirstLinePosition(source, range.pos),
+      get fallthroughSlot() {
+        return slotsOf().fallthroughSlot;
+      },
+      get noDefaultSlot() {
+        return slotsOf().noDefaultSlot;
+      },
+    };
+  };
 
-  const comments = sorted.map((range, index): Comment => {
+  const comments = sorted.map((range): Comment => {
     const kind: CommentKind = range.kind === ts.SyntaxKind.SingleLineCommentTrivia ? "line" : "block";
     const text = source.slice(range.pos, range.end);
     const startPosition = sourceFile.getLineAndCharacterOfPosition(range.pos);
     const endPosition = sourceFile.getLineAndCharacterOfPosition(range.end);
-    const directive = detectDirective(kind, text, placementOf(range.pos, index));
+    const directive = detectDirective(kind, text, placementOf(range));
     return {
       kind,
       text,
@@ -129,4 +143,60 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
   });
 
   return { comments, jsx: jsxLayout(source, sourceFile, jsxParents, comments) };
+}
+
+/** Whether the offset lies on the text's first line with nothing but whitespace before it. */
+export function isFirstLinePosition(text: string, offset: number): boolean {
+  const before = text.slice(0, offset);
+  return isBlank(before) && !LINE_TERMINATOR.test(before);
+}
+
+/**
+ * The switch slots (see DirectivePlacement) a comment in front of the given
+ * token sits in. The token is what follows the comment past any further
+ * comments — the end-of-file token at the latest, whose parent is the file.
+ */
+function switchSlots(token: ts.Node): { fallthroughSlot: boolean; noDefaultSlot: boolean } {
+  let fallthroughSlot = false;
+  let noDefaultSlot = false;
+  const parent = token.parent;
+  if (
+    (token.kind === ts.SyntaxKind.CaseKeyword || token.kind === ts.SyntaxKind.DefaultKeyword) &&
+    ts.isCaseOrDefaultClause(parent)
+  ) {
+    // In front of a clause: where ESLint, oxlint and deno_lint read the
+    // comment saying the clause before it falls through — so not the first.
+    fallthroughSlot = parent.parent.clauses.indexOf(parent) > 0;
+  } else if (
+    token.kind === ts.SyntaxKind.CloseBraceToken &&
+    ts.isBlock(parent) &&
+    ts.isCaseOrDefaultClause(parent.parent)
+  ) {
+    // Inside a block that is the last statement of a clause (its only one,
+    // for ESLint and oxlint), in front of its closing brace — read when
+    // another clause follows.
+    const clause = parent.parent;
+    const clauses = clause.parent.clauses;
+    fallthroughSlot = clause.statements.at(-1) === parent && clauses.at(-1) !== clause;
+  } else if (token.kind === ts.SyntaxKind.CloseBraceToken && ts.isCaseBlock(parent)) {
+    // After the last clause of a switch, in front of its closing brace:
+    // where ESLint's default-case reads its comment.
+    noDefaultSlot = lacksDefaultClause(parent);
+  }
+  // oxlint's default-case reads the last comment from the last clause's
+  // start to the switch's end, so the comments inside that clause count too
+  // — all but one in front of the clause's opening `case`.
+  for (let node = parent; !noDefaultSlot && !ts.isSourceFile(node); node = node.parent) {
+    noDefaultSlot =
+      ts.isCaseClause(node) &&
+      node.parent.clauses.at(-1) === node &&
+      lacksDefaultClause(node.parent) &&
+      (node !== parent || token.kind !== ts.SyntaxKind.CaseKeyword);
+  }
+  return { fallthroughSlot, noDefaultSlot };
+}
+
+/** Whether the switch has clauses but none of them is a default clause. */
+function lacksDefaultClause(caseBlock: ts.CaseBlock): boolean {
+  return caseBlock.clauses.length > 0 && !caseBlock.clauses.some(ts.isDefaultClause);
 }

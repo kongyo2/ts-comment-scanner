@@ -235,6 +235,21 @@ describe("run", () => {
     expect(out()).toContain("Kept 1 protected comment.");
   });
 
+  it("keeps the comments --keep patterns match, even with --remove-directives", async () => {
+    const file = join(dir, "a.ts");
+    await writeFile(file, "// INJECT:nextConfigOutput\n/** @skipMangle */\n// @ts-ignore\nfoo();\n// gone\n");
+    const { io, out } = capture();
+
+    const code = await run(
+      ["--remove", "--remove-directives", "--keep", "^// INJECT:", "--keep", "@skipMangle\\b", dir],
+      io,
+    );
+
+    expect(code).toBe(0);
+    expect(await readFile(file, "utf8")).toBe("// INJECT:nextConfigOutput\n/** @skipMangle */\nfoo();\n");
+    expect(out()).toContain("Removed 2 comments across 1 file. Kept 2 protected comments.");
+  });
+
   it("does not modify files with --remove --dry-run", async () => {
     const file = join(dir, "a.ts");
     const source = "// gone\nconst x = 1;\n";

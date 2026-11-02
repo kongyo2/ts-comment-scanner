@@ -2,7 +2,7 @@ import { activePositionalDirectives, bunMarkerOffset, isLegalComment, type Direc
 import type { JsxContainer } from "./jsx.js";
 import { LINE_TERMINATOR, isBlank, lineStartOffsets } from "./lines.js";
 import { firstIndexAtOrAfter, type Range } from "./ranges.js";
-import { analyzeSource } from "./scanner.js";
+import { analyzeSource, isFirstLinePosition } from "./scanner.js";
 import { applyEdits, blankLineEdits, type Edit } from "./splice.js";
 import type { Comment } from "./types.js";
 
@@ -12,6 +12,13 @@ export interface RemoveOptions {
   removeDirectives?: boolean;
   /** Also remove license/legal comments. Default: false (kept for safety). */
   removeLegal?: boolean;
+  /**
+   * Extra protection: return true to keep a comment the way directives are
+   * kept, for markers only a project's own tooling reads (a build template's
+   * placeholder, a custom linter tag). Wins over removeDirectives and
+   * removeLegal; such comments are reported in `kept`.
+   */
+  keep?: (comment: Comment) => boolean;
   /** Extra predicate: return false to leave a comment out of the removal entirely. */
   shouldRemove?: (comment: Comment) => boolean;
 }
@@ -22,7 +29,9 @@ export interface RemoveResult {
   removed: Comment[];
   /**
    * Comments kept because they are protected: directives, license headers,
-   * comments whose removal would shift code under a next-line directive or
+   * comments the `keep` predicate claims, comments that make a directive
+   * trailing rather than standalone (ast-grep's suppression), comments whose
+   * removal would shift code under a next-line directive or
    * that sit between a directive and the code it reaches past them for (or
    * the JSX sibling it applies to), and comments whose removal would move a
    * position-dependent directive (prettier's first-comment pragma, Deno's
@@ -189,10 +198,11 @@ function firstChangedSurvivor(
  * The placement bits the position-dependent directives care about, derived
  * without a parse: the comment is the file's first comment when nothing but
  * whitespace (or a shebang) precedes it — any earlier comment's text keeps
- * the slice non-blank — and it sits at the file start when it begins where
- * Bun reads its marker. Header status needs the token structure, but
- * removing comments never moves a comment across the first token, so the
- * positional check does not consult it.
+ * the slice non-blank — it sits at the file start when it begins where Bun
+ * reads its marker, and on the first line when no line break precedes it
+ * either. Header status needs the token structure, but removing comments
+ * never moves a comment across the first token, so the positional check does
+ * not consult it.
  */
 function positionalPlacement(text: string, comment: Comment): DirectivePlacement {
   const shebangLength = /^#!.*/.exec(text)?.[0].length ?? 0;
@@ -200,6 +210,7 @@ function positionalPlacement(text: string, comment: Comment): DirectivePlacement
     header: false,
     firstComment: isBlank(text.slice(shebangLength, comment.start)),
     fileStart: comment.start === bunMarkerOffset(text),
+    firstLine: isFirstLinePosition(text, comment.start),
   };
 }
 
@@ -228,6 +239,7 @@ function editKeepingBom(source: string, edits: readonly Edit[]): string {
 }
 
 function isProtected(comment: Comment, options: RemoveOptions): boolean {
+  if (options.keep?.(comment) === true) return true;
   if (comment.directive !== undefined && options.removeDirectives !== true) return true;
   if (isLegalComment(comment.text) && options.removeLegal !== true) return true;
   return false;
@@ -499,6 +511,8 @@ function shieldNextLineDirectives(
   const blockingLines = new Set<number>();
   const shieldedGaps: Array<readonly [number, number]> = [];
   const siblingTargets = new Set<Container>();
+  /** Directives whose own line, up to where they start, has to stay as it is. */
+  const linePrefixes: Comment[] = [];
   const processed = new Set<Comment>();
   let stillRemoved = removed;
   let units: RemovalUnit[] | undefined;
@@ -525,6 +539,10 @@ function shieldNextLineDirectives(
           blockingLines.add(line);
           added = true;
         }
+      }
+      if (LINE_PREFIX_SENSITIVE.has(directive)) {
+        linePrefixes.push(comment);
+        added = true;
       }
       if (!isNextLineDirective(directive)) continue;
       // In JSX, such a directive in braces applies to the sibling after it,
@@ -587,6 +605,15 @@ function shieldNextLineDirectives(
       const group = stillRemoved.filter((comment) => target.comments.includes(comment));
       if (group.length === 0) continue;
       protect(group);
+      changed = true;
+    }
+    for (const directive of linePrefixes) {
+      // Whatever ends on the directive's line in front of it: the comments
+      // that make it a trailing suppression, or that it trails.
+      const lineStart = lineOffsets[directive.line - 1] as number;
+      const group = currentUnits().filter((unit) => unit.end > lineStart && unit.end <= directive.start);
+      if (group.length === 0) continue;
+      protect(group.flatMap((unit) => unit.comments));
       changed = true;
     }
     return changed;
@@ -744,7 +771,15 @@ const TRAILING_TARGETS_OWN_LINE = new Set([
   "codeql",
   "skipcq",
   "nosemgrep",
+  "ast-grep-ignore",
 ]);
+
+// ast-grep tells a trailing suppression from a standalone one by whether the
+// node before the comment — a comment counts — ends on the comment's line,
+// and keys a trailing one to where that node starts. Deleting a comment in
+// front of it on its line can therefore turn it into a next-line suppression
+// or move what it trails, so those comments stay.
+const LINE_PREFIX_SENSITIVE = new Set(["ast-grep-ignore"]);
 
 // The suppressions tsc looks past blank and `//` lines for (see
 // firstBlockingLines). They stay next-line directives as well: Flow, which
@@ -827,6 +862,7 @@ const NEXT_LINE_DIRECTIVES = new Set([
   "pragma-allowlist-nextline-secret",
   "cspell:disable-next",
   "HTML",
+  "ast-grep-ignore",
 ]);
 
 function isNextLineDirective(name: string): boolean {

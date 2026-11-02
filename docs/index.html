@@ -6,7 +6,7 @@
     <title>ts-comment-scanner — TypeScript のコメントを検出・集計し、安全に削除する CLI</title>
     <meta
       name="description"
-      content="コーディングエージェントが焼き込む“経緯コメント”を TypeScript の AST で安全に掃除する CLI。88 種のディレクティブを保持し、--diff でエージェントが触ったファイルだけを対象にできます。/ A CLI that detects, reports and safely removes comments across a TypeScript project."
+      content="コーディングエージェントが焼き込む“経緯コメント”を TypeScript の AST で安全に掃除する CLI。91 種のディレクティブを保持し、--diff でエージェントが触ったファイルだけを対象にできます。/ A CLI that detects, reports and safely removes comments across a TypeScript project."
     />
     <link rel="canonical" href="https://kongyo2.github.io/ts-comment-scanner/" />
     <link rel="icon" type="image/svg+xml" href="./assets/logo.svg" />
@@ -65,12 +65,12 @@
           <p class="lede">
             <span class="ja">
               コーディングエージェントが焼き込む“開発の経緯”コメントを、TypeScript の AST で検出して安全に削除する
-              CLI。ビルドを支える 88 種類のディレクティブは残したまま、
+              CLI。ビルドを支える 91 種類のディレクティブは残したまま、
               <code>--diff</code> でエージェントが触ったファイルだけを掃除します。
             </span>
             <span class="en">
               A CLI that detects and safely removes the narration comments coding agents bake into TypeScript — via the
-              AST. It keeps all 88 directive kinds your build depends on, and
+              AST. It keeps all 91 directive kinds your build depends on, and
               <code>--diff</code> scopes the sweep to the files the agent just touched.
             </span>
           </p>
@@ -225,14 +225,14 @@
             </p>
           </div>
           <div class="feature">
-            <span class="flag-chip">88 rules</span>
+            <span class="flag-chip">91 rules</span>
             <h3><span class="ja">ディレクティブを知っている</span><span class="en">Knows the directives</span></h3>
             <p>
               <span class="ja"
-                >@ts-expect-error から webpackChunkName: まで、消すと挙動が変わるコメントを 88 本のルールで判定。</span
+                >@ts-expect-error から webpackChunkName: まで、消すと挙動が変わるコメントを 91 本のルールで判定。</span
               >
               <span class="en"
-                >From @ts-expect-error to webpackChunkName:, 88 rules identify the comments whose removal would change
+                >From @ts-expect-error to webpackChunkName:, 91 rules identify the comments whose removal would change
                 behaviour.</span
               >
             </p>
@@ -352,6 +352,28 @@
           </div>
           <div class="guard">
             <div class="danger">
+              <span class="ja"
+                ><code>/** @internal */</code> を消すと <code>stripInternal</code> で隠していた内部 API が
+                <code>.d.ts</code> に漏れる</span
+              >
+              <span class="en"
+                >deleting <code>/** @internal */</code> leaks the internal APIs <code>stripInternal</code> kept out of
+                the <code>.d.ts</code></span
+              >
+            </div>
+            <div class="fix">
+              <span class="ja"
+                ><code>@internal</code> はディレクティブとして保持。タグのない <code>Copyright (c) …</code> や
+                <code>Licensed under …</code> の著作権ヘッダーも法的コメントとして保持</span
+              >
+              <span class="en"
+                ><code>@internal</code> is kept as a directive, and so are untagged <code>Copyright (c) …</code> /
+                <code>Licensed under …</code> headers, as legal comments</span
+              >
+            </div>
+          </div>
+          <div class="guard">
+            <div class="danger">
               <span class="ja"><code>@ts-expect-error</code> 直下の行が消えると適用先がズレる</span>
               <span class="en">deleting the line under <code>@ts-expect-error</code> shifts its target</span>
             </div>
@@ -393,11 +415,11 @@
         </div>
         <p class="proof-line">
           <span class="ja"
-            >// この挙動は <strong>729 本のテスト</strong>と <strong>100% カバレッジ</strong>(statements / branches /
+            >// この挙動は <strong>822 本のテスト</strong>と <strong>100% カバレッジ</strong>(statements / branches /
             functions / lines)で固定しています</span
           >
           <span class="en"
-            >// pinned by <strong>729 tests</strong> at <strong>100% coverage</strong> — statements, branches, functions
+            >// pinned by <strong>822 tests</strong> at <strong>100% coverage</strong> — statements, branches, functions
             and lines</span
           >
         </p>
@@ -406,7 +428,7 @@
       <!-- ====================================================== directives -->
       <section id="directives">
         <p class="sec-eyebrow">
-          <span class="ja">// 88 のディレクティブ</span><span class="en">// the 88 directives</span>
+          <span class="ja">// 91 のディレクティブ</span><span class="en">// the 91 directives</span>
         </p>
         <h2>
           <span class="ja">消すとビルドが壊れるコメントを、知っている</span>
@@ -440,7 +462,8 @@
             ><span class="chip">v8 ignore file</span><span class="chip">node:coverage disable</span
             ><span class="chip">@vitest-environment</span><span class="chip">Stryker disable</span
             ><span class="chip">type-coverage:ignore-line</span><span class="chip">ts-prune-ignore-next</span
-            ><span class="chip">@ts-strict-ignore</span><span class="chip">// falls through</span>
+            ><span class="chip">@ts-strict-ignore</span><span class="chip">// falls through</span
+            ><span class="chip">/** @internal */</span><span class="chip">ast-grep-ignore</span>
           </div>
           <div class="ticker-track reverse">
             <span class="chip">webpackChunkName:</span><span class="chip">turbopackIgnore:</span

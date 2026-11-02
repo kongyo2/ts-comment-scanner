@@ -67,6 +67,7 @@ Removal:
   --dry-run            With --remove: show what would be removed without changing files
   --remove-directives  With --remove: also remove directive comments
   --remove-legal       With --remove: also remove license/legal comments
+  --keep <regex>       With --remove: also keep comments matching the regular expression, like directives (repeatable)
 
 Other:
   -h, --help           Show help
@@ -144,15 +145,19 @@ ts-comment-scanner --remove src
 
 # Remove everything, including directives and legal comments
 ts-comment-scanner --remove --remove-directives --remove-legal src
+
+# Also keep the markers a project's own tooling reads
+ts-comment-scanner --remove --keep "@skipMangle" --keep "^// INJECT" src
 ```
 
 Removal is driven by the AST's comment ranges, so it never touches strings or code. In addition:
 
-- Directives such as `@ts-expect-error` / `eslint-disable` are **kept by default**, because removing them would break the build or the linter
-- Legal comments — `/*! ... */` or those containing `@license` / `@preserve` / `@copyright` or the `SPDX-License-Identifier:` / `SPDX-FileCopyrightText:` tags — are also **kept by default**
+- Directives such as `@ts-expect-error` / `eslint-disable` are **kept by default**, because removing them would break the build or the linter. So is `@internal`, the marker tsc's `stripInternal` leaves declarations out of the emitted `.d.ts` by: removing it would leak internal APIs into the declarations
+- Legal comments are also **kept by default**: the ones terser and esbuild keep (`/*! ... */`, `/**! ... */`, `//! ...`, `@license`, `@licence`, `@preserve`, `@copyright`), the `SPDX-License-Identifier:` / `SPDX-FileCopyrightText:` tags, and copyright notices and license grants in their conventional, untagged wording (`Copyright (c) …`, `Copyright 2011 …`, `© 2024 …`, `Licensed under …`, `All rights reserved`, the MIT / BSD / MPL / GPL grant texts)
+- **Project-specific markers stay with `--keep`**: markers no general-purpose tool reads — a build template's placeholder, a custom linter tag — are kept like directives when a regular expression matches them (winning over `--remove-directives`)
 - **The line structure below next-line directives** (`@ts-expect-error`, `eslint-disable-next-line`, ...) **is preserved**: when removing comments would delete a line and shift the directive's target (e.g. a comment-only line), those comments are kept instead
 - **Comments a directive looks past for its target are kept too**: below tsc's `@ts-ignore`/`@ts-expect-error`, which skip blank and `//` lines to find their target, the first line tsc 6 or tsc 7 stops at (a block-comment line, say) is kept; between a directive that only counts as the last comment before its target (`@deno-types`, `/* GraphQL */`, ESLint's `// falls through`, ...) and that target, every comment is kept
-- **Position-dependent directives are never activated by a removal**: when deleting a leading comment would make prettier's `@format`/`@prettier` pragma or Deno's `deno-coverage-ignore-file` (honoured only in the file's first comment) or Bun's `// @bun` marker (honoured only at the very start of the file or on the line after a shebang) newly take effect in a kept comment, the leading comment is kept as well
+- **Position-dependent directives are never activated by a removal**: when deleting a leading comment would make prettier's `@format`/`@prettier` pragma, a `@jest-environment` in Jest's docblock or Deno's `deno-coverage-ignore-file` (honoured only in the file's first comment), Bun's `// @bun` marker (honoured only at the very start of the file or on the line after a shebang) or ast-grep's `ast-grep-ignore` (file-wide on the first line) newly take effect in a kept comment, the leading comment is kept as well. Whether an ast-grep suppression trails something or stands alone depends on the comments before it on its line, so those stay too
 - Whitespace is inserted where removing a block comment would otherwise join tokens together (`a/* x */b` → `a b`), and none is left where it only held the comment off a bracket or punctuation (`f(/* x */ a)` → `f(a)`, `{/* x */}` → `{}`)
 - Comment-only lines are removed entirely, and trailing comments are removed together with the preceding whitespace
 - **No blank-line pile-ups**: where comment-only lines vanish, the blank lines around them close ranks to the widest gap the source had there (removing a comment that sat between two blank lines leaves one, not two). At the start or end of the file or of a block (`{`, `(`, `[`, JSX tags), the blank lines that only separated the comment from the code go with it, while those already against the edge stay. Blank lines a next-line directive reaches stay put
@@ -183,10 +188,10 @@ This is designed for workflows like letting a coding agent do some work and then
 
 Each directive is matched the way the real tool's parser matches it (its regex or string comparison). Where tools or versions disagree, every form any of them honours counts as a directive, so removal errs on the side of keeping the comment.
 
-- **Compiler / types**: `@ts-ignore` `@ts-expect-error` `@ts-nocheck` `@ts-check` (tsc 6, tsc 7, and Flow checking TypeScript files) / the `/// <reference>` family / `@ts-strict-ignore`, `@ts-strict` (typescript-strict-plugin's CLI and IDE plugin) / `@deno-types=`, `@ts-types=`, `@ts-self-types=` (Deno)
-- **Linters**: the `eslint-disable` family, `eslint-env`, `/* global */`, `/* exported */`, `// falls through` (no-fallthrough), `// no default` (default-case; both only in front of the `case`, `default` or `}` ESLint reads them before) / the `eslint-disable … react-hooks/…` and `$FlowFixMe[react-rule…]` suppressions React Compiler reads / the `oxlint-disable` family / the `biome-ignore` family, `rome-ignore` / the `deno-lint-ignore` family / `stylelint-disable`, `stylelint-disable-line`, `stylelint-disable-next-line`, `stylelint-enable` (stylelint) / `@flow`, `@noflow`, the `$FlowFixMe` family, `flowlint` (Flow) / `tslint:`, `jshint`, `jscs:`, `jslint` (legacy)
+- **Compiler / types**: `@ts-ignore` `@ts-expect-error` `@ts-nocheck` `@ts-check` (tsc 6, tsc 7, and Flow checking TypeScript files) / the `/// <reference>` family / `@internal` (tsc's `stripInternal`, knip's production mode) / `@ts-strict-ignore`, `@ts-strict` (typescript-strict-plugin's CLI and IDE plugin) / `@deno-types=`, `@ts-types=`, `@ts-self-types=` (Deno)
+- **Linters**: the `eslint-disable` family, `eslint-env`, `/* global */`, `/* exported */`, `// falls through` (no-fallthrough), `// no default` (default-case) / the `eslint-disable … react-hooks/…` and `$FlowFixMe[react-rule…]` suppressions React Compiler reads / the `oxlint-disable` family / the `biome-ignore` family, `rome-ignore` / the `deno-lint-ignore` family / `ast-grep-ignore` (ast-grep) / `stylelint-disable`, `stylelint-disable-line`, `stylelint-disable-next-line`, `stylelint-enable` (stylelint) / `@flow`, `@noflow`, the `$FlowFixMe` family, `flowlint` (Flow) / `tslint:`, `jshint`, `jscs:`, `jslint` (legacy). `// falls through` only counts where ESLint, oxlint and deno_lint read it — in front of a `case`/`default` other than the first, or of the `}` of a block that ends a clause another follows — and `// no default` only after the last clause of a switch without a default (in front of its closing `}` for ESLint, anywhere in that clause for oxlint); in front of an `if` block's or an object literal's `}` they are ordinary comments
 - **Formatters**: `prettier-ignore`, the `@format`/`@prettier`/`@noformat`/`@noprettier` pragmas, `/** @type */` / `/** @satisfies */` type-cast comments (prettier) / `oxfmt-ignore` / `dprint-ignore`, `dprint-ignore-file`, `deno-fmt-ignore`, `deno-fmt-ignore-file` (dprint / deno fmt) / `organize-imports-ignore`, `sort-imports-ignore` / `beautify ignore/preserve` (legacy)
-- **Coverage / testing**: `istanbul ignore`, `c8 ignore`, `v8 ignore`, `node:coverage`, the `deno-coverage-ignore` family / `@jest-environment(-options)`, `@vitest-environment(-options)`, `@module-tag` (Vitest 4+) / `Stryker disable/restore` / `type-coverage:ignore-line/-next-line` / `ts-prune-ignore-next`
+- **Coverage / testing**: `istanbul ignore`, `c8 ignore`, `v8 ignore`, `node:coverage`, the `deno-coverage-ignore` family / `@jest-environment(-options)`, `@vitest-environment(-options)`, `@module-tag` (Vitest 4+; including the scoped packages and paths Jest reads from the docblock opening the file, such as `@jest-environment @edge-runtime/jest-environment`) / `Stryker disable/restore` / `type-coverage:ignore-line/-next-line` / `ts-prune-ignore-next`
 - **Bundlers / runtimes**: webpack and turbopack magic comments such as `webpackChunkName:` / `@vite-ignore` / `#__PURE__`, `@__NO_SIDE_EFFECTS__`, `@__INLINE__`, `@__KEY__`, `@__MANGLE_PROP__` (terser/rollup annotations) / `// @bun` (Bun) / `@refresh reset/skip/reload/jsx-skip` (react-refresh / solid-refresh) / `million-ignore` / `nx-ignore-next-line` (Nx) / `@unocss-include/-ignore/-ide-include/-skip-start/-skip-end` / `@next-codemod-error/-ignore` (Next.js) / `/* GraphQL */`, `/* HTML */` tag comments / `//# sourceMappingURL=`, `//# sourceURL=` / `@jsx`-family pragmas (Deno's `@jsxImportSourceTypes` included)
 - **Security / static analysis**: `NOSONAR` (SonarQube) / `nosemgrep` (Semgrep) / `lgtm[...]`, `codeql[...]` (CodeQL) / `skipcq` (DeepSource) / `deepcode ignore` (Snyk Code) / `no-dd-sa`, `datadog-disable` (Datadog) / `gitleaks:allow` / `trufflehog:ignore` / `pragma: allowlist secret` (detect-secrets)
 - **Spell checkers**: the `cspell:` family (including the `cSpell:`, `spell-checker:`, `spellchecker:` aliases), `LocalWords` / `codespell:ignore`
@@ -224,7 +229,7 @@ const changed = await changedFiles("main..HEAD");
 | `scanPaths(inputs, options?)` | Recursively scan files / directories (supports `ignore` / `extensions`) |
 | `collectFiles(inputs, options?)` | Collect the list of target file paths |
 | `changedFiles(range, cwd?)` | Absolute paths of working-tree files changed in a git revision range |
-| `removeComments(source, options?)` | Remove comments safely (`removeDirectives` / `removeLegal` / `shouldRemove`) |
+| `removeComments(source, options?)` | Remove comments safely (`removeDirectives` / `removeLegal` / `keep` / `shouldRemove`) |
 | `detectDirective(kind, text, placement?)` | Return a normalized name if the comment is a directive (`placement` enables position-sensitive rules) |
 | `isLegalComment(text)` | Determine whether a comment is a license/legal comment |
 | `formatText(results)` / `formatJson(results)` / `formatGitHub(results)` | Format scan results |

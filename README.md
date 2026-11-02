@@ -67,6 +67,7 @@ CI:
   --dry-run            --remove と併用: 変更せずに削除対象のみ表示
   --remove-directives  --remove と併用: 指示子コメントも削除
   --remove-legal       --remove と併用: ライセンス・法的コメントも削除
+  --keep <regex>       --remove と併用: 正規表現に一致するコメントも指示子と同様に保持(複数指定可)
 
 その他:
   -h, --help           ヘルプを表示
@@ -144,15 +145,19 @@ ts-comment-scanner --remove src
 
 # 指示子・ライセンスも含めて完全に削除
 ts-comment-scanner --remove --remove-directives --remove-legal src
+
+# プロジェクト独自のツールが読むマーカーも保持
+ts-comment-scanner --remove --keep "@skipMangle" --keep "^// INJECT" src
 ```
 
 削除は AST のコメント範囲に基づいて行われるため、文字列やコードには影響しません。さらに:
 
-- `@ts-expect-error` / `eslint-disable` などの指示子は、削除するとビルドやリントが壊れるため**デフォルトで保持**
-- `/*! ... */` や `@license` / `@preserve` / `@copyright`、`SPDX-License-Identifier:` / `SPDX-FileCopyrightText:` タグを含む法的コメントも**デフォルトで保持**
+- `@ts-expect-error` / `eslint-disable` などの指示子は、削除するとビルドやリントが壊れるため**デフォルトで保持**。tsc の `stripInternal` が宣言ファイルから除外する目印の `@internal` も、消すと内部 API が `.d.ts` に漏れるため保持
+- 法的コメントも**デフォルトで保持**: terser・esbuild が残すもの(`/*! ... */`・`/**! ... */`・`//! ...`、`@license`・`@licence`・`@preserve`・`@copyright`)、`SPDX-License-Identifier:` / `SPDX-FileCopyrightText:` タグ、そしてタグのない慣用的な著作権表示・ライセンス文(`Copyright (c) …`・`Copyright 2011 …`・`© 2024 …`・`Licensed under …`・`All rights reserved`・MIT / BSD / MPL / GPL の許諾文)
+- **プロジェクト独自のマーカーは `--keep` で保持**: ビルドテンプレートの置換位置や独自リンターのタグなど、汎用ツールの指示子ではないマーカーは、正規表現で指定すると指示子と同様に保持(`--remove-directives` より優先)
 - `@ts-expect-error` や `eslint-disable-next-line` など**次行を対象にする指示子の直下の行構造を保持**: 削除すると行が消えて指示子の適用先がずれる場合(コメントだけの行など)、その行のコメントは削除せずに保持
 - **指示子が対象を探す途中のコメントも保持**: 空行と `//` 行を読み飛ばして対象行を探す tsc の `@ts-ignore`/`@ts-expect-error` では、tsc 6・tsc 7 がそれぞれ読み飛ばせずに止まる最初の行(ブロックコメントの行など)を保持。対象の直前にある最後のコメントでのみ有効な指示子(`@deno-types`・`/* GraphQL */`・ESLint の `// falls through` など)では、指示子と対象の間のコメントをすべて保持
-- **位置依存ディレクティブを削除で有効化しない**: prettier の `@format`/`@prettier` pragma や Deno の `deno-coverage-ignore-file`(ファイル最初のコメントでのみ有効)、Bun の `// @bun`(ファイル先頭か shebang の次の行でのみ有効)が、手前のコメント削除によって保持コメント内で新たに効き始める場合は、その手前のコメントも保持
+- **位置依存ディレクティブを削除で有効化しない**: prettier の `@format`/`@prettier` pragma や Jest の docblock の `@jest-environment`、Deno の `deno-coverage-ignore-file`(ファイル最初のコメントでのみ有効)、Bun の `// @bun`(ファイル先頭か shebang の次の行でのみ有効)、ast-grep の `ast-grep-ignore`(1 行目ならファイル全体に効く)が、手前のコメント削除によって保持コメント内で新たに効き始める場合は、その手前のコメントも保持。ast-grep は同じ行の手前にあるコメントの有無で「行末の抑制」か「次行の抑制」かが変わるため、その行の手前のコメントも保持
 - ブロックコメント除去でトークンが結合してしまう位置には空白を挿入(`a/* x */b` → `a b`)。括弧や区切り記号との間を空けていただけの空白は残さない(`f(/* x */ a)` → `f(a)`、`{/* x */}` → `{}`)
 - コメントだけの行は行ごと削除、行末コメントは手前の空白ごと削除
 - **空行を重複させない**: コメント行が消えた位置では、前後の空行を元のソースにあった最も広い間隔まで詰める(空行に挟まれたコメントを消しても空行は 1 行)。ファイルやブロック(`{`・`(`・`[`・JSX タグ)の先頭・末尾で、コメントとコードを隔てていただけの空行も一緒に削除。次行指示子の適用先になる空行は保持
@@ -183,10 +188,10 @@ ts-comment-scanner --fail-on-comment --diff a1b2c3..d4e5f6 src
 
 各ディレクティブは実ツールのパーサー実装(正規表現・文字列比較)に合わせて判定されます。ツールやバージョンによって解釈が分かれる場合は、いずれかが有効とみなす形をすべてディレクティブとして扱います(削除時は保持側に倒れます)。
 
-- **コンパイラ / 型**: `@ts-ignore` `@ts-expect-error` `@ts-nocheck` `@ts-check`(tsc 6・tsc 7、TypeScript ファイルを検査する Flow) / `/// <reference>` 系 / `@ts-strict-ignore`・`@ts-strict`(typescript-strict-plugin の CLI と IDE プラグイン) / `@deno-types=`・`@ts-types=`・`@ts-self-types=`(Deno)
-- **リンター**: `eslint-disable` 系・`eslint-env`・`/* global */`・`/* exported */`・`// falls through`(no-fallthrough)・`// no default`(default-case。いずれも ESLint が読む `case`・`default`・`}` の直前のみ) / React Compiler が読む `eslint-disable … react-hooks/…`・`$FlowFixMe[react-rule…]` / `oxlint-disable` 系 / `biome-ignore` 系・`rome-ignore` / `deno-lint-ignore` 系 / `stylelint-disable`・`stylelint-disable-line`・`stylelint-disable-next-line`・`stylelint-enable`(stylelint) / `@flow`・`@noflow`・`$FlowFixMe` 系・`flowlint` 系(Flow) / `tslint:`・`jshint`・`jscs:`・`jslint`(レガシー)
+- **コンパイラ / 型**: `@ts-ignore` `@ts-expect-error` `@ts-nocheck` `@ts-check`(tsc 6・tsc 7、TypeScript ファイルを検査する Flow) / `/// <reference>` 系 / `@internal`(tsc の `stripInternal`、knip の本番モード) / `@ts-strict-ignore`・`@ts-strict`(typescript-strict-plugin の CLI と IDE プラグイン) / `@deno-types=`・`@ts-types=`・`@ts-self-types=`(Deno)
+- **リンター**: `eslint-disable` 系・`eslint-env`・`/* global */`・`/* exported */`・`// falls through`(no-fallthrough)・`// no default`(default-case) / React Compiler が読む `eslint-disable … react-hooks/…`・`$FlowFixMe[react-rule…]` / `oxlint-disable` 系 / `biome-ignore` 系・`rome-ignore` / `deno-lint-ignore` 系 / `ast-grep-ignore`(ast-grep) / `stylelint-disable`・`stylelint-disable-line`・`stylelint-disable-next-line`・`stylelint-enable`(stylelint) / `@flow`・`@noflow`・`$FlowFixMe` 系・`flowlint` 系(Flow) / `tslint:`・`jshint`・`jscs:`・`jslint`(レガシー)。`// falls through` は ESLint・oxlint・deno_lint が読む位置(2 番目以降の `case`/`default` の直前、後に別の節が続く節の最後の文であるブロックの `}` の直前)、`// no default` は default 節のない switch の最後の節以降(ESLint は閉じ `}` の直前、oxlint は最後の節の中も)でのみ有効で、`if` ブロックやオブジェクトリテラルの `}` の直前では普通のコメント扱い
 - **フォーマッタ**: `prettier-ignore`・`@format`/`@prettier`/`@noformat`/`@noprettier` pragma・`/** @type */`/`/** @satisfies */` 型キャストコメント(prettier) / `oxfmt-ignore` / `dprint-ignore`・`dprint-ignore-file`・`deno-fmt-ignore`・`deno-fmt-ignore-file`(dprint / deno fmt) / `organize-imports-ignore`・`sort-imports-ignore` / `beautify ignore/preserve`(レガシー)
-- **カバレッジ / テスト**: `istanbul ignore`・`c8 ignore`・`v8 ignore`・`node:coverage`・`deno-coverage-ignore` 系 / `@jest-environment(-options)`・`@vitest-environment(-options)`・`@module-tag`(Vitest 4 以降) / `Stryker disable/restore` / `type-coverage:ignore-line/-next-line` / `ts-prune-ignore-next`
+- **カバレッジ / テスト**: `istanbul ignore`・`c8 ignore`・`v8 ignore`・`node:coverage`・`deno-coverage-ignore` 系 / `@jest-environment(-options)`・`@vitest-environment(-options)`・`@module-tag`(Vitest 4 以降。Jest がファイル先頭の docblock から読む `@jest-environment @edge-runtime/jest-environment` のようなスコープ付きパッケージやパス指定も含む) / `Stryker disable/restore` / `type-coverage:ignore-line/-next-line` / `ts-prune-ignore-next`
 - **バンドラ / ランタイム**: `webpackChunkName:` などの webpack・turbopack マジックコメント / `@vite-ignore` / `#__PURE__`・`@__NO_SIDE_EFFECTS__`・`@__INLINE__`・`@__KEY__`・`@__MANGLE_PROP__`(terser/rollup 注釈) / `// @bun`(Bun) / `@refresh reset/skip/reload/jsx-skip`(react-refresh / solid-refresh) / `million-ignore` / `nx-ignore-next-line`(Nx) / `@unocss-include/-ignore/-ide-include/-skip-start/-skip-end` / `@next-codemod-error/-ignore`(Next.js) / `/* GraphQL */`・`/* HTML */` タグコメント / `//# sourceMappingURL=`・`//# sourceURL=` / `@jsx` 系プラグマ(Deno の `@jsxImportSourceTypes` を含む)
 - **セキュリティ / 静的解析**: `NOSONAR`(SonarQube) / `nosemgrep`(Semgrep) / `lgtm[...]`・`codeql[...]`(CodeQL) / `skipcq`(DeepSource) / `deepcode ignore`(Snyk Code) / `no-dd-sa`・`datadog-disable`(Datadog) / `gitleaks:allow` / `trufflehog:ignore` / `pragma: allowlist secret`(detect-secrets)
 - **スペルチェック**: `cspell:` 系(`cSpell:`・`spell-checker:`・`spellchecker:` 別名込み)・`LocalWords` / `codespell:ignore`
@@ -224,7 +229,7 @@ const changed = await changedFiles("main..HEAD");
 | `scanPaths(inputs, options?)` | ファイル / ディレクトリ群を再帰的にスキャン(`ignore` / `extensions` 対応) |
 | `collectFiles(inputs, options?)` | 対象ファイルのパス一覧を収集 |
 | `changedFiles(range, cwd?)` | git のリビジョン範囲で変更された作業ツリーのファイルを絶対パスで返す |
-| `removeComments(source, options?)` | コメントを安全に削除(`removeDirectives` / `removeLegal` / `shouldRemove`) |
+| `removeComments(source, options?)` | コメントを安全に削除(`removeDirectives` / `removeLegal` / `keep` / `shouldRemove`) |
 | `detectDirective(kind, text, placement?)` | コメントがディレクティブなら正規化した名前を返す(`placement` で位置依存の判定が可能) |
 | `isLegalComment(text)` | ライセンス・法的コメントかどうかを判定 |
 | `formatText(results)` / `formatJson(results)` / `formatGitHub(results)` | スキャン結果を整形 |

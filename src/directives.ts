@@ -45,6 +45,13 @@ interface DirectiveRule {
    * trimmed body, so `/** prettier-ignore *​/` is NOT a suppression to them).
    */
   keepStars?: boolean;
+  /**
+   * The match only counts when the comment is the file's first comment, for
+   * a tool that reads one docblock at the top of the file (Jest) where
+   * another tool reports the same name from anywhere (Vitest) — so the gate
+   * belongs to the rule rather than to the name.
+   */
+  firstCommentOnly?: boolean;
 }
 
 // stylelint's configuration commands, compared verbatim (as in its
@@ -70,6 +77,9 @@ function stylelintDirective(token: string): string | undefined {
 // `src/utilities/pragma/pragma.evaluate.js`): the docblock keys that
 // --require-pragma looks for and --check-ignore-pragma stops on.
 const FORMAT_PRAGMA_KEYS: ReadonlySet<string> = new Set(["format", "prettier", "noformat", "noprettier"]);
+
+// The docblock keys jest-runner reads to pick and configure a file's test environment.
+const JEST_DOCBLOCK_KEYS: ReadonlySet<string> = new Set(["jest-environment", "jest-environment-options"]);
 
 // The canonical spelling of each JSX pragma, keyed by its lowercased name.
 const JSX_PRAGMAS: ReadonlyMap<string, string> = new Map(
@@ -154,6 +164,14 @@ const RULES: DirectiveRule[] = [
     name: "rome-ignore",
     anyLine: true,
   },
+  // ast-grep reads a comment as a suppression when its first alphabetic
+  // character starts `ast-grep-ignore` (`is_suppression_comment` in its
+  // `combined.rs`), so the comment marker, stars and other punctuation may
+  // precede it while a word in front makes it prose; `: rule-id, ...` limits
+  // it to the rules named. Standing alone it suppresses the next line, after
+  // code it suppresses the statement it trails, and on the file's first line
+  // with nothing on the line below it the whole file.
+  { pattern: /^\P{Alphabetic}*ast-grep-ignore/u, rawText: true, name: "ast-grep-ignore" },
   // Deno. deno_lint compares the first whitespace-delimited token of the
   // trimmed comment text with the directive, so a JSDoc star in front defeats
   // it; `deno-lint-ignore` may be a block comment (the only form inside JSX
@@ -302,6 +320,12 @@ const RULES: DirectiveRule[] = [
   // anything but an ASCII letter or digit (`@ts-strict-ignore: legacy`).
   { pattern: /(?:^|\s)@ts-strict(-ignore)?(?=\s|$)/, name: tsStrictName, anyLine: true },
   { pattern: /(?:^[\s*]*|\/\/+\s*|\/\*+\s*)@ts-strict(-ignore)?(?![A-Za-z0-9])/im, rawText: true, name: tsStrictName },
+  // tsc's stripInternal leaves a declaration out of the emitted .d.ts when
+  // one of its leading comments contains `@internal` — a bare substring
+  // check on the raw comment text, of either kind (`hasInternalAnnotation`
+  // in tsc 6's declarations transformer and in tsc 7's port alike). knip
+  // also skips exports tagged `@internal` in production mode.
+  { pattern: /@internal/, rawText: true, name: "@internal" },
   // Flow. The pragmas live in the file's leading comments. Prettier's babel
   // parser switches to Flow syntax when /@(?:no)?flow\b/ matches anywhere in
   // the text before the first token (isFlowFile in its parse/babel.js), so
@@ -432,6 +456,21 @@ const RULES: DirectiveRule[] = [
     name: (match) => `@${match[1]}`,
     anyLine: true,
   },
+  // Jest itself reads the two @jest- pragmas from the docblock opening the
+  // file, through jest-docblock (`docblock.parse(docblock.extract(source))`
+  // in jest-runner), and takes whatever value follows the key: a scoped
+  // package (`@edge-runtime/jest-environment`) or a path (`./env.js`), which
+  // Vitest's `[\w-]+` value never matches.
+  {
+    pattern: /^\/\*/,
+    rawText: true,
+    blockOnly: true,
+    firstCommentOnly: true,
+    name: (match) =>
+      docblockPragmas(match.input)
+        .filter((key) => JEST_DOCBLOCK_KEYS.has(key))
+        .map((key) => `@${key}`),
+  },
   // Vitest module tags: /(\/\/|\*)\s*@module-tag\s+([\w\-/]+)\b/ over the
   // whole file, so the tag has to follow a `//` or a `*` — any of the
   // comment's — with only whitespace between.
@@ -560,10 +599,32 @@ export interface DirectivePlacement {
    */
   fileStart: boolean;
   /**
+   * The comment starts on the file's first line with nothing but whitespace
+   * before it, where ast-grep's suppression comment can apply to the whole
+   * file. Left out, the comment is assumed not to.
+   */
+  firstLine?: boolean;
+  /**
+   * The comment sits where a linter reads a switch fall-through comment
+   * (`// falls through`): in front of a `case` or `default` clause other than
+   * the first (ESLint, oxlint and deno_lint), or in front of the closing brace
+   * of a block that ends a clause another clause follows (the comment inside
+   * `case 0: { a(); // falls through }`). Left out, nextToken decides.
+   */
+  fallthroughSlot?: boolean;
+  /**
+   * The comment sits where `default-case` reads its `// no default` comment in
+   * a switch without a default clause: after its last clause, in front of the
+   * switch's closing brace (ESLint), or anywhere from that clause's start on
+   * (oxlint). Left out, nextToken decides.
+   */
+  noDefaultSlot?: boolean;
+  /**
    * The token that follows the comment past any further comments (`case`,
-   * `}`, an identifier, ...), or `""` when only comments follow. ESLint's
-   * switch-clause comments (`// falls through`, `// no default`) count only in
-   * front of certain tokens. Left out, any token is assumed.
+   * `}`, an identifier, ...), or `""` when only comments follow: a coarser
+   * stand-in for the switch slots above, used when they are left out, where
+   * the fall-through and default-case comments count only in front of
+   * `case`, `default` or `}`. Left out too, any position is assumed.
    */
   nextToken?: string;
 }
@@ -626,13 +687,16 @@ const FIRST_COMMENT_ONLY_DIRECTIVES = new Set([
 // line after its shebang; anywhere else the marker is inert.
 const FILE_START_ONLY_DIRECTIVES = new Set(["@bun"]);
 
-// ESLint's no-fallthrough reads the last comment before the next `case` or
-// `default` (or before a case block's closing brace), and default-case the
-// last one before the switch's closing brace; in front of anything else the
-// same words are prose.
-const SWITCH_CLAUSE_TARGETS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  ["fallthrough", new Set(["case", "default", "}"])],
-  ["no-default", new Set(["}"])],
+// The linters read their switch comments only in particular slots (see
+// fallthroughSlot and noDefaultSlot); in front of anything else the same
+// words are prose. Without the slots, the tokens a comment in one of them can
+// stand in front of are the coarse check.
+const SWITCH_CLAUSE_SLOTS: ReadonlyMap<
+  string,
+  { slot: (placement: DirectivePlacement) => boolean | undefined; tokens: ReadonlySet<string> }
+> = new Map([
+  ["fallthrough", { slot: (placement) => placement.fallthroughSlot, tokens: new Set(["case", "default", "}"]) }],
+  ["no-default", { slot: (placement) => placement.noDefaultSlot, tokens: new Set(["}"]) }],
 ]);
 
 function isActiveAt(name: string, placement: DirectivePlacement): boolean {
@@ -641,8 +705,12 @@ function isActiveAt(name: string, placement: DirectivePlacement): boolean {
   if (HEADER_ONLY_DIRECTIVES.has(name) || name.startsWith("triple-slash-")) {
     return placement.header;
   }
-  const targets = SWITCH_CLAUSE_TARGETS.get(name);
-  if (targets !== undefined) return placement.nextToken === undefined || targets.has(placement.nextToken);
+  const switchClause = SWITCH_CLAUSE_SLOTS.get(name);
+  if (switchClause !== undefined) {
+    const slot = switchClause.slot(placement);
+    if (slot !== undefined) return slot;
+    return placement.nextToken === undefined || switchClause.tokens.has(placement.nextToken);
+  }
   return true;
 }
 
@@ -709,19 +777,27 @@ export function detectDirective(kind: CommentKind, text: string, placement?: Dir
   // Semgrep suppression, with the next-line shield that goes with it); only
   // without one does a marker found after other text name the comment.
   let mention: string | undefined;
-  for (const { name, opening } of ruleMatches(kind, text)) {
-    if (!isActiveAt(name, at)) continue;
-    if (opening) return name;
-    mention ??= name;
+  for (const match of ruleMatches(kind, text)) {
+    if (!isMatchActiveAt(match, at)) continue;
+    if (match.opening) return match.name;
+    mention ??= match.name;
   }
   return mention;
 }
 
-/** Directive names of every rule the comment matches, in rule order. */
-/** A rule's directive name, and whether its match opens the comment rather than following other text. */
+/**
+ * A rule's directive name, whether its match opens the comment rather than
+ * following other text, and whether the rule only counts in the file's
+ * first comment.
+ */
 interface RuleMatch {
   name: string;
   opening: boolean;
+  firstCommentOnly: boolean;
+}
+
+function isMatchActiveAt(match: RuleMatch, placement: DirectivePlacement): boolean {
+  return isActiveAt(match.name, placement) && (!match.firstCommentOnly || placement.firstComment);
 }
 
 function* ruleMatches(kind: CommentKind, text: string): Generator<RuleMatch> {
@@ -751,40 +827,75 @@ function* ruleMatches(kind: CommentKind, text: string): Generator<RuleMatch> {
       const name =
         typeof rule.name === "string" ? rule.name : typeof rule.name === "function" ? rule.name(match) : match[0];
       if (name === undefined) continue;
-      for (const each of typeof name === "string" ? [name] : name) yield { name: each, opening };
+      const firstCommentOnly = rule.firstCommentOnly === true;
+      for (const each of typeof name === "string" ? [name] : name) yield { name: each, opening, firstCommentOnly };
     }
   }
 }
 
+// ast-grep suppresses the whole file from a suppression comment on the first
+// line (with nothing on the line below it), and only the next line from one
+// anywhere else — so a comment moving onto the first line changes its reach.
+const FILE_WIDE_ON_FIRST_LINE: ReadonlySet<string> = new Set(["ast-grep-ignore"]);
+
 /**
- * The position-dependent directives (prettier's first-comment pragmas, Deno's
- * coverage file pragma, Bun's file-start marker) the comment carries that are
- * active at the given placement, sorted. Unlike detectDirective — which
- * reports one canonical name — this sees through masking: an eslint config
- * block can also hold a `@format` pragma, and whether that pragma is live
- * must not hide behind the name an earlier rule already claimed. Only
- * first-comment and file-start gates are consulted; header-gated directives
+ * The position-dependent directives (prettier's first-comment pragmas, Jest's
+ * docblock pragmas, Deno's coverage file pragma, Bun's file-start marker,
+ * ast-grep's file-wide suppression) the comment carries that are active at
+ * the given placement, sorted. Unlike detectDirective — which reports one
+ * canonical name — this sees through masking: an eslint config block can also
+ * hold a `@format` pragma, and whether that pragma is live must not hide
+ * behind the name an earlier rule already claimed. Only first-comment,
+ * file-start and first-line gates are consulted; header-gated directives
  * cannot change activation when the comments around them change.
  */
 export function activePositionalDirectives(kind: CommentKind, text: string, placement: DirectivePlacement): string[] {
   const names = new Set<string>();
-  for (const { name } of ruleMatches(kind, text)) {
-    if (!FIRST_COMMENT_ONLY_DIRECTIVES.has(name) && !FILE_START_ONLY_DIRECTIVES.has(name)) continue;
-    if (isActiveAt(name, placement)) names.add(name);
+  for (const match of ruleMatches(kind, text)) {
+    const { name } = match;
+    if (FILE_WIDE_ON_FIRST_LINE.has(name)) {
+      if (placement.firstLine === true) names.add(`${name}:file`);
+      continue;
+    }
+    const positional =
+      match.firstCommentOnly || FIRST_COMMENT_ONLY_DIRECTIVES.has(name) || FILE_START_ONLY_DIRECTIVES.has(name);
+    if (positional && isMatchActiveAt(match, placement)) names.add(name);
   }
   return [...names].sort();
 }
 
+// Copyright notices and license grants in their conventional wording, as the
+// headers of most projects and of vendored code spell them out without any
+// tag: `Copyright (c) Microsoft Corporation. All rights reserved.`, `Copyright
+// 2011 Mozilla Foundation`, `Copyright Joyent, Inc.`, `© 2024 Someone`,
+// `Licensed under the MIT License`, the MIT, BSD, MPL and GPL texts. These
+// are what license scanners (REUSE, ScanCode) read a file's notices from.
+const LEGAL_NOTICES: readonly RegExp[] = [
+  /\bcopyright\s*(?:\(c\)|©|\d{4})/i,
+  /\bCopyright\s+[A-Z]/,
+  /(?:©|\(c\))\s*\d{4}/i,
+  /\blicensed under\b/i,
+  /\ball rights reserved\b/i,
+  /\bpermission is hereby granted\b/i,
+  /\bredistribution and use in source and binary forms\b/i,
+  /\bsubject to the terms of the Mozilla Public License\b/i,
+  /\bGNU (?:Affero |Lesser )?General Public License\b/i,
+];
+
 /**
- * True for license/legal comments (`/*!`, `@license`, `@preserve`,
- * `@copyright`, and the machine-readable `SPDX-License-Identifier:` /
- * `SPDX-FileCopyrightText:` tags) that build tools conventionally keep when
- * stripping comments and that license scanners rely on.
+ * True for license/legal comments that build tools conventionally keep when
+ * stripping comments and that license scanners rely on: the ones terser
+ * keeps (a value opening with `!` after any stars — `/*!`, `/**!`, `//!` —
+ * or holding `@preserve`, `@copyright` or `@lic…`), which cover esbuild's
+ * (`/*!`, `//!`, `@license`, `@preserve`); the machine-readable
+ * `SPDX-License-Identifier:` / `SPDX-FileCopyrightText:` tags; and copyright
+ * notices and license grants in their conventional wording.
  */
 export function isLegalComment(text: string): boolean {
-  if (text.startsWith("/*!") || text.startsWith("//!")) return true;
+  if (/^\/[/*]\**!/.test(text)) return true;
+  if (/@(?:preserve|copyright|lic)/i.test(text)) return true;
   if (/\bSPDX-(?:License-Identifier|FileCopyrightText):/i.test(text)) return true;
-  return /@(?:license|preserve|copyright)\b/i.test(text);
+  return LEGAL_NOTICES.some((notice) => notice.test(text));
 }
 
 /**
