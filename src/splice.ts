@@ -60,8 +60,12 @@ export function applyEdits(source: string, edits: readonly Edit[]): string {
     lastChar = chunk.slice(-1);
   };
 
-  /** Deletes everything the output holds after its last line break. */
-  const dropCurrentLine = (): void => {
+  /**
+   * Deletes everything the output holds after its last line break, and that
+   * break too when `takeBreak` asks for it and the break holds no line feed;
+   * returns whether it went.
+   */
+  const dropCurrentLine = (takeBreak: boolean): boolean => {
     while (segments.length > 0) {
       const last = segments[segments.length - 1] as string;
       const breakEnd = lastLineBreakEnd(last);
@@ -69,13 +73,15 @@ export function applyEdits(source: string, edits: readonly Edit[]): string {
         segments.pop();
         continue;
       }
-      segments[segments.length - 1] = last.slice(0, breakEnd);
-      lineIsBlank = true;
-      lastChar = last.charAt(breakEnd - 1);
-      return;
+      const tookBreak = takeBreak && last.charAt(breakEnd - 1) !== "\n";
+      segments[segments.length - 1] = last.slice(0, tookBreak ? breakEnd - 1 : breakEnd);
+      lineIsBlank = !tookBreak;
+      lastChar = last.charAt(breakEnd - (tookBreak ? 2 : 1));
+      return tookBreak;
     }
     lineIsBlank = true;
     lastChar = "";
+    return false;
   };
 
   /**
@@ -119,9 +125,13 @@ export function applyEdits(source: string, edits: readonly Edit[]): string {
     const deleted = source.slice(edit.start, edit.end);
 
     if (lineIsBlank && isBlank(restContent)) {
-      // The range occupied whole line(s): drop them entirely.
-      dropCurrentLine();
-      cursor = lineEnd;
+      // The range occupied whole line(s): drop them entirely, with the
+      // break that ends them — or, when that one is a line feed and the
+      // break in front of them is not, with that one instead. tree-sitter
+      // (and so ast-grep) starts a row at a line feed alone, so the rows
+      // around the dropped lines stay apart, while tsc sees one break either
+      // way.
+      cursor = dropCurrentLine(lineBreak?.[0].endsWith("\n") === true) ? contentEnd : lineEnd;
     } else if (isBlank(restContent)) {
       // Trailing after code: trim the gap, keep the line break.
       trimLineEnd();

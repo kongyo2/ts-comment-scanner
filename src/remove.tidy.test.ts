@@ -63,6 +63,15 @@ describe("removeComments blank lines", () => {
     expect(code("a(); // c\n\n\nb();\n")).toBe("a();\n\n\nb();\n");
   });
 
+  it("keeps the line feed of a dropped line that follows another kind of line break", () => {
+    // tree-sitter (and so ast-grep) starts a row at a line feed alone: the
+    // lone CR goes instead, so `a();` and `b();` stay on rows of their own.
+    expect(code("a();\r// c\nb();\n")).toBe("a();\nb();\n");
+    expect(code("a();\u2028// c\r\nb();\r\n")).toBe("a();\r\nb();\r\n");
+    expect(code("a();\r/* c\n */\nb();\n")).toBe("a();\nb();\n");
+    expect(code("a();\r\n// c\rb();\n")).toBe("a();\r\nb();\n");
+  });
+
   it("keeps the blank lines when collapsing them would move // @bun to the start of the file", () => {
     const result = removeComments("// lead\n\n// @bun @license\nconst x = 1;\n");
 

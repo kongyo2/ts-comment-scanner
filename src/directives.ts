@@ -164,14 +164,13 @@ const RULES: DirectiveRule[] = [
     name: "rome-ignore",
     anyLine: true,
   },
-  // ast-grep reads a comment as a suppression when its first alphabetic
-  // character starts `ast-grep-ignore` (`is_suppression_comment` in its
-  // `combined.rs`), so the comment marker, stars and other punctuation may
-  // precede it while a word in front makes it prose; `: rule-id, ...` limits
-  // it to the rules named. Standing alone it suppresses the next line, after
-  // code it suppresses the statement it trails, and in the file-wide position
-  // (on the first line, with the next node two or more lines down) the file.
-  { pattern: /^\P{Alphabetic}*ast-grep-ignore/u, rawText: true, name: "ast-grep-ignore" },
+  // ast-grep (`is_suppression_comment` in its `combined.rs`) reads a comment
+  // holding `ast-grep-ignore` as a suppression: anywhere in the text up to
+  // 0.45.2, and since 0.45.3 only where its first alphabetic character starts
+  // the marker, so that a word in front makes it prose. `: rule-id, ...`
+  // limits it to the rules named. What it covers depends on where it stands
+  // (see astgrep.ts), whatever directive names the comment.
+  { pattern: /ast-grep-ignore/, rawText: true, name: "ast-grep-ignore" },
   // Deno. deno_lint compares the first whitespace-delimited token of the
   // trimmed comment text with the directive, so a JSDoc star in front defeats
   // it; `deno-lint-ignore` may be a block comment (the only form inside JSX
@@ -600,9 +599,10 @@ export interface DirectivePlacement {
   fileStart: boolean;
   /**
    * The comment sits where ast-grep's suppression comment applies to the
-   * whole file: it starts the file's first line (nothing but whitespace before
-   * it) and whatever follows it starts two or more lines further down, or
-   * nothing does. Left out, the comment is assumed not to.
+   * whole file: it opens tree-sitter's first row (nothing but whitespace
+   * before it) and whatever follows it starts two or more rows further down,
+   * or nothing does (see isFileWidePosition). Left out, the comment is
+   * assumed not to.
    */
   fileWide?: boolean;
   /**
@@ -835,10 +835,19 @@ function* ruleMatches(kind: CommentKind, text: string): Generator<RuleMatch> {
 }
 
 // ast-grep suppresses the whole file from a suppression comment in the
-// file-wide position (see DirectivePlacement.fileWide), and only the next line
-// from one anywhere else — so a comment moving into that position changes its
+// file-wide position (see DirectivePlacement.fileWide), and only a row from
+// one anywhere else — so a comment moving into that position changes its
 // reach.
 const FILE_WIDE_SUPPRESSIONS: ReadonlySet<string> = new Set(["ast-grep-ignore"]);
+
+/**
+ * Whether some ast-grep release reads the comment as a suppression. A
+ * comment named for another directive can carry one too (`// @ts-ignore
+ * ast-grep-ignore`), so the removal asks this rather than the name.
+ */
+export function carriesAstGrepSuppression(text: string): boolean {
+  return text.includes("ast-grep-ignore");
+}
 
 /**
  * The position-dependent directives (prettier's first-comment pragmas, Jest's

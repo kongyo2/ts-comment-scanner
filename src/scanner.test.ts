@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isFileWidePosition, scanComments } from "./scanner.js";
+import { analyzeSource, scanComments } from "./scanner.js";
 
 describe("scanComments", () => {
   it("detects a single-line comment", () => {
@@ -444,27 +444,43 @@ describe("scanComments switch-clause slots", () => {
   });
 });
 
-describe("isFileWidePosition", () => {
-  const at = (text: string, comment: string): boolean => {
-    const start = text.indexOf(comment);
-    return isFileWidePosition(text, start, start + comment.length);
+describe("analyzeSource, for ast-grep suppressions", () => {
+  /** Where the node in front of the comment starts, and the last token before it ends, as source slices. */
+  const preceding = (source: string, comment: string, jsx = false): { node?: string; token: string } => {
+    const analysis = analyzeSource(source, { jsx });
+    const found = analysis.comments.find((candidate) => candidate.text === comment);
+    const node = analysis.preceding.get(found as (typeof analysis.comments)[number]);
+    if (node === undefined) throw new Error("no preceding node recorded");
+    return {
+      ...(node.start === undefined ? {} : { node: source.slice(node.start, source.indexOf(comment)) }),
+      token: source.slice(0, node.tokenEnd),
+    };
   };
 
-  it("needs the comment to open the first line, with the next node two or more lines down", () => {
-    expect(at("// a\n\nfoo();\n", "// a")).toBe(true);
-    expect(at("  // a\n\nfoo();\n", "// a")).toBe(true);
-    expect(at("// a", "// a")).toBe(true);
-    expect(at("// a\nfoo();\n", "// a")).toBe(false);
-    expect(at("// a\n// b\n\nfoo();\n", "// a")).toBe(false);
-    expect(at("foo(); // a\n\nbar();\n", "// a")).toBe(false);
-    expect(at("\n// a\n\nfoo();\n", "// a")).toBe(false);
+  it("finds the outermost node that ends with the token in front of the comment", () => {
+    expect(preceding("x();\nfoo(\n  1,\n); // ast-grep-ignore\n", "// ast-grep-ignore").node).toBe("foo(\n  1,\n); ");
+    expect(preceding("x(); if (a) b(); // ast-grep-ignore\n", "// ast-grep-ignore").node).toBe("if (a) b(); ");
+    expect(preceding("foo(a, // ast-grep-ignore\n  b);\n", "// ast-grep-ignore").node).toBe(", ");
+    expect(preceding("function f() { // ast-grep-ignore\n}\n", "// ast-grep-ignore").node).toBe("{ ");
   });
 
-  it("counts rows by line feeds, as tree-sitter does", () => {
-    expect(at("/* a\n\n */\nfoo();\n", "/* a\n\n */")).toBe(true);
-    expect(at("// a\r\n\r\nfoo();\r\n", "// a")).toBe(true);
-    // A lone CR or a line separator starts no new row for tree-sitter.
-    expect(at("\r// a\n\nfoo();\n", "// a")).toBe(true);
-    expect(at("// a\u2028\u2028foo();\n", "// a")).toBe(false);
+  it("takes the comment right in front of it when no token stands between them", () => {
+    const source = "x(); /* a\n */ // ast-grep-ignore\n";
+
+    expect(preceding(source, "// ast-grep-ignore")).toEqual({ node: "/* a\n */ ", token: "x();" });
+  });
+
+  it("skips empty lists, which hold no text, to the token in front", () => {
+    expect(preceding("foo(/* ast-grep-ignore */);\n", "/* ast-grep-ignore */").node).toBe("(");
+    expect(preceding("x(<div>{/* ast-grep-ignore */}</div>);\n", "/* ast-grep-ignore */", true).node).toBe("{");
+  });
+
+  it("records nothing in front of a comment that opens the file", () => {
+    expect(preceding("// ast-grep-ignore\nfoo();\n", "// ast-grep-ignore")).toEqual({ token: "" });
+    expect(preceding("#!/usr/bin/env node\n// ast-grep-ignore\n", "// ast-grep-ignore")).toEqual({ token: "" });
+  });
+
+  it("records only the comments that carry the marker", () => {
+    expect(analyzeSource("x(); // note\n// ast-grep-ignore\n").preceding.size).toBe(1);
   });
 });

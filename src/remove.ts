@@ -1,8 +1,15 @@
-import { activePositionalDirectives, bunMarkerOffset, isLegalComment, type DirectivePlacement } from "./directives.js";
+import { astGrepReach, isFileWidePosition, rowStartOffsets, type AstGrepReach, type PrecedingNode } from "./astgrep.js";
+import {
+  activePositionalDirectives,
+  bunMarkerOffset,
+  carriesAstGrepSuppression,
+  isLegalComment,
+  type DirectivePlacement,
+} from "./directives.js";
 import type { JsxContainer } from "./jsx.js";
 import { LINE_TERMINATOR, isBlank, lineStartOffsets } from "./lines.js";
 import { firstIndexAtOrAfter, type Range } from "./ranges.js";
-import { analyzeSource, isFileWidePosition, opensFirstRow } from "./scanner.js";
+import { analyzeSource } from "./scanner.js";
 import { applyEdits, blankLineEdits, type Edit } from "./splice.js";
 import type { Comment } from "./types.js";
 
@@ -29,13 +36,14 @@ export interface RemoveResult {
   removed: Comment[];
   /**
    * Comments kept because they are protected: directives, license headers,
-   * comments the `keep` predicate claims, comments that make a directive
-   * trailing rather than standalone (ast-grep's suppression), comments whose
-   * removal would shift code under a next-line directive or
-   * that sit between a directive and the code it reaches past them for (or
-   * the JSX sibling it applies to), and comments whose removal would move a
-   * position-dependent directive (prettier's first-comment pragma, Deno's
-   * coverage file pragma, Bun's file-start marker) into effect.
+   * comments the `keep` predicate claims, comments whose removal would
+   * change what an ast-grep suppression covers (the ones in front of it on
+   * its row decide which node it trails), comments whose removal would shift
+   * code under a next-line directive or that sit between a directive and
+   * the code it reaches past them for (or the JSX sibling it applies to),
+   * and comments whose removal would move a position-dependent directive
+   * (prettier's first-comment pragma, Deno's coverage file pragma, Bun's
+   * file-start marker) into effect.
    */
   kept: Comment[];
   /** Comments excluded from removal by the `shouldRemove` predicate. */
@@ -97,7 +105,11 @@ export function removeComments(source: string, options: RemoveOptions = {}): Rem
   for (const container of containers) {
     for (const comment of container.comments) containerOf.set(comment, container);
   }
-  const context: ShieldContext = { containerOf, skippable: skippableRanges(comments, containerOf, new Set(removed)) };
+  const context: ShieldContext = {
+    containerOf,
+    skippable: skippableRanges(comments, containerOf, new Set(removed)),
+    preceding: analysis.preceding,
+  };
   const search = containerSearch(containers);
   // Collapsing blank lines can only move a surviving comment to the very
   // start of the file (or of the line after a shebang), where Bun reads its
@@ -199,8 +211,8 @@ function firstChangedSurvivor(
  * without a parse: the comment is the file's first comment when nothing but
  * whitespace (or a shebang) precedes it — any earlier comment's text keeps
  * the slice non-blank — it sits at the file start when it begins where Bun
- * reads its marker, and in ast-grep's file-wide position when it also opens
- * the first line with the next node two or more lines down. Header status
+ * reads its marker, and in ast-grep's file-wide position when it opens the
+ * first row with the next node two or more rows down. Header status
  * needs the token structure, but removing comments never moves a comment
  * across the first token, so the positional check does not consult it.
  */
@@ -461,6 +473,8 @@ interface ShieldContext {
   containerOf: ReadonlyMap<Comment, Container>;
   /** Comments and the containers that may go with theirs, sorted: what code starts after. */
   skippable: readonly Range[];
+  /** What stands in front of each comment carrying an ast-grep suppression (see SourceAnalysis). */
+  preceding: ReadonlyMap<Comment, PrecedingNode>;
 }
 
 interface Shielding {
@@ -511,14 +525,14 @@ function shieldNextLineDirectives(
   const blockingLines = new Set<number>();
   const shieldedGaps: Array<readonly [number, number]> = [];
   const siblingTargets = new Set<Container>();
-  /** Directives whose own line, up to where they start, has to stay as it is. */
-  const linePrefixes: Comment[] = [];
-  /** Directives whose last line, from where they end, has to stay as it is. */
-  const lineSuffixes: Comment[] = [];
+  const astGrepReaches: AstGrepReach[] = [];
   const processed = new Set<Comment>();
   let stillRemoved = removed;
   let units: RemovalUnit[] | undefined;
   const currentUnits = (): RemovalUnit[] => (units ??= removalUnits(stillRemoved, context.containerOf));
+  let rows: number[] | undefined;
+  /** The (1-based) line holding the offset. */
+  const lineOf = (offset: number): number => firstIndexAtOrAfter(lineOffsets, offset + 1, (start) => start);
 
   const collectShields = (): boolean => {
     let added = false;
@@ -527,6 +541,21 @@ function shieldNextLineDirectives(
       processed.add(comment);
       const directive = comment.directive;
       if (directive === undefined) continue;
+      if (carriesAstGrepSuppression(comment.text)) {
+        const reach = astGrepReach(
+          source,
+          (rows ??= rowStartOffsets(source)),
+          comment,
+          context.preceding.get(comment) as PrecedingNode,
+        );
+        astGrepReaches.push(reach);
+        if (reach.nextRow !== undefined && reach.nextRow.end > reach.nextRow.start) {
+          for (let line = lineOf(reach.nextRow.start); line <= lineOf(reach.nextRow.end - 1); line += 1) {
+            shieldedLines.add(line);
+          }
+        }
+        added = true;
+      }
       if (LAST_COMMENT_DIRECTIVES.has(directive)) {
         const codeStart = codeStartAfter(source, comment.end, context.skippable);
         if (codeStart > comment.end && codeStart < source.length) {
@@ -542,11 +571,6 @@ function shieldNextLineDirectives(
           added = true;
         }
       }
-      if (SIBLING_SENSITIVE.has(directive)) {
-        linePrefixes.push(comment);
-        if (opensFirstRow(source, comment.start)) lineSuffixes.push(comment);
-        added = true;
-      }
       if (!isNextLineDirective(directive)) continue;
       // In JSX, such a directive in braces applies to the sibling after it,
       // whatever line that is on (prettier leaves the element after
@@ -560,13 +584,8 @@ function shieldNextLineDirectives(
       // A trailing formatter or scanner suppression (`a = [1]; // oxfmt-ignore`,
       // `secret(); // nosemgrep`) targets its own line, so it shields nothing
       // below it. In JSX, the container holding the comment is what has to
-      // stand on lines of its own. ast-grep looks only at what precedes the
-      // comment on its line: with nothing there it suppresses the next line,
-      // even when code follows the comment (`/* ast-grep-ignore *​/ foo();`).
-      const trailing = SIBLING_SENSITIVE.has(directive)
-        ? !opensItsLine(source, comment)
-        : TRAILING_TARGETS_OWN_LINE.has(directive) && !occupiesWholeLines(source, holder ?? comment);
-      if (trailing) continue;
+      // stand on lines of its own.
+      if (TRAILING_TARGETS_OWN_LINE.has(directive) && !occupiesWholeLines(source, holder ?? comment)) continue;
       // Counted pragmas like `c8 ignore next 3` cover several lines.
       for (let offset = 1; offset <= shieldedLineCount(comment); offset += 1) {
         const line = comment.endLine + offset;
@@ -613,21 +632,8 @@ function shieldNextLineDirectives(
       protect(group);
       changed = true;
     }
-    for (const directive of linePrefixes) {
-      // Whatever ends on the directive's line in front of it: the comments
-      // that make it a trailing suppression, or that it trails.
-      const lineStart = lineOffsets[directive.line - 1] as number;
-      const group = currentUnits().filter((unit) => unit.end > lineStart && unit.end <= directive.start);
-      if (group.length === 0) continue;
-      protect(group.flatMap((unit) => unit.comments));
-      changed = true;
-    }
-    for (const directive of lineSuffixes) {
-      // Whatever follows the directive on the line it ends on, when it opens
-      // the file: deleting the node after it there can leave the next one two
-      // lines down, which makes the suppression file-wide.
-      const lineEnd = lineOffsets[directive.endLine] ?? source.length;
-      const group = currentUnits().filter((unit) => unit.start >= directive.end && unit.start < lineEnd);
+    for (const reach of astGrepReaches) {
+      const group = currentUnits().filter((unit) => reach.holds(unit));
       if (group.length === 0) continue;
       protect(group.flatMap((unit) => unit.comments));
       changed = true;
@@ -789,16 +795,6 @@ const TRAILING_TARGETS_OWN_LINE = new Set([
   "nosemgrep",
 ]);
 
-// ast-grep reads a suppression's reach from the nodes beside it, comments
-// included. It tells a trailing suppression from a standalone one by whether
-// the node before it ends on its line, and keys a trailing one to where that
-// node starts. On the file's first line, a standalone one covers the whole
-// file when the node after it starts two or more lines down. Deleting a
-// comment in front of it on its line can therefore turn it into a next-line
-// suppression or move what it trails, and on the first line deleting the
-// comment after it can make it file-wide — so those comments stay.
-const SIBLING_SENSITIVE = new Set(["ast-grep-ignore"]);
-
 // The suppressions tsc looks past blank and `//` lines for (see
 // firstBlockingLines). They stay next-line directives as well: Flow, which
 // honours them in TypeScript files, applies them to the very next line.
@@ -880,7 +876,6 @@ const NEXT_LINE_DIRECTIVES = new Set([
   "pragma-allowlist-nextline-secret",
   "cspell:disable-next",
   "HTML",
-  "ast-grep-ignore",
 ]);
 
 function isNextLineDirective(name: string): boolean {
