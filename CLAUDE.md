@@ -1,0 +1,2 @@
+- Keep changes to README.md to the minimum that is really needed, such as fixing a statement your change has made wrong. If nothing in README.md is false after your change, it needs no change, even if it does not mention what you changed.
+- When a repository's documentation and its existing code disagree, follow the conventions used in the existing code.

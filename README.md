@@ -122,7 +122,7 @@ ts-comment-scanner --remove --diff main...HEAD
 
 `--remove` が削除するのは、TypeScript のパーサーがコメントと判定した範囲だけです。次のコメントは残します。
 
-- **ディレクティブ**: 対象のツールは[ディレクティブの判定](#ディレクティブの判定)にまとめています。`/** @internal */` も、消すと `stripInternal` で除いていた宣言が `.d.ts` に出てしまうので残します。空の `catch` や関数本体のように、コメントしか入っていないブロックのコメントも、消すと ESLint の `no-empty` などがブロックを報告するようになるので残します。`--remove-directives` を付けると削除します。
+- **ディレクティブ**: 対象のツールは[ディレクティブの判定](#ディレクティブの判定)にまとめています。`/** @internal */` も、消すと `stripInternal` で除いていた宣言が `.d.ts` に出てしまうので残します。`--remove-directives` を付けると削除します。
 - **ライセンス表記**: `/*! … */`・`//! …` の形のコメント、`@license`・`@preserve`・`@copyright` や `SPDX-License-Identifier:` などの SPDX タグを含むコメント、`Copyright (c) …`・`© 2024 …`・`Licensed under …`・`All rights reserved` のような著作権表示、MIT・BSD・MPL・GPL の許諾文です。`--remove-legal` を付けると削除します。
 - **`--keep` の正規表現に一致するコメント**: `--remove-directives` や `--remove-legal` を付けても残ります。
 - **消すとディレクティブの効き方が変わるコメント**: たとえば `eslint-disable-next-line` の直下にあるコメント行を消すと、ディレクティブの適用先が次の行にずれます。ファイルの最初のコメントでだけ効く prettier の `@format` は、手前のコメントを消すと効き始めます。このように効き方が変わる削除はせず、そのコメントを残します。
@@ -207,7 +207,7 @@ ts-comment-scanner --remove --diff main...HEAD
 次のツールが読むコメントを、ディレクティブとして判定します。
 
 - **コンパイラ・型**: TypeScript(`@ts-ignore`・`@ts-expect-error`・`@ts-nocheck`・`@ts-check`・`/// <reference>`・`@internal`)、Deno(`@deno-types=`・`@ts-types=`・`@ts-self-types=`)、typescript-strict-plugin(`@ts-strict`・`@ts-strict-ignore`)、Flow(`@flow`・`@noflow`・`$FlowFixMe` 系・`flowlint`)
-- **リンター**: ESLint(`eslint-disable` 系・`/* eslint … */`・`eslint-env`・`/* global */`・`/* exported */`・`// falls through`・`// no default`・空のブロックの中のコメント)、React Compiler(react-hooks のルールを止める `eslint-disable`・`$FlowFixMe[react-rule…]`)、oxlint(`oxlint-disable` 系)、Biome(`biome-ignore` 系・`rome-ignore`)、deno lint(`deno-lint-ignore` 系)、stylelint(`stylelint-disable` 系)、ast-grep(`ast-grep-ignore`)、TSLint・JSHint・JSCS・JSLint
+- **リンター**: ESLint(`eslint-disable` 系・`/* eslint … */`・`eslint-env`・`/* global */`・`/* exported */`・`// falls through`・`// no default`)、React Compiler(react-hooks のルールを止める `eslint-disable`・`$FlowFixMe[react-rule…]`)、oxlint(`oxlint-disable` 系)、Biome(`biome-ignore` 系・`rome-ignore`)、deno lint(`deno-lint-ignore` 系)、stylelint(`stylelint-disable` 系)、ast-grep(`ast-grep-ignore`)、TSLint・JSHint・JSCS・JSLint
 - **フォーマッタ**: prettier(`prettier-ignore`・`@format` などの pragma・`/** @type */` の型キャスト)、oxfmt(`oxfmt-ignore`)、dprint・deno fmt(`dprint-ignore`・`deno-fmt-ignore` とそれぞれの `-file` 版)、import の並べ替え(`organize-imports-ignore`・`sort-imports-ignore`)、js-beautify
 - **カバレッジ・テスト**: istanbul・c8・v8(`istanbul ignore` など)、Node.js(`node:coverage`)、Deno(`deno-coverage-ignore` 系)、Jest・Vitest(`@jest-environment`・`@vitest-environment`・`@module-tag`)、Stryker、type-coverage、ts-prune
 - **バンドラ・ランタイム**: webpack・Turbopack のマジックコメント(`webpackChunkName:` など)、Vite(`@vite-ignore`)、terser・Rollup の注釈(`#__PURE__`・`@__NO_SIDE_EFFECTS__` など)、Bun(`// @bun`)、React Refresh・solid-refresh(`@refresh`)、Million.js、Nx、UnoCSS、Next.js の codemod、`/* GraphQL */`・`/* HTML */` タグ、`//# sourceMappingURL=`、`@jsx` 系の pragma
@@ -215,7 +215,7 @@ ts-comment-scanner --remove --diff main...HEAD
 - **スペルチェック**: cspell(`cspell:` など)、`LocalWords`、codespell
 - **エディタ・IDE**: VS Code・JetBrains(`#region`)、JetBrains(`noinspection`・`<editor-fold>`・`language=`)、ReSharper
 
-判定は、各ツールのパーサーと同じ規則で行います。ファイルの先頭、`switch` 文の特定の位置、空のブロックの中のように、決まった位置でだけ効くディレクティブは、その位置にあるときだけディレクティブとして扱います。ツールやバージョンによって解釈が分かれる書き方は、どれか 1 つでも有効とみなせばディレクティブとして扱うので、`--remove` では残ります。TypeScript のディレクティブは、tsc 6 と tsc 7 のどちらかが有効とみなすものが対象です。ESLint は 8 から 10 までが対象で、8 と 9 の eslintrc モードはどのコメントの中に書いた `/* eslint-env */` も読むので、そうしたコメントも残ります。ast-grep の `ast-grep-ignore` は 0.31.1 以降のリリースが対象で、0.45.2 までは文中に書いただけでも有効なので、そうしたコメントも残ります。
+判定は、各ツールのパーサーと同じ規則で行います。ファイルの先頭や `switch` 文の特定の位置でだけ効くディレクティブは、その位置にあるときだけディレクティブとして扱います。ツールやバージョンによって解釈が分かれる書き方は、どれか 1 つでも有効とみなせばディレクティブとして扱うので、`--remove` では残ります。TypeScript のディレクティブは、tsc 6 と tsc 7 のどちらかが有効とみなすものが対象です。
 
 ### ライブラリとして使う
 
@@ -367,7 +367,7 @@ Files deleted within the range are skipped, and renamed files are handled at the
 
 `--remove` deletes only the ranges the TypeScript parser reports as comments. These comments stay:
 
-- **Directives.** [Directive detection](#directive-detection) lists the tools covered. `/** @internal */` stays as well, because without it `stripInternal` would let the declaration into the `.d.ts`. So do the comments of a block that holds nothing else, such as an empty `catch` or function body: without them, ESLint's `no-empty` and similar rules report the block. `--remove-directives` removes them.
+- **Directives.** [Directive detection](#directive-detection) lists the tools covered. `/** @internal */` stays as well, because without it `stripInternal` would let the declaration into the `.d.ts`. `--remove-directives` removes them.
 - **License notices.** Comments shaped `/*! … */` or `//! …`; comments containing `@license`, `@preserve`, `@copyright` or an SPDX tag such as `SPDX-License-Identifier:`; copyright lines such as `Copyright (c) …`, `© 2024 …`, `Licensed under …` and `All rights reserved`; and the MIT, BSD, MPL and GPL grant texts. `--remove-legal` removes them.
 - **Comments matching a `--keep` pattern,** even with `--remove-directives` or `--remove-legal`.
 - **Comments whose removal would change how a directive applies.** Removing a comment line right below `eslint-disable-next-line`, for example, would move the directive onto the next line, and removing the comments in front of prettier's `@format`, which only counts in the file's first comment, would switch it on. Such comments are kept.
@@ -452,7 +452,7 @@ Exit codes: `0` on success, `1` when `--fail-on-comment` is set and comments are
 Comments read by these tools are detected as directives:
 
 - **Compilers and types**: TypeScript (`@ts-ignore`, `@ts-expect-error`, `@ts-nocheck`, `@ts-check`, `/// <reference>`, `@internal`), Deno (`@deno-types=`, `@ts-types=`, `@ts-self-types=`), typescript-strict-plugin (`@ts-strict`, `@ts-strict-ignore`), Flow (`@flow`, `@noflow`, the `$FlowFixMe` family, `flowlint`)
-- **Linters**: ESLint (the `eslint-disable` family, `/* eslint … */`, `eslint-env`, `/* global */`, `/* exported */`, `// falls through`, `// no default`, comments inside an empty block), React Compiler (`eslint-disable` of the react-hooks rules, `$FlowFixMe[react-rule…]`), oxlint (the `oxlint-disable` family), Biome (the `biome-ignore` family, `rome-ignore`), deno lint (the `deno-lint-ignore` family), stylelint (the `stylelint-disable` family), ast-grep (`ast-grep-ignore`), TSLint, JSHint, JSCS, JSLint
+- **Linters**: ESLint (the `eslint-disable` family, `/* eslint … */`, `eslint-env`, `/* global */`, `/* exported */`, `// falls through`, `// no default`), React Compiler (`eslint-disable` of the react-hooks rules, `$FlowFixMe[react-rule…]`), oxlint (the `oxlint-disable` family), Biome (the `biome-ignore` family, `rome-ignore`), deno lint (the `deno-lint-ignore` family), stylelint (the `stylelint-disable` family), ast-grep (`ast-grep-ignore`), TSLint, JSHint, JSCS, JSLint
 - **Formatters**: prettier (`prettier-ignore`, pragmas such as `@format`, `/** @type */` type casts), oxfmt (`oxfmt-ignore`), dprint and deno fmt (`dprint-ignore`, `deno-fmt-ignore` and their `-file` forms), import sorting (`organize-imports-ignore`, `sort-imports-ignore`), js-beautify
 - **Coverage and testing**: istanbul, c8, v8 (`istanbul ignore` and the like), Node.js (`node:coverage`), Deno (the `deno-coverage-ignore` family), Jest and Vitest (`@jest-environment`, `@vitest-environment`, `@module-tag`), Stryker, type-coverage, ts-prune
 - **Bundlers and runtimes**: webpack and Turbopack magic comments (`webpackChunkName:` and others), Vite (`@vite-ignore`), terser and Rollup annotations (`#__PURE__`, `@__NO_SIDE_EFFECTS__` and others), Bun (`// @bun`), React Refresh and solid-refresh (`@refresh`), Million.js, Nx, UnoCSS, Next.js codemods, `/* GraphQL */` and `/* HTML */` tags, `//# sourceMappingURL=`, `@jsx` pragmas
@@ -460,7 +460,7 @@ Comments read by these tools are detected as directives:
 - **Spell checkers**: cspell (`cspell:` and its aliases), `LocalWords`, codespell
 - **Editors and IDEs**: VS Code and JetBrains (`#region`), JetBrains (`noinspection`, `<editor-fold>`, `language=`), ReSharper
 
-Each rule matches a comment the way the tool's own parser does. Directives that only work in certain positions, such as at the top of the file, at particular points in a `switch` or inside an empty block, are detected only there. Where tools or versions read a comment differently, it counts as a directive if any of them honours it, so `--remove` keeps it. For TypeScript, a directive counts if either tsc 6 or tsc 7 honours it. For ESLint, versions 8 to 10 count; the eslintrc mode of 8 and 9 reads a `/* eslint-env */` written inside any comment, so such comments stay too. For ast-grep, the releases from 0.31.1 on count; up to 0.45.2 a mere mention of `ast-grep-ignore` in a comment suppresses, so such comments stay too.
+Each rule matches a comment the way the tool's own parser does. Directives that only work in certain positions, such as at the top of the file or at particular points in a `switch`, are detected only there. Where tools or versions read a comment differently, it counts as a directive if any of them honours it, so `--remove` keeps it. For TypeScript, a directive counts if either tsc 6 or tsc 7 honours it.
 
 ### Using it as a library
 

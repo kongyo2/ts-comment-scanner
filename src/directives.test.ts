@@ -738,14 +738,27 @@ describe("isLegalComment", () => {
 });
 
 describe("detectDirective tool-faithful boundaries", () => {
-  it("matches @vite-ignore only as the exact block comment Vite matches", () => {
-    // Vite's importAnalysis regex is /\/\*\s*@vite-ignore\s*\*\//: block
-    // comments only, nothing but whitespace around the marker.
+  it("matches @vite-ignore the way Vite's regex and Rolldown's comment kinds read it", () => {
+    // Vite's importAnalysis searches the import call's source for
+    // /\/\*\s*@vite-ignore\s*\*\//, so the block comment counts inside
+    // another comment too.
     expect(detectDirective("block", "/* @vite-ignore */")).toBe("@vite-ignore");
     expect(detectDirective("block", "/*@vite-ignore*/")).toBe("@vite-ignore");
-    expect(detectDirective("line", "// @vite-ignore")).toBeUndefined();
-    expect(detectDirective("block", "/* @vite-ignore reason */")).toBeUndefined();
-    expect(detectDirective("block", "/* @vite-ignore-more */")).toBeUndefined();
+    expect(detectDirective("block", "/* see /* @vite-ignore */")).toBe("@vite-ignore");
+    expect(detectDirective("line", "// see /* @vite-ignore */")).toBe("@vite-ignore");
+    // Rolldown leaves the import unbundled for any comment that oxc's
+    // `is_vite` accepts: `@vite` after ASCII whitespace, in line comments
+    // too, whatever follows — verified against rolldown 1.2.
+    expect(detectDirective("line", "// @vite-ignore")).toBe("@vite-ignore");
+    expect(detectDirective("block", "/* @vite-ignore reason */")).toBe("@vite-ignore");
+    expect(detectDirective("block", "/*\t@vite-ignore-more */")).toBe("@vite-ignore");
+    // A JSDoc or legal opener, or other whitespace, defeats that reading.
+    expect(detectDirective("block", "/** @vite-ignore */")).toBeUndefined();
+    expect(detectDirective("block", "/*! @vite-ignore */")).toBeUndefined();
+    expect(detectDirective("line", "//\u00A0@vite-ignore")).toBeUndefined();
+    // Package names that open a comment stay prose.
+    expect(detectDirective("line", "// @vitejs/plugin-react needs this")).toBeUndefined();
+    expect(detectDirective("line", "// @vitest/coverage-v8 reads the pragmas")).toBeUndefined();
   });
 
   it("matches CodeQL and LGTM suppressions in single-line comments of either kind", () => {
@@ -899,6 +912,33 @@ describe("detectDirective against the current tool sources", () => {
     expect(detectDirective("block", "/* eslint-disable\u0086 */")).toBeUndefined();
   });
 
+  it("trims a whole line of U+0085 in front of the label, as oxlint trims the whole value", () => {
+    // oxlint runs `trim_start` over the comment value before it looks for the
+    // label, so the next-line character may fill the lines in front of it.
+    expect(detectDirective("block", "/*\u0085\n eslint-disable no-debugger */")).toBe("eslint-disable");
+    expect(detectDirective("block", "/*\n\u0085\n  oxlint-disable-next-line */")).toBe("oxlint-disable-next-line");
+    expect(detectDirective("block", "/*\u0085\n * eslint-disable */")).toBeUndefined();
+    expect(detectDirective("block", "/*\u0086\n eslint-disable */")).toBeUndefined();
+  });
+
+  it("reads oxfmt's suppressions trimmed of Rust's whitespace, U+0085 included", () => {
+    // oxfmt's is_suppression_marker compares `body.trim()`, and honours
+    // `prettier-ignore` as well — verified against oxfmt 0.75.
+    expect(detectDirective("line", "// oxfmt-ignore\u0085")).toBe("oxfmt-ignore");
+    expect(detectDirective("block", "/*\u0085prettier-ignore\u0085*/")).toBe("prettier-ignore");
+    expect(detectDirective("block", "/*\n\u0085oxfmt-ignore\n*/")).toBe("oxfmt-ignore");
+    expect(detectDirective("block", "/*\u0085* prettier-ignore */")).toBeUndefined();
+    expect(detectDirective("line", "// oxfmt-ignore\u0085x")).toBeUndefined();
+  });
+
+  it("reads a no-default comment trimmed of U+0085, as oxlint's default-case and tsgolint do", () => {
+    const slot = { header: false, firstComment: false, fileStart: false, noDefaultSlot: true };
+
+    expect(detectDirective("line", "// no default\u0085", slot)).toBe("no-default");
+    expect(detectDirective("block", "/*\u0085No Default */", slot)).toBe("no-default");
+    expect(detectDirective("line", "// no\u0085default", slot)).toBeUndefined();
+  });
+
   it("finds eslint-env inside any comment, as eslintrc mode's scan of the file text does", () => {
     expect(detectDirective("line", "// see /* eslint-env mocha */ for tests")).toBe("eslint-env");
     expect(detectDirective("line", "// /*eslint-env mocha*/")).toBe("eslint-env");
@@ -931,6 +971,15 @@ describe("detectDirective against the current tool sources", () => {
     expect(detectDirective("line", "// see $FlowFixMeProps[react-rule-hook]")).toBe("$FlowFixMe");
     expect(detectDirective("block", "/** $FlowExpectedError[react-rule-unsafe-ref] */")).toBe("$FlowExpectedError");
     expect(detectDirective("line", "// TODO $FlowIssue[react-rule-hook]")).toBe("$FlowIssue");
+  });
+
+  it("lets any letter or digit follow $FlowFixMe, as oxc's port of React Compiler does", () => {
+    // oxc-transform-react skips the word characters after `FlowFixMe` with
+    // `char::is_alphanumeric`, which takes non-ASCII letters too — verified
+    // against oxc-transform-react 0.156.
+    expect(detectDirective("line", "// note: $FlowFixMeé[react-rule-hook]")).toBe("$FlowFixMe");
+    expect(detectDirective("line", "// note: $FlowFixMe_x\u0663[react-rule-hook]")).toBe("$FlowFixMe");
+    expect(detectDirective("line", "// note: $FlowFixMe-x[react-rule-hook]")).toBeUndefined();
   });
 
   it("detects ESLint's fallthrough and default-case comments", () => {
@@ -1254,6 +1303,22 @@ describe("detectDirective for markers real codebases rely on", () => {
     expect(detectDirective("line", "// ignore", { ...midFile, emptyBlock: false })).toBeUndefined();
     expect(detectDirective("line", "// ignore", midFile)).toBeUndefined();
     expect(detectDirective("line", "// ignore")).toBeUndefined();
+  });
+
+  it("names a `///` comment of a file without code for the no-empty-file rules", () => {
+    const inEmptyFile = { ...midFile, emptyFile: true };
+
+    expect(detectDirective("line", "/// note", inEmptyFile)).toBe("empty-file");
+    expect(detectDirective("line", "//// four slashes", inEmptyFile)).toBe("empty-file");
+    // A triple-slash directive past the file's header still counts to them.
+    expect(detectDirective("line", '/// <reference types="node" />', inEmptyFile)).toBe("empty-file");
+    expect(detectDirective("line", "/// @ts-ignore", inEmptyFile)).toBe("@ts-ignore");
+    // Only a line comment whose value opens with `/` counts.
+    expect(detectDirective("line", "// note", inEmptyFile)).toBeUndefined();
+    expect(detectDirective("line", "// /note", inEmptyFile)).toBeUndefined();
+    expect(detectDirective("block", "/*/ note */", inEmptyFile)).toBeUndefined();
+    expect(detectDirective("line", "/// note", midFile)).toBeUndefined();
+    expect(detectDirective("line", "/// note", { ...midFile, emptyBlock: true, emptyFile: true })).toBe("empty-block");
   });
 });
 
