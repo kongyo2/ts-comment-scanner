@@ -6,9 +6,10 @@ import {
   isLegalComment,
   type DirectivePlacement,
 } from "./directives.js";
+import type { ImportGroupGap } from "./imports.js";
 import type { JsxContainer } from "./jsx.js";
 import { LINE_TERMINATOR, isBlank, lineStartOffsets } from "./lines.js";
-import { firstIndexAtOrAfter, type Range } from "./ranges.js";
+import { firstIndexAtOrAfter, rangeAt, type Range } from "./ranges.js";
 import { analyzeSource } from "./scanner.js";
 import { applyEdits, blankLineEdits, type Edit } from "./splice.js";
 import type { Comment } from "./types.js";
@@ -41,10 +42,12 @@ export interface RemoveResult {
    * its row decide which node it trails), comments whose removal would shift
    * code under a next-line directive or join another line to one a directive
    * covers, or that sit between a directive and the code it reaches past
-   * them for (or the JSX sibling it applies to), and comments whose removal
+   * them for (or the JSX sibling it applies to), comments whose removal
    * would move a position-dependent directive
    * (prettier's first-comment pragma, Deno's coverage file pragma, Bun's
-   * file-start marker) into effect.
+   * file-start marker) into effect, and comments whose removal would join
+   * two groups of imports or exports that TypeScript's organizeImports or
+   * dprint sorts apart, or split one.
    */
   kept: Comment[];
   /** Comments excluded from removal by the `shouldRemove` predicate. */
@@ -77,6 +80,9 @@ export interface RemoveResult {
  *   go with it: no pile-up of blank lines where a comment stood between two
  *   of them, and at the start or end of the file or of a block only the blank
  *   lines already against that edge stay.
+ * - Imports and exports stay in the groups the import sorters read: where
+ *   deleting a comment would join two groups that TypeScript's
+ *   organizeImports or dprint sorts apart, or split one, the comment stays.
  * - A leading byte-order mark is preserved. Reported positions index into the
  *   `source` string exactly as `scanComments(source)` reports them (a BOM
  *   counts as its first character).
@@ -135,6 +141,19 @@ export function removeComments(source: string, options: RemoveOptions = {}): Rem
     const output = analyzeSource(code, { jsx });
 
     if (search.adjust(changedSegments(analysis.jsx.segments, output.jsx.segments))) continue;
+
+    // Where the output joins two groups of imports or exports, or splits one,
+    // a sorter would sort them differently: the removal that does it is
+    // re-protected, and the attempt repeated.
+    const holders = importGroupHolders(source, analysis.importGroups, output.importGroups, removed);
+    if (holders.length > 0) {
+      const holding = new Set(holders);
+      removed = removed.filter((comment) => !holding.has(comment));
+      kept.push(...holders);
+      kept.sort(byStart);
+      tidyBlankLines = true;
+      continue;
+    }
 
     const survivor = firstChangedSurvivor(source, code, output.comments, kept, skipped);
     if (survivor === undefined) {
@@ -234,6 +253,99 @@ function closestRemovalBefore(removals: readonly Comment[], comment: Comment): C
     if (removal.start < comment.start) closest = removal;
   }
   return closest;
+}
+
+/**
+ * The removals to re-protect so that the output starts exactly the groups of
+ * imports and exports the source starts. The gaps belong to the same
+ * declarations in both texts, since removing comments leaves the statements
+ * as they are. Where the output joins two groups at a gap for some sorter,
+ * the removal holding the gap open stays (see joiningRemoval); where it
+ * splits one there, the multi-line comment a line break took the place of
+ * stays (see partingRemoval).
+ */
+function importGroupHolders(
+  source: string,
+  before: readonly ImportGroupGap[],
+  after: readonly ImportGroupGap[],
+  removals: readonly Comment[],
+): Comment[] {
+  if (before.length !== after.length) throw unexpectedResult();
+  const holders = new Set<Comment>();
+  const hold = (holder: Comment | undefined): void => {
+    if (holder === undefined) throw unexpectedResult();
+    holders.add(holder);
+  };
+  for (const [index, gap] of before.entries()) {
+    const splits = (after[index] as ImportGroupGap).splits;
+    const joined = gap.splits.filter((sorter) => !splits.includes(sorter));
+    const parted = splits.some((sorter) => !gap.splits.includes(sorter));
+    if (joined.length === 0 && !parted) continue;
+    const inGap = removals.filter((comment) => comment.start >= gap.start && comment.end <= gap.end);
+    if (joined.length > 0) hold(joiningRemoval(source, gap, inGap, joined.includes("typescript")));
+    if (parted) hold(partingRemoval(source, gap, inGap, removals));
+  }
+  return [...holders];
+}
+
+/**
+ * The removal in the gap whose deletion takes line breaks out of it: one
+ * spanning lines, or one on a line below the token the gap follows. When only
+ * dprint joins the groups, it counted line breaks inside a comment, and the
+ * first comment spanning lines stays: the removals after it then trail it
+ * and go without their line breaks, while in front of a later one a line
+ * break would take their place. Otherwise the last of them that ends above
+ * the declaration's line stays, holding a line of its own with the line break
+ * TypeScript counts and the line dprint counts; failing that, the last of
+ * them, which still keeps the declaration's line down.
+ */
+function joiningRemoval(
+  source: string,
+  gap: Range,
+  inGap: readonly Comment[],
+  typescriptJoins: boolean,
+): Comment | undefined {
+  const breaking = inGap.filter(
+    (comment) => comment.endLine > comment.line || LINE_TERMINATOR.test(source.slice(gap.start, comment.start)),
+  );
+  const spanning = typescriptJoins ? undefined : breaking.find((comment) => comment.endLine > comment.line);
+  return (
+    spanning ??
+    breaking.findLast((comment) => LINE_TERMINATOR.test(source.slice(comment.end, gap.end))) ??
+    breaking.at(-1)
+  );
+}
+
+/**
+ * The removal in the gap that a line break takes the place of (see
+ * applyEdits): a multi-line comment with something that survives the
+ * removals in front of it on its first line, and anything after it on its
+ * last line — the token before the gap and the declaration after it count.
+ * Its own line breaks are no NewLineTrivia to TypeScript, but the one put in
+ * its place is.
+ */
+function partingRemoval(
+  source: string,
+  gap: Range,
+  inGap: readonly Comment[],
+  removals: readonly Comment[],
+): Comment | undefined {
+  // Whether the line holds what `stands` accepts, from `from` on, stepping by `step` until `to`.
+  const onLine = (from: number, to: number, step: 1 | -1, stands: (index: number) => boolean): boolean => {
+    for (let index = from; index !== to; index += step) {
+      if (LINE_TERMINATOR.test(source[index] as string)) return false;
+      if (stands(index)) return true;
+    }
+    return true;
+  };
+  const content = (index: number): boolean => !isBlank(source[index] as string);
+  const survivor = (index: number): boolean => content(index) && rangeAt(removals, index) === undefined;
+  return inGap.findLast(
+    (comment) =>
+      comment.endLine > comment.line &&
+      onLine(comment.start - 1, gap.start - 1, -1, survivor) &&
+      onLine(comment.end, gap.end, 1, content),
+  );
 }
 
 /**

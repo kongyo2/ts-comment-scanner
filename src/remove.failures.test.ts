@@ -76,6 +76,34 @@ describe("removeComments result verification", () => {
   });
 });
 
+describe("removeComments import group verification", () => {
+  it("throws when the output's import and export declarations are laid out differently", () => {
+    vi.mocked(analyzeSource)
+      .mockImplementationOnce(realAnalyze)
+      .mockImplementationOnce(tampered((analysis) => ({ ...analysis, importGroups: [] })));
+
+    expect(() => removeComments('import { b } from "./b";\n// note\nimport { a } from "./a";\n')).toThrow(
+      /unexpected result/,
+    );
+  });
+
+  it("throws when the output joins import groups where no removal holds the gap", () => {
+    // A blank line holds these groups apart, which no removal touches.
+    vi.mocked(analyzeSource)
+      .mockImplementationOnce(realAnalyze)
+      .mockImplementationOnce(
+        tampered((analysis) => ({
+          ...analysis,
+          importGroups: analysis.importGroups.map((gap) => ({ ...gap, splits: [] })),
+        })),
+      );
+
+    expect(() => removeComments('import { b } from "./b";\n\nimport { a } from "./a";\n// gone\n')).toThrow(
+      /unexpected result/,
+    );
+  });
+});
+
 describe("removeComments JSX rendering verification", () => {
   it("throws when the output's JSX children are laid out differently", () => {
     vi.mocked(analyzeSource)
