@@ -396,6 +396,22 @@
           </div>
           <div class="guard">
             <div class="danger">
+              <span class="ja"
+                ><code>import</code> の間のコメント行を消すと、organizeImports や dprint
+                が別々に並べ替えていたグループが 1 つになる</span
+              >
+              <span class="en"
+                >deleting a comment line between imports merges the groups organizeImports and dprint sort
+                separately</span
+              >
+            </div>
+            <div class="fix">
+              <span class="ja">グループを隔てているコメントは削除しない(空行が残って隔てるときは削除)</span>
+              <span class="en">the comment holding the groups apart is kept, unless a blank line still does</span>
+            </div>
+          </div>
+          <div class="guard">
+            <div class="danger">
               <span class="ja"><code>@ts-expect-error</code> 直下の行が消えると適用先がズレる</span>
               <span class="en">deleting the line under <code>@ts-expect-error</code> shifts its target</span>
             </div>
@@ -442,12 +458,12 @@
         </div>
         <p class="proof-line">
           <span class="ja"
-            >// この挙動は <strong>898 本のテスト</strong>と <strong>100% カバレッジ</strong>(statements / branches /
+            >// この挙動は <strong>1017 本のテスト</strong>と <strong>100% カバレッジ</strong>(statements / branches /
             functions / lines)で固定しています</span
           >
           <span class="en"
-            >// pinned by <strong>898 tests</strong> at <strong>100% coverage</strong> — statements, branches, functions
-            and lines</span
+            >// pinned by <strong>1017 tests</strong> at <strong>100% coverage</strong> — statements, branches,
+            functions and lines</span
           >
         </p>
       </section>

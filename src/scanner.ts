@@ -1,6 +1,7 @@
 import ts from "typescript";
 import { isFileWidePosition, type PrecedingNode } from "./astgrep.js";
 import { bunMarkerOffset, carriesAstGrepSuppression, detectDirective, type DirectivePlacement } from "./directives.js";
+import { importGroupGaps, type ImportGroupGap } from "./imports.js";
 import { jsxLayout, type JsxLayout } from "./jsx.js";
 import { firstIndexAtOrAfter, rangeAt, type Range } from "./ranges.js";
 import type { Comment, CommentKind } from "./types.js";
@@ -19,6 +20,8 @@ export interface SourceAnalysis {
   jsx: JsxLayout;
   /** What stands in front of each comment carrying an ast-grep suppression (see precedingNode). */
   preceding: ReadonlyMap<Comment, PrecedingNode>;
+  /** The gaps in front of the import and export declarations the import sorters group (see importGroupGaps). */
+  importGroups: ImportGroupGap[];
 }
 
 export function analyzeSource(source: string, options: ScanOptions = {}): SourceAnalysis {
@@ -175,7 +178,12 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
     }
   }
 
-  return { comments, jsx: jsxLayout(source, sourceFile, jsxParents, comments), preceding };
+  return {
+    comments,
+    jsx: jsxLayout(source, sourceFile, jsxParents, comments),
+    preceding,
+    importGroups: importGroupGaps(source, sourceFile, comments),
+  };
 }
 
 /**

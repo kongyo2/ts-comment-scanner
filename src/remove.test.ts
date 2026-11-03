@@ -1278,3 +1278,100 @@ describe("removeComments around the coverage hints Vitest's providers read", () 
     expect(removeComments(source).kept.map((comment) => comment.directive)).toEqual([inSource]);
   });
 });
+
+// Verified against TypeScript's organizeImports (tsc 6, and tsc 7's port by
+// reading its source), prettier-plugin-organize-imports and dprint's
+// TypeScript plugin; see also remove.organize.test.ts.
+describe("removeComments between groups of imports", () => {
+  const b = 'import { b } from "./b";';
+  const a = 'import { a } from "./a";';
+
+  it("keeps the comment line that holds two groups of imports apart for organizeImports and dprint", () => {
+    const source = [
+      'import { readFile } from "node:fs/promises";',
+      "// local modules",
+      'import { parse } from "./parse.js";',
+      "",
+      "export const run = () => parse(readFile); // gone",
+      "",
+    ].join("\n");
+    const result = removeComments(source);
+
+    expect(result.code).toBe(source.replace(" // gone", ""));
+    expect(result.kept.map((comment) => comment.text)).toEqual(["// local modules"]);
+  });
+
+  it("removes it where a blank line stays to hold the groups apart", () => {
+    expect(removeComments(`${b}\n// note\n\n${a}\n`).code).toBe(`${b}\n\n${a}\n`);
+    expect(removeComments(`${b}\n\n// note\n${a}\n`).code).toBe(`${b}\n\n${a}\n`);
+  });
+
+  it("keeps only as much as holds the gap: the last comment line, and only its last comment", () => {
+    expect(removeComments(`${b}\n// one\n// two\n${a}\n`).code).toBe(`${b}\n// two\n${a}\n`);
+    expect(removeComments(`${b}\n/* one */ /* two */\n${a}\n`).code).toBe(`${b}\n/* two */\n${a}\n`);
+  });
+
+  it("prefers a comment line above the import's line to a comment that opens it", () => {
+    expect(removeComments(`${b}\n// note\n/* x\n */ ${a}\n`).code).toBe(`${b}\n// note\n${a}\n`);
+  });
+
+  it("keeps the line breaks inside a comment where only dprint counts them", () => {
+    const opening = `${b}\n/* note\n */ ${a}\n`;
+    const trailing = `${b} /* note\n */\n${a}\n`;
+
+    expect(removeComments(opening).code).toBe(opening);
+    expect(removeComments(trailing).code).toBe(trailing);
+  });
+
+  it("keeps only the multi-line comment that dprint's line count rests on, not the ones trailing it", () => {
+    expect(removeComments(`${b} /* x\n */ // y\n${a}\n`).code).toBe(`${b} /* x\n */\n${a}\n`);
+  });
+
+  it("keeps a multi-line comment a line break would take the place of, starting a group for TypeScript", () => {
+    // Between code and a comment that stays, a multi-line comment goes for a
+    // line break, which TypeScript counts where it counted none inside it.
+    const kept = [`${b} /* note\n more */ /*! legal */\n${a}\n`, `${b}/* c1\n */ /*! k */\n${a}\n`];
+
+    for (const source of kept) expect(removeComments(source).code).toBe(source);
+    expect(removeComments(`${b} /* c1\n */ /*! k */\n/* c2\n */ ${a}\n`).code).toBe(`${b} /* c1\n */ /*! k */\n${a}\n`);
+    expect(removeComments(`${b} /* c1\n */ /*! k */ /* c2\n */\n${a}\n`).code).toBe(`${b} /* c1\n */ /*! k */\n${a}\n`);
+  });
+
+  it("keeps a multi-line comment whose line break would stay with a U+2028 the comment after it ends at", () => {
+    const source = 'import {} from "./x";/* note\n more */// note\u2028\nimport * as d from "z";\n';
+
+    expect(removeComments(source).code).toBe('import {} from "./x";/* note\n more */\u2028\nimport * as d from "z";\n');
+  });
+
+  it("keeps a comment line that a lone CR opens, which TypeScript counts as a line break", () => {
+    const source = `${b}\r// note\n${a}\n`;
+
+    expect(removeComments(source).code).toBe(source);
+  });
+
+  it("still removes the comments that share a line with the declarations", () => {
+    expect(removeComments(`${b} // note\n/* x */ ${a}\n`).code).toBe(`${b}\n${a}\n`);
+  });
+
+  it("keeps the comment lines between `export … from`s, in ambient modules and past other statements", () => {
+    const exports = 'export * from "./b";\n// note\nexport * from "./a";\n';
+    const ambient = `declare module "m" {\n  ${b}\n  // note\n  ${a}\n}\n`;
+    const past = `${b}\nf();\n// note\n${a}\n`;
+
+    expect(removeComments(exports).code).toBe(exports);
+    expect(removeComments(ambient).code).toBe(ambient);
+    expect(removeComments(past).code).toBe(past);
+  });
+
+  it("lets a kept directive hold the gap, so the comment lines beside it still go", () => {
+    const source = `${b}\n// note\n// eslint-disable-next-line import/no-cycle\n${a}\n`;
+
+    expect(removeComments(source).code).toBe(`${b}\n// eslint-disable-next-line import/no-cycle\n${a}\n`);
+  });
+
+  it("keeps the comment holding the gap even when it is a directive and directives go", () => {
+    const source = `${b}\n// eslint-disable-next-line import/no-cycle\n${a}\n`;
+
+    expect(removeComments(source, { removeDirectives: true }).code).toBe(source);
+  });
+});
