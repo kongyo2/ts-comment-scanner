@@ -35,14 +35,23 @@ interface DirectiveRule {
    */
   rawText?: boolean;
   /**
+   * Match against the comment's value — the text between its markers,
+   * neither split into lines nor trimmed — for tools that trim the value
+   * themselves, so the pattern spells out the whitespace they skip
+   * (JavaScript's `\s`, with U+0085 for the Rust and Go tools, whose
+   * whitespace takes in the next-line character).
+   */
+  value?: boolean;
+  /**
    * Skip `/**`-opened block comments: the datadog analyzer skips only
    * whitespace before its marker, so a leading `*` defeats it.
    */
   notDocblock?: boolean;
   /**
    * Match content lines verbatim, without stripping JSDoc `*` prefixes, for
-   * tools that compare the literal comment value (prettier/oxfmt compare the
-   * trimmed body, so `/** prettier-ignore *​/` is NOT a suppression to them).
+   * tools that compare the literal comment value (stylelint takes the first
+   * token of the trimmed body, so `/** stylelint-disable *​/` is NOT a
+   * command to it).
    */
   keepStars?: boolean;
   /**
@@ -100,12 +109,14 @@ const RULES: DirectiveRule[] = [
   // same boundary. A JSDoc star in front of the label defeats both, and so
   // does a glued suffix (`eslint-disable-foo`, `eslint-disable:foo`). oxlint
   // trims and splits on Rust's whitespace, which adds U+0085 to what `\s`
-  // matches, so a next-line character may stand around the label too. Bun's
-  // linter ports both readings (all labels, U+0085 included, in its oxlint
-  // mode).
+  // matches, so a next-line character may stand around the label too, on a
+  // line of its own in front of it included — hence the match on the whole
+  // value. Bun's linter ports both readings (all labels, U+0085 included, in
+  // its oxlint mode), and oxc's React Compiler trims the same way before it
+  // looks for a react-hooks rule.
   {
     pattern: /^[\s\u0085]*((?:eslint|oxlint)-(?:disable(?:-next-line|-line)?|enable))(?=[\s\u0085]|$)/,
-    keepStars: true,
+    value: true,
     name: (match) => match[1] as string,
   },
   // React Compiler (babel-plugin-react-compiler) skips the functions a
@@ -215,16 +226,17 @@ const RULES: DirectiveRule[] = [
   // `configurationComment` prefix cannot be known here, so only the default
   // marker is matched.
   { pattern: /^\S+/, keepStars: true, name: (match) => stylelintDirective(match[0]) },
-  // Formatter suppressions (prettier, and oxfmt which mirrors it). Prettier's
-  // isPrettierIgnoreComment compares `comment.value.trim()` with the exact
-  // string, for line and block comments alike, so the marker must be the
-  // whole comment (joinLines makes `$` span every line): hyphenated
-  // lookalikes (`oxfmt-ignore-more`) and prose stay ordinary, and so do
-  // `prettier-ignore-start`/`-end`, which prettier only reads in Markdown.
-  // keepStars, because the literal comparison also means a JSDoc `*` before
-  // the marker (`/** prettier-ignore *​/`) leaves the comment ordinary.
-  { pattern: /^prettier-ignore$/, joinLines: true, keepStars: true },
-  { pattern: /^oxfmt-ignore$/, joinLines: true, keepStars: true },
+  // Formatter suppressions (prettier, and oxfmt, which honours both markers).
+  // Prettier's isPrettierIgnoreComment compares `comment.value.trim()` with
+  // the exact string, for line and block comments alike, and oxfmt's
+  // `is_suppression_marker` compares the value trimmed of Rust's whitespace,
+  // which takes in U+0085 — so the marker must be the whole value:
+  // hyphenated lookalikes (`oxfmt-ignore-more`) and prose stay ordinary, and
+  // so do `prettier-ignore-start`/`-end`, which prettier only reads in
+  // Markdown. The literal comparison also means a JSDoc `*` before the marker
+  // (`/** prettier-ignore *​/`) leaves the comment ordinary.
+  { pattern: /^[\s\u0085]*prettier-ignore[\s\u0085]*$/, value: true, name: "prettier-ignore" },
+  { pattern: /^[\s\u0085]*oxfmt-ignore[\s\u0085]*$/, value: true, name: "oxfmt-ignore" },
   // dprint, and `deno fmt`, which runs dprint's TypeScript plugin with
   // `deno-fmt-ignore`/`deno-fmt-ignore-file` as its comment texts. The file
   // pragma is a starts-with check on the file's leading comments, after only
@@ -365,9 +377,12 @@ const RULES: DirectiveRule[] = [
     name: (match) => `$Flow${match[1]}`,
   },
   // React Compiler also skips a component under a Flow suppression of its
-  // `react-rule-*` errors, found anywhere in a comment.
+  // `react-rule-*` errors, found anywhere in a comment. After `FlowFixMe`,
+  // babel-plugin-react-compiler takes `\w*`, and oxc's Rust port (in
+  // oxc-transform-react) any letter or digit, non-ASCII ones included
+  // (`char::is_alphanumeric`).
   {
-    pattern: /\$(?:(FlowFixMe)\w*|(FlowExpectedError|FlowIssue))\[react-rule/,
+    pattern: /\$(?:(FlowFixMe)[\p{Alphabetic}\p{N}_]*|(FlowExpectedError|FlowIssue))\[react-rule/u,
     rawText: true,
     name: (match) => `$${match[1] ?? match[2]}`,
   },
@@ -387,10 +402,17 @@ const RULES: DirectiveRule[] = [
     name: "turbopack-magic-comment",
     keepStars: true,
   },
-  // Vite matches the literal block comment (`/\/\*\s*@vite-ignore\s*\*\//` in
-  // importAnalysis), so line comments, suffixes and trailing words stay
-  // ordinary.
-  { pattern: /^\/\*\s*@vite-ignore\s*\*\/$/, rawText: true, blockOnly: true, name: "@vite-ignore" },
+  // Vite tests the source of an `import()` call (or of a `new URL()` or
+  // worker argument) against /\/\*\s*@vite-ignore\s*\*\// (hasViteIgnoreRE
+  // in importAnalysis), so the block comment counts inside another comment
+  // too (`// see /* @vite-ignore *​/`). Rolldown, which Vite 8 builds with,
+  // leaves an import unbundled when a comment inside it opens with `@vite`
+  // after ASCII whitespace (oxc's `is_vite`), line comments and trailing
+  // words included (`// @vite-ignore`, `/* @vite-ignore: computed *​/`).
+  // Only `@vite-ignore` itself is taken from that reading, so comments that
+  // open by naming an `@vitejs/` or `@vitest/` package stay ordinary.
+  { pattern: /\/\*\s*@vite-ignore\s*\*\//, rawText: true, name: "@vite-ignore" },
+  { pattern: /^[ \t\n\f\r]*@vite-ignore/, value: true, name: "@vite-ignore" },
   // Terser/Rollup annotations: a bare substring search over any comment kind,
   // so leading or trailing words keep the annotation active.
   { pattern: /[#@]__(?:PURE|NO_SIDE_EFFECTS|INLINE|NOINLINE|KEY|MANGLE_PROP)__/, anyLine: true },
@@ -571,12 +593,17 @@ const RULES: DirectiveRule[] = [
   // narrower forms of the same words, and deno_lint any comment there holding
   // `fallthrough`, `falls through` or `fall through`, directives included.
   // ESLint's and oxlint's default-case, and typescript-eslint's
-  // switch-exhaustiveness-check, accept a final comment that is exactly `no
-  // default`, in any case. Both only count in front of the code those rules
-  // read them before (see SWITCH_CLAUSE_SLOTS), so the same words elsewhere
-  // are prose.
+  // switch-exhaustiveness-check (and tsgolint's port of it), accept a final
+  // comment that is exactly `no default`, in any case — trimmed of Rust's or
+  // Go's whitespace, U+0085 included, by oxlint and tsgolint. Both only count
+  // in front of the code those rules read them before (see
+  // SWITCH_CLAUSE_SLOTS), so the same words elsewhere are prose.
   { pattern: /falls?\s?through/iu, rawText: true, name: "fallthrough" },
-  { pattern: /^\/(?:\/\s*no default\s*|\*\s*no default\s*\*\/)$/iu, rawText: true, name: "no-default" },
+  {
+    pattern: /^\/(?:\/[\s\u0085]*no default[\s\u0085]*|\*[\s\u0085]*no default[\s\u0085]*\*\/)$/iu,
+    rawText: true,
+    name: "no-default",
+  },
 ];
 
 // tsc 6 (the JavaScript compiler) reads triple-slash directives with
@@ -648,10 +675,20 @@ export interface DirectivePlacement {
    * The comment sits inside a block that holds no statements — a function
    * body, a class static block, any other `{}` block — or inside a `switch`
    * with no clauses. The linters' empty-block rules count any comment there as
-   * the block's content and leave the block unreported (see EMPTY_BLOCK).
-   * Left out, the comment is assumed not to.
+   * the block's content and leave the block unreported (see EMPTY_BLOCK). In
+   * an empty class static block, the stretch between `static` and the opening
+   * brace counts too: oxlint's no-empty-static-block reads its comments from
+   * the keyword on. Left out, the comment is assumed not to.
    */
   emptyBlock?: boolean;
+  /**
+   * The file holds no code: nothing but empty statements, blocks holding only
+   * those, and a directive prologue (`"use strict";`). The no-empty-file
+   * rules of oxlint and eslint-plugin-unicorn report such a file unless one
+   * of its line comments opens with `///` (see EMPTY_FILE). Left out, the
+   * file is assumed to hold code.
+   */
+  emptyFile?: boolean;
   /**
    * The token that follows the comment past any further comments (`case`,
    * `}`, an identifier, ...), or `""` when only comments follow: a coarser
@@ -742,6 +779,14 @@ const SWITCH_CLAUSE_SLOTS: ReadonlyMap<
 // them never changes what the others are called.
 const EMPTY_BLOCK = "empty-block";
 
+// unicorn's no-empty-file (in eslint-plugin-unicorn's recommended config, and
+// among oxlint's default correctness rules) leaves a file that holds no code
+// alone while any of its line comments has a value opening with `/` — a
+// triple-slash directive to the rule, `/// <reference>` or not (see
+// DirectivePlacement.emptyFile). Every such comment of the file gets the name
+// when no rule names it, as with EMPTY_BLOCK.
+const EMPTY_FILE = "empty-file";
+
 function isActiveAt(name: string, placement: DirectivePlacement): boolean {
   if (FILE_START_ONLY_DIRECTIVES.has(name)) return placement.fileStart;
   if (FIRST_COMMENT_ONLY_DIRECTIVES.has(name)) return placement.firstComment;
@@ -794,7 +839,8 @@ const FLOW_BLOCK_SUPPRESSION = /^\/\*[ \t\r\n*]*@ts-(ignore|expect-error)(?![\w-
  * live directive later in the same comment (`// deno-lint-ignore-file
  * nosemgrep` in mid-file) is not masked by a positionally dead one. A comment
  * no rule names is still `empty-block` where the placement puts it inside an
- * empty block.
+ * empty block, and a `///` line comment `empty-file` in a file that holds no
+ * code.
  */
 export function detectDirective(kind: CommentKind, text: string, placement?: DirectivePlacement): string | undefined {
   const at = placement ?? ANY_PLACEMENT;
@@ -827,7 +873,9 @@ export function detectDirective(kind: CommentKind, text: string, placement?: Dir
     if (match.opening) return match.name;
     mention ??= match.name;
   }
-  return mention ?? (at.emptyBlock === true ? EMPTY_BLOCK : undefined);
+  if (mention !== undefined) return mention;
+  if (at.emptyBlock === true) return EMPTY_BLOCK;
+  return at.emptyFile === true && kind === "line" && text.startsWith("///") ? EMPTY_FILE : undefined;
 }
 
 /**
@@ -848,6 +896,8 @@ function isMatchActiveAt(match: RuleMatch, placement: DirectivePlacement): boole
 function* ruleMatches(kind: CommentKind, text: string): Generator<RuleMatch> {
   const lines = contentLines(kind, text, false);
   const literalLines = kind === "block" ? contentLines(kind, text, true) : lines;
+  // The comment's value: the text past `//`, or between `/*` and `*/`.
+  const value = kind === "line" ? text.slice(2) : text.replace(/^\/\*/, "").replace(/\*\/$/, "");
   // Where the raw text's content begins, past the comment opener, stars and
   // blanks.
   const contentStart = (/^[/*\s]*/.exec(text) as RegExpExecArray)[0].length;
@@ -860,15 +910,21 @@ function* ruleMatches(kind: CommentKind, text: string): Generator<RuleMatch> {
     const candidates =
       rule.rawText === true
         ? [text]
-        : rule.anyLine === true
-          ? ruleLines
-          : rule.joinLines === true
-            ? [ruleLines.join(" ")]
-            : ruleLines.slice(0, 1);
+        : rule.value === true
+          ? [value]
+          : rule.anyLine === true
+            ? ruleLines
+            : rule.joinLines === true
+              ? [ruleLines.join(" ")]
+              : ruleLines.slice(0, 1);
     for (const [index, line] of candidates.entries()) {
       const match = rule.pattern.exec(line);
       if (!match) continue;
-      const opening = rule.rawText === true ? match.index <= contentStart : index === 0 && match.index === 0;
+      // A match in the raw text or the value (two characters in, past the
+      // opener) opens the comment when only stars and blanks precede it; one
+      // in the content lines when it starts the first of them.
+      const rawIndex = rule.rawText === true ? match.index : rule.value === true ? match.index + 2 : undefined;
+      const opening = rawIndex === undefined ? index === 0 && match.index === 0 : rawIndex <= contentStart;
       const name =
         typeof rule.name === "string" ? rule.name : typeof rule.name === "function" ? rule.name(match) : match[0];
       if (name === undefined) continue;

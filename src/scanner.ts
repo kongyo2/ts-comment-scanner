@@ -36,8 +36,9 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
   /**
    * The insides of the blocks with no statements and the switches with no
    * clauses (see DirectivePlacement.emptyBlock), from just past the opening
-   * brace to the block's end, in document order. Nothing but comments sits
-   * in such a block, so no two of them overlap.
+   * brace to the block's end — from the `static` keyword on for a class
+   * static block — in document order. Nothing but comments sits in such a
+   * block, so no two of them overlap.
    */
   const emptyBlocks: Range[] = [];
 
@@ -60,7 +61,13 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
     if ((ts.isBlock(node) && node.statements.length === 0) || (ts.isCaseBlock(node) && node.clauses.length === 0)) {
       // A block the parser had to make up, with no opening brace, holds nothing.
       const start = node.getStart(sourceFile);
-      if (source[start] === "{") emptyBlocks.push({ start: start + 1, end: node.end });
+      if (source[start] === "{") {
+        // oxlint's no-empty-static-block counts the comments of the whole
+        // static block, `static /* c */ {}` included (its span starts at the
+        // keyword); no comment starts inside the keyword itself.
+        const from = ts.isClassStaticBlockDeclaration(node.parent) ? node.parent.getStart(sourceFile) : start + 1;
+        emptyBlocks.push({ start: from, end: node.end });
+      }
     }
     // JSDoc nodes start inside the comment text itself; descending into them
     // would hide the comment (e.g. a trailing JSDoc attached to the
@@ -110,6 +117,7 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
   const shebangEnd = ts.getShebang(source)?.length ?? 0;
   const firstCommentPos = sorted.length > 0 ? (sorted[0] as ts.CommentRange).pos : -1;
   const bunMarkerPos = bunMarkerOffset(source);
+  const emptyFile = holdsNoCode(sourceFile);
   // The token after a comment, past any further comments: no token overlaps
   // a comment, so it is the first one ending at or past the comment's end
   // (the end-of-file token ends at the text's end). Token ends never
@@ -131,6 +139,7 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
       // so only the first comment needs the check.
       fileWide: firstComment && isFileWidePosition(source, range.pos, range.end),
       emptyBlock: rangeAt(emptyBlocks, range.pos) !== undefined,
+      emptyFile,
       get fallthroughSlot() {
         return slotsOf().fallthroughSlot;
       },
@@ -245,4 +254,22 @@ function switchSlots(token: ts.Node): { fallthroughSlot: boolean; noDefaultSlot:
 /** Whether the switch has clauses but none of them is a default clause. */
 function lacksDefaultClause(caseBlock: ts.CaseBlock): boolean {
   return caseBlock.clauses.length > 0 && !caseBlock.clauses.some(ts.isDefaultClause);
+}
+
+/**
+ * Whether the file holds no code, as the no-empty-file rules of oxlint and
+ * eslint-plugin-unicorn read it (see DirectivePlacement.emptyFile): every
+ * statement is an empty one or a block of nothing else, past the directive
+ * prologue — the string-literal statements that open the file.
+ */
+function holdsNoCode(sourceFile: ts.SourceFile): boolean {
+  let prologue = true;
+  return sourceFile.statements.every((statement) => {
+    prologue &&= ts.isExpressionStatement(statement) && ts.isStringLiteral(statement.expression);
+    return prologue || isEmptyStatement(statement);
+  });
+}
+
+function isEmptyStatement(statement: ts.Statement): boolean {
+  return ts.isEmptyStatement(statement) || (ts.isBlock(statement) && statement.statements.every(isEmptyStatement));
 }

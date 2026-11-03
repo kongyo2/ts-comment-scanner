@@ -537,6 +537,78 @@ describe("removeComments next-line shielding by whole lines", () => {
     expect(result.kept.map((comment) => comment.text)).toEqual(["/* @ts-ignore */", "/* @ts-expect-error */"]);
     expect(result.removed.map((comment) => comment.text)).toEqual(["// gone"]);
   });
+
+  it("keeps a multi-line comment whose removal would pull the next line's code onto a shielded one", () => {
+    // Right after an opening bracket or before closing punctuation a removed
+    // comment leaves no line break behind, so `debugger` (or `bad()`) would
+    // join the line the directive covers and lose its report.
+    for (const source of [
+      "// eslint-disable-next-line no-debugger\nfoo(/* a\n*/); debugger;\n",
+      "// oxlint-disable-next-line no-debugger\nfoo([/* a\n*/]); debugger;\n",
+      "// eslint-disable-next-line no-debugger\nconst x = 1 /* a\n*/; debugger;\n",
+      "// @ts-expect-error\nfoo(/* a\n*/); bad();\n",
+    ]) {
+      expect(removeComments(source).changed).toBe(false);
+    }
+  });
+
+  it("keeps a multi-line comment whose removal would pull a shielded line's code onto the one above", () => {
+    const source = "/* eslint-disable-next-line no-debugger */ foo(/* a\n*/ debugger);\nbar();\n";
+
+    expect(removeComments(source).changed).toBe(false);
+  });
+
+  it("still removes a multi-line comment that trails a shielded line with nothing after it", () => {
+    const source = "// @ts-expect-error -- legacy\nlegacy(); /* drop once\n   the API is gone */\nnext();\n";
+
+    expect(removeComments(source).code).toBe("// @ts-expect-error -- legacy\nlegacy();\nnext();\n");
+  });
+
+  it("keeps a multi-line comment whose removal would join another line to a line directive's own", () => {
+    const joining = "foo(/* a\n*/ bar); // eslint-disable-line no-undef\n";
+    const opening = "/* a\n*/ foo(); // eslint-disable-line no-undef\n";
+
+    expect(removeComments(joining).changed).toBe(false);
+    // With nothing in front of it, the comment's removal only moves the line up whole.
+    expect(removeComments(opening).code).toBe("foo(); // eslint-disable-line no-undef\n");
+  });
+});
+
+describe("removeComments on the rows oxlint reads its line directives on", () => {
+  // oxlint ends a row at a line feed alone: a lone CR, U+2028 or U+2029 —
+  // a line break to tsc and ESLint — leaves the row open. Verified against
+  // oxlint 1.90.
+  it("keeps the comment-only row a next-line directive covers past a U+2028", () => {
+    const source = "/* eslint-disable-next-line no-debugger */\u2028foo();\n// note\ndebugger;\n";
+    const result = removeComments(source);
+
+    expect(result.changed).toBe(false);
+    expect(result.kept.map((comment) => comment.text)).toContain("// note");
+    // The row may be the file's last, with no line feed after it.
+    expect(removeComments("/* eslint-disable-next-line no-debugger */\u2028foo();\n// note").changed).toBe(false);
+  });
+
+  it("keeps a comment whose line break would split the row a next-line directive covers", () => {
+    // Replaced by a line feed, the U+2028 inside the comment would end the row
+    // in front of `debugger`.
+    const source = "// oxlint-disable-next-line no-debugger\nfoo(); /* a\u2028b */ debugger;\n";
+
+    expect(removeComments(source).changed).toBe(false);
+  });
+
+  it("keeps the lines in front of a line directive that share its row", () => {
+    const source = "foo(); /* a\u2028*/ bar(); // oxlint-disable-line no-undef\n";
+
+    expect(removeComments(source).changed).toBe(false);
+  });
+
+  it("removes comments around a next-line directive on the file's last row as usual", () => {
+    // With no line feed after it, the directive covers the rest of the file
+    // whatever is removed.
+    const source = "// eslint-disable-next-line no-debugger\rfoo();\r// gone\rdebugger;";
+
+    expect(removeComments(source).code).toBe("// eslint-disable-next-line no-debugger\rfoo();\rdebugger;");
+  });
 });
 
 describe("removeComments position-dependent directive protection", () => {
@@ -1131,5 +1203,31 @@ describe("removeComments in blocks that hold nothing but comments", () => {
 
     expect(result.code).toBe("function f() {\n  return;\n}\nfunction g() {\n  // kept\n}\n");
     expect(scanComments(result.code).map((comment) => comment.directive)).toEqual(["empty-block"]);
+  });
+
+  it("keeps a comment between `static` and the brace of an empty static block, which oxlint counts", () => {
+    const source = "class C {\n  /* gone */ static /* kept */ {}\n}\n";
+    const result = removeComments(source);
+
+    expect(result.code).toBe("class C {\n  static /* kept */ {}\n}\n");
+    expect(result.kept.map((comment) => comment.directive)).toEqual(["empty-block"]);
+  });
+});
+
+describe("removeComments in files that hold no code", () => {
+  it("keeps the `///` comments that keep no-empty-file from reporting the file", () => {
+    const source = '"use strict";\n/// placeholder until the API lands\n// TODO: fill in\n';
+    const result = removeComments(source);
+
+    expect(result.code).toBe('"use strict";\n/// placeholder until the API lands\n');
+    expect(result.kept.map((comment) => comment.directive)).toEqual(["empty-file"]);
+  });
+
+  it("removes every comment of an empty file without one, which the rules report either way", () => {
+    expect(removeComments("// TODO: fill in\n/* later */\n").code).toBe("");
+  });
+
+  it("removes `///` comments like any other once the file holds code", () => {
+    expect(removeComments("/// note\nexport const x = 1;\n").code).toBe("export const x = 1;\n");
   });
 });

@@ -6,7 +6,7 @@
     <title>ts-comment-scanner — TypeScript のコメントを検出・集計し、安全に削除する CLI</title>
     <meta
       name="description"
-      content="コーディングエージェントが焼き込む“経緯コメント”を TypeScript の AST で安全に掃除する CLI。92 種のディレクティブを保持し、--diff でエージェントが触ったファイルだけを対象にできます。/ A CLI that detects, reports and safely removes comments across a TypeScript project."
+      content="コーディングエージェントが焼き込む“経緯コメント”を TypeScript の AST で安全に掃除する CLI。93 種のディレクティブを保持し、--diff でエージェントが触ったファイルだけを対象にできます。/ A CLI that detects, reports and safely removes comments across a TypeScript project."
     />
     <link rel="canonical" href="https://kongyo2.github.io/ts-comment-scanner/" />
     <link rel="icon" type="image/svg+xml" href="./assets/logo.svg" />
@@ -65,12 +65,12 @@
           <p class="lede">
             <span class="ja">
               コーディングエージェントが焼き込む“開発の経緯”コメントを、TypeScript の AST で検出して安全に削除する
-              CLI。ビルドを支える 92 種類のディレクティブは残したまま、
+              CLI。ビルドを支える 93 種類のディレクティブは残したまま、
               <code>--diff</code> でエージェントが触ったファイルだけを掃除します。
             </span>
             <span class="en">
               A CLI that detects and safely removes the narration comments coding agents bake into TypeScript — via the
-              AST. It keeps all 92 directive kinds your build depends on, and
+              AST. It keeps all 93 directive kinds your build depends on, and
               <code>--diff</code> scopes the sweep to the files the agent just touched.
             </span>
           </p>
@@ -225,14 +225,14 @@
             </p>
           </div>
           <div class="feature">
-            <span class="flag-chip">92 rules</span>
+            <span class="flag-chip">93 rules</span>
             <h3><span class="ja">ディレクティブを知っている</span><span class="en">Knows the directives</span></h3>
             <p>
               <span class="ja"
-                >@ts-expect-error から webpackChunkName: まで、消すと挙動が変わるコメントを 92 本のルールで判定。</span
+                >@ts-expect-error から webpackChunkName: まで、消すと挙動が変わるコメントを 93 本のルールで判定。</span
               >
               <span class="en"
-                >From @ts-expect-error to webpackChunkName:, 92 rules identify the comments whose removal would change
+                >From @ts-expect-error to webpackChunkName:, 93 rules identify the comments whose removal would change
                 behaviour.</span
               >
             </p>
@@ -385,12 +385,12 @@
             </div>
             <div class="fix">
               <span class="ja"
-                >コメントしか入っていないブロック・関数本体・<code>switch</code>
-                のコメントはディレクティブとして保持</span
+                >コメントしか入っていないブロック・関数本体・<code>switch</code> のコメントと、コードの無いファイルの
+                <code>///</code> コメントはディレクティブとして保持</span
               >
               <span class="en"
-                >comments in a block, function body or <code>switch</code> that holds nothing else are kept as
-                directives</span
+                >comments in a block, function body or <code>switch</code> that holds nothing else, and the
+                <code>///</code> comments of a file with no code, are kept as directives</span
               >
             </div>
           </div>
@@ -400,8 +400,13 @@
               <span class="en">deleting the line under <code>@ts-expect-error</code> shifts its target</span>
             </div>
             <div class="fix">
-              <span class="ja">次行指示子の直下にあるコメント行は削除しない</span>
-              <span class="en">comment lines shielded by next-line directives are kept</span>
+              <span class="ja"
+                >次行指示子の直下にあるコメント行と、消すとその行を隣の行とつなげる複数行コメントは削除しない</span
+              >
+              <span class="en"
+                >comment lines shielded by next-line directives are kept, and so are multi-line comments whose removal
+                would join that line to another</span
+              >
             </div>
           </div>
           <div class="guard">
@@ -437,11 +442,11 @@
         </div>
         <p class="proof-line">
           <span class="ja"
-            >// この挙動は <strong>863 本のテスト</strong>と <strong>100% カバレッジ</strong>(statements / branches /
+            >// この挙動は <strong>884 本のテスト</strong>と <strong>100% カバレッジ</strong>(statements / branches /
             functions / lines)で固定しています</span
           >
           <span class="en"
-            >// pinned by <strong>863 tests</strong> at <strong>100% coverage</strong> — statements, branches, functions
+            >// pinned by <strong>884 tests</strong> at <strong>100% coverage</strong> — statements, branches, functions
             and lines</span
           >
         </p>
@@ -450,7 +455,7 @@
       <!-- ====================================================== directives -->
       <section id="directives">
         <p class="sec-eyebrow">
-          <span class="ja">// 92 のディレクティブ</span><span class="en">// the 92 directives</span>
+          <span class="ja">// 93 のディレクティブ</span><span class="en">// the 93 directives</span>
         </p>
         <h2>
           <span class="ja">消すとビルドが壊れるコメントを、知っている</span>

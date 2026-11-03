@@ -505,6 +505,25 @@ describe("scanComments empty blocks", () => {
     expect(directivesOf(source)).toEqual(Array.from({ length: 14 }, () => undefined));
   });
 
+  it("counts the comments between `static` and the brace of an empty static block, as oxlint does", () => {
+    // oxlint's no-empty-static-block (on by default) checks for comments
+    // across the whole static block, whose span opens at the keyword — so
+    // `static /* c */ {}` passes, and fails once the comment goes.
+    const source = [
+      "class C {",
+      "  /* before */ static /* between */ {}",
+      "  static",
+      "  // on its own line",
+      "  {",
+      "  }",
+      "  static /* with code */ { run(); }",
+      "}",
+      "",
+    ].join("\n");
+
+    expect(directivesOf(source)).toEqual([undefined, "empty-block", "empty-block", undefined]);
+  });
+
   it("keeps the name a rule gives a comment inside an empty block", () => {
     const source = [
       "try {",
@@ -527,6 +546,33 @@ describe("scanComments empty blocks", () => {
 
   it("treats a block the parser had to make up as holding nothing", () => {
     expect(directivesOf("try\n// c\n")).toEqual([undefined]);
+  });
+});
+
+describe("scanComments empty files", () => {
+  const directivesOf = (source: string) => scanComments(source).map((comment) => comment.directive);
+
+  it("names the `///` comments of a file holding no code, which keep no-empty-file quiet", () => {
+    // oxlint (verified against 1.90) and eslint-plugin-unicorn leave such a
+    // file alone while a line comment's value opens with `/`; other comments
+    // do not count, so they stay ordinary.
+    expect(directivesOf("/// placeholder until the API lands\n// TODO\n")).toEqual(["empty-file", undefined]);
+    expect(directivesOf('#!/usr/bin/env node\n"use strict";\n;\n{ ; {} }\n//// note\n')).toEqual(["empty-file"]);
+    expect(directivesOf("/* note */\n")).toEqual([undefined]);
+  });
+
+  it("leaves `///` comments alone once the file holds any code", () => {
+    expect(directivesOf("/// note\nexport {};\n")).toEqual([undefined]);
+    expect(directivesOf('/// note\n;\n"use strict";\n')).toEqual([undefined]);
+    expect(directivesOf("/// note\ntype T = string;\n")).toEqual([undefined]);
+    expect(directivesOf('/// note\n{ "not a directive"; }\n')).toEqual([undefined]);
+  });
+
+  it("keeps the names of real triple-slash directives at the top of an empty file", () => {
+    expect(directivesOf('/// <reference types="vite/client" />\n/// note\n')).toEqual([
+      "triple-slash-reference",
+      "empty-file",
+    ]);
   });
 });
 
