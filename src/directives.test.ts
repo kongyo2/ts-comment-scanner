@@ -1097,8 +1097,10 @@ describe("detectDirective against the current tool sources", () => {
     expect(detectDirective("block", "/* node:coverage ignore start */")).toBe("node:coverage-ignore-start");
     expect(detectDirective("line", "// node:coverage ignore stop")).toBe("node:coverage-ignore-stop");
     expect(detectDirective("block", "/* node:coverage ignore next 3 */")).toBe("node:coverage-ignore");
-    expect(detectDirective("block", "/* node:coverage ignore startx */")).toBe("node:coverage-ignore");
     expect(detectDirective("block", "/* node:coverage enable */")).toBe("node:coverage-enable");
+    // Node, c8 and monocart want `ignore next` after the tool, and
+    // ast-v8-to-istanbul a mode it knows, so no tool reads this one.
+    expect(detectDirective("block", "/* node:coverage ignore startx */")).toBeUndefined();
   });
 
   it("names a comment after the directive that opens it, before any marker it mentions later", () => {
@@ -1375,5 +1377,100 @@ describe("isLegalComment beyond the bundler conventions", () => {
     expect(isLegalComment("// Copyright headers are checked by the hygiene task")).toBe(false);
     expect(isLegalComment("// the license field must be set")).toBe(false);
     expect(isLegalComment("// (c) is the third option")).toBe(false);
+  });
+});
+
+// Re-derived from Vitest 5.1 and the coverage tools it runs or that read the
+// same hints — ast-v8-to-istanbul 1.0.7, @vitest/istanbul-lib-instrument
+// 2.1.0, swc-plugin-coverage-instrument, c8 (v8-to-istanbul 9.3), Node's test
+// runner and monocart-coverage-reports 3.2 — and checked against the real
+// tools (November 2026).
+describe("detectDirective for Vitest and the coverage tools", () => {
+  const jestPragma = ["@jest", "environment"].join("-");
+  const vitestPragma = ["@vitest", "environment"].join("-");
+  const midFile = { header: false, firstComment: false, fileStart: false };
+
+  it("follows Vitest's environment pragma onto a later line of a block comment", () => {
+    // Vitest's `\s+` runs over line breaks, but not past a JSDoc star.
+    expect(detectDirective("block", `/* ${vitestPragma}\n   jsdom */`, midFile)).toBe(vitestPragma);
+    expect(detectDirective("block", `/* ${jestPragma}\n   node */`, midFile)).toBe(jestPragma);
+    expect(detectDirective("block", `/*\n * ${vitestPragma}\n * jsdom\n */`, midFile)).toBeUndefined();
+    // `[\w-]+` up to a word boundary: the value needs a word character.
+    expect(detectDirective("line", `// ${vitestPragma} --`, midFile)).toBeUndefined();
+    expect(detectDirective("line", `// ${vitestPragma} -x`, midFile)).toBe(vitestPragma);
+  });
+
+  it("reads Vitest's environment options from whatever the whitespace after the tag reaches", () => {
+    const options = `${vitestPragma}-options`;
+
+    expect(detectDirective("block", `/* ${options}\n  {"url": "https://x.test/"} */`, midFile)).toBe(options);
+    // Vitest parses `* {"url": …}` as JSON here and fails the run.
+    expect(detectDirective("block", `/**\n * ${options}\n * {"url": "https://x.test/"}\n */`, midFile)).toBe(options);
+    // Only the first match is read, so a bare one hides any later options.
+    expect(detectDirective("block", `/* ${options} */`, midFile)).toBe(options);
+    expect(detectDirective("block", `/* ${options}*/`, midFile)).toBeUndefined();
+  });
+
+  it("detects the import.meta.vitest mention that makes Vitest run an includeSource file", () => {
+    const inSource = ["import", "meta", "vitest"].join(".");
+
+    expect(detectDirective("line", `// tests for this module run through ${inSource}`)).toBe(inSource);
+    expect(detectDirective("block", `/** @see ${inSource}.each */`)).toBe(inSource);
+    // Vitest's check is a case-sensitive `includes`.
+    expect(detectDirective("line", "// Import.Meta.Vitest")).toBeUndefined();
+    expect(detectDirective("line", "// import.meta.vite")).toBeUndefined();
+  });
+
+  it("reads next-node hints the way ast-v8-to-istanbul cuts the comment", () => {
+    // `/**` or `/*` goes, then a `//`; line breaks may stand between the words.
+    expect(detectDirective("block", "/** v8 ignore next */")).toBe("v8-ignore-next");
+    expect(detectDirective("block", "/** istanbul ignore if */")).toBe("istanbul-ignore-if");
+    expect(detectDirective("block", "/*// v8 ignore next */")).toBe("v8-ignore-next");
+    expect(detectDirective("block", "/* v8\n   ignore next */")).toBe("v8-ignore-next");
+    expect(detectDirective("block", "/* istanbul\n   ignore else */")).toBe("istanbul-ignore-else");
+    expect(detectDirective("block", "/* node:coverage ignore if */")).toBe("node:coverage-ignore-if");
+    expect(detectDirective("line", "// node:coverage ignore file")).toBe("node:coverage-ignore-file");
+    // A JSDoc star in front, a third star, a glued mode or an unknown one
+    // leave the hint unread, by every tool.
+    expect(detectDirective("block", "/*\n * v8 ignore next\n */")).toBeUndefined();
+    expect(detectDirective("block", "/*** v8 ignore next */")).toBeUndefined();
+    expect(detectDirective("line", "// istanbul ignore nextLine")).toBeUndefined();
+    expect(detectDirective("line", "// v8 ignore foo")).toBeUndefined();
+    expect(detectDirective("line", "// c8 ignore")).toBeUndefined();
+  });
+
+  it("lets U+0085 stand around istanbul's words, as the swc port's Rust whitespace does", () => {
+    expect(detectDirective("block", "/*\u0085istanbul ignore next */")).toBe("istanbul-ignore-next");
+    expect(detectDirective("line", "// istanbul\u0085ignore\u0085else")).toBe("istanbul-ignore-else");
+    // No Rust tool reads the v8 spelling.
+    expect(detectDirective("block", "/* v8\u0085ignore next */")).toBeUndefined();
+  });
+
+  it("reads hints the way monocart-coverage-reports takes the mode as a prefix", () => {
+    expect(detectDirective("line", "// v8 ignore nextLine")).toBe("v8-ignore-next");
+    expect(detectDirective("block", "/* v8 ignorenext */")).toBe("v8-ignore-next");
+    expect(detectDirective("line", "// c8 ignore stopwatch")).toBe("c8-ignore-stop");
+    expect(detectDirective("line", "// node:coverage disabled")).toBe("node:coverage-disable");
+    expect(detectDirective("line", "// node:coverageignore next")).toBe("node:coverage-ignore");
+    // It wants one space between the tool and `ignore`.
+    expect(detectDirective("line", "// v8  ignore nextLine")).toBeUndefined();
+  });
+
+  it("finds the block comments c8 and Node search every line for, inside other comments too", () => {
+    expect(detectDirective("line", "// see /* c8 ignore next */")).toBe("c8-ignore-next");
+    expect(detectDirective("line", "// /* v8 ignore next 2 */")).toBe("v8-ignore-next");
+    expect(detectDirective("block", "/* see /* node:coverage disable */")).toBe("node:coverage-disable");
+    expect(detectDirective("line", "// see /* node:coverage ignore next */")).toBe("node:coverage-ignore");
+    // c8 spells the spaces out.
+    expect(detectDirective("line", "// see /* c8  ignore next */")).toBeUndefined();
+  });
+
+  it("finds range hints on lines split at line feeds alone, and Vitest's istanbul ones without a boundary", () => {
+    expect(detectDirective("line", "// prose istanbul ignore startup")).toBe("istanbul-ignore-start");
+    expect(detectDirective("block", "/* note: istanbul ignore stopwatch */")).toBe("istanbul-ignore-stop");
+    expect(detectDirective("block", "/* note: v8 ignore\u2028start */")).toBe("v8-ignore-start");
+    expect(detectDirective("block", "/* note: c8 ignore\rstop */")).toBe("c8-ignore-stop");
+    expect(detectDirective("block", "/* note: v8 ignore\r\nstart */")).toBeUndefined();
+    expect(detectDirective("block", "/* note: v8 ignore\nstart */")).toBeUndefined();
   });
 });
