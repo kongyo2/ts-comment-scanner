@@ -1478,7 +1478,8 @@ describe("detectDirective for Vitest and the coverage tools", () => {
 
 // Re-derived from Rspack 2.3.1 (its magic_comment.rs), webpack 5.112.2 and
 // Turbopack's parse_directives, and checked against the real Rspack 1.0.0,
-// 1.7.12, 2.0.8, 2.1.0 and 2.3.1 and webpack 5.112.2 (November 2026).
+// 1.7.12, 2.0.8, 2.1.0 and 2.3.1, webpack 5.112.2 and Next.js 16.4.4's
+// Turbopack (November 2026).
 describe("detectDirective for the bundlers' magic comments", () => {
   it("reads the rspack prefix, quoted keys and keys after prose or a JSDoc star, as Rspack 2.1 does", () => {
     expect(detectDirective("block", "/* rspackIgnore: true */")).toBe("rspack-magic-comment");
