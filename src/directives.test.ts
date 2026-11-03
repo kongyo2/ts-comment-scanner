@@ -213,6 +213,7 @@ describe("detectDirective", () => {
 
   it.each([
     ['/* webpackChunkName: "chunk" */', "webpack-magic-comment"],
+    ['/* rspackChunkName: "chunk" */', "rspack-magic-comment"],
     ["/* turbopackIgnore: true */", "turbopack-magic-comment"],
     ["/* turbopackOptional: true */", "turbopack-magic-comment"],
     ["/* @vite-ignore */", "@vite-ignore"],
@@ -545,12 +546,12 @@ describe("detectDirective", () => {
     expect(detectDirective("line", "// flowlint is picky")).toBeUndefined();
   });
 
-  it("requires webpack-style magic comments to put the colon right after the key", () => {
+  it("requires webpack-style magic comments in line comments to put the colon right after the key", () => {
     // webpack's gate regex is /webpack[A-Z][A-Za-z]+:/ — a space before the
-    // colon (or a JSDoc block, whose stars break the object-literal eval)
-    // keeps the comment inert.
-    expect(detectDirective("block", '/* webpackChunkName : "chunk" */')).toBeUndefined();
-    expect(detectDirective("block", '/** webpackChunkName: "chunk" */')).toBeUndefined();
+    // colon (or a JSDoc star, which breaks the object-literal eval) keeps the
+    // comment inert. Rspack reads such block comments, but no line comment.
+    expect(detectDirective("line", '// webpackChunkName : "chunk"')).toBeUndefined();
+    expect(detectDirective("line", '// * webpackChunkName: "chunk"')).toBeUndefined();
     expect(detectDirective("block", "/** turbopackIgnore: true */")).toBeUndefined();
   });
 
@@ -1154,11 +1155,11 @@ describe("detectDirective against the current tool sources", () => {
   });
 
   it("reads magic comments the way webpack and Turbopack do", () => {
-    expect(detectDirective("block", '/*\n * webpackChunkName: "x"\n */')).toBeUndefined();
+    expect(detectDirective("line", '// * webpackChunkName: "x"')).toBeUndefined();
     expect(detectDirective("block", "/* webpackIgnore : true */")).toBe("turbopack-magic-comment");
     expect(detectDirective("line", "// turbopackOptional : true")).toBe("turbopack-magic-comment");
     expect(detectDirective("block", '/* webpackExports : ["a"] */')).toBe("turbopack-magic-comment");
-    expect(detectDirective("block", '/* webpackChunkName : "x" */')).toBeUndefined();
+    expect(detectDirective("line", '// webpackChunkName : "x"')).toBeUndefined();
   });
 
   it("compares Million's and solid-refresh's annotations with the whole trimmed comment value", () => {
@@ -1472,5 +1473,59 @@ describe("detectDirective for Vitest and the coverage tools", () => {
     expect(detectDirective("block", "/* note: c8 ignore\rstop */")).toBe("c8-ignore-stop");
     expect(detectDirective("block", "/* note: v8 ignore\r\nstart */")).toBeUndefined();
     expect(detectDirective("block", "/* note: v8 ignore\nstart */")).toBeUndefined();
+  });
+});
+
+// Re-derived from Rspack 2.3.1 (its magic_comment.rs), webpack 5.112.2 and
+// Turbopack's parse_directives, and checked against the real Rspack 1.0.0,
+// 1.7.12, 2.0.8, 2.1.0 and 2.3.1, webpack 5.112.2 and Next.js 16.4.4's
+// Turbopack (November 2026).
+describe("detectDirective for the bundlers' magic comments", () => {
+  it("reads the rspack prefix, quoted keys and keys after prose or a JSDoc star, as Rspack 2.1 does", () => {
+    expect(detectDirective("block", "/* rspackIgnore: true */")).toBe("rspack-magic-comment");
+    expect(detectDirective("block", '/* note: rspackChunkName: "x" */')).toBe("rspack-magic-comment");
+    expect(detectDirective("block", "/* 'rspackChunkName' : \"x\" */")).toBe("rspack-magic-comment");
+    expect(detectDirective("block", '/**\n * rspackChunkName: "x"\n */')).toBe("rspack-magic-comment");
+    expect(detectDirective("block", '/* $rspackChunkName: "x" */')).toBe("rspack-magic-comment");
+  });
+
+  it("wants no word character, by Rust's Unicode \\w, in front of an rspack or a quoted key", () => {
+    expect(detectDirective("block", '/* xrspackChunkName: "x" */')).toBeUndefined();
+    expect(detectDirective("block", '/* _rspackChunkName: "x" */')).toBeUndefined();
+    expect(detectDirective("block", '/* \u00e9rspackChunkName: "x" */')).toBeUndefined();
+    expect(detectDirective("block", '/* \u0301rspackChunkName: "x" */')).toBeUndefined();
+    expect(detectDirective("block", '/* \u0660rspackChunkName: "x" */')).toBeUndefined();
+    expect(detectDirective("block", '/* \u200drspackChunkName: "x" */')).toBeUndefined();
+    expect(detectDirective("block", '/* x"rspackChunkName": "x" */')).toBeUndefined();
+    expect(detectDirective("block", '/* "rspackChunkName\': "x" */')).toBeUndefined();
+  });
+
+  it("reads webpack keys wherever Rspack 1.x or 2.0 finds them", () => {
+    // 1.x: glued to other words, behind prose or a JSDoc star, with any
+    // whitespace before the colon; 2.0: quoted.
+    expect(detectDirective("block", '/* xwebpackChunkName: "x" */')).toBe("rspack-magic-comment");
+    expect(detectDirective("block", '/* see webpackChunkName: "x" */')).toBe("rspack-magic-comment");
+    expect(detectDirective("block", '/** webpackChunkName: "x" */')).toBe("rspack-magic-comment");
+    expect(detectDirective("block", '/* webpackChunkName\n: "x" */')).toBe("rspack-magic-comment");
+    expect(detectDirective("block", '/* webpackChunkName\u0085: "x" */')).toBe("rspack-magic-comment");
+    expect(detectDirective("block", '/* "webpackChunkName": "x" */')).toBe("rspack-magic-comment");
+    // A comment webpack reads keeps webpack's name.
+    expect(detectDirective("block", '/* webpackChunkName: "x" */')).toBe("webpack-magic-comment");
+  });
+
+  it("leaves line comments and keys without a capital after the prefix to the others", () => {
+    expect(detectDirective("line", '// rspackChunkName: "x"')).toBeUndefined();
+    expect(detectDirective("line", '// see webpackChunkName: "x"')).toBeUndefined();
+    expect(detectDirective("block", '/* rspackchunkName: "x" */')).toBeUndefined();
+    expect(detectDirective("block", '/* webpackChunk1Name: "x" */')).toBeUndefined();
+    expect(detectDirective("block", "/* rspack: fast */")).toBeUndefined();
+  });
+
+  it("trims Turbopack's comments of Rust's whitespace and splits them at the first colon", () => {
+    expect(detectDirective("block", "/*\u0085turbopackIgnore: true */")).toBe("turbopack-magic-comment");
+    expect(detectDirective("line", "// turbopackOptional\u0085: true")).toBe("turbopack-magic-comment");
+    expect(detectDirective("block", "/* turbopackIgnore\n: true */")).toBe("turbopack-magic-comment");
+    expect(detectDirective("block", "/* turbopackIgnore x: true */")).toBeUndefined();
+    expect(detectDirective("block", "/* note: turbopackIgnore: true */")).toBeUndefined();
   });
 });
