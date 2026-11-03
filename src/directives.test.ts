@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { activePositionalDirectives, bunMarkerOffset, detectDirective, isLegalComment } from "./directives.js";
+import {
+  activePositionalDirectives,
+  bunMarkerOffset,
+  carriesAstGrepSuppression,
+  detectDirective,
+  isLegalComment,
+} from "./directives.js";
 
 describe("detectDirective", () => {
   it.each([
@@ -1128,16 +1134,28 @@ describe("detectDirective for markers real codebases rely on", () => {
     expect(detectDirective("line", "// internal helper")).toBeUndefined();
   });
 
-  it("detects ast-grep suppressions whose first alphabetic text is the marker", () => {
+  it("detects ast-grep suppressions wherever a release reads the marker", () => {
     expect(detectDirective("line", "// ast-grep-ignore")).toBe("ast-grep-ignore");
     expect(detectDirective("line", "// ast-grep-ignore: no-typeof-window-require-tsx")).toBe("ast-grep-ignore");
     expect(detectDirective("line", "//ast-grep-ignore: a, b")).toBe("ast-grep-ignore");
     expect(detectDirective("block", "/* ast-grep-ignore: rule-id */")).toBe("ast-grep-ignore");
     expect(detectDirective("block", "/** ast-grep-ignore */")).toBe("ast-grep-ignore");
-    // Only non-alphabetic text may come first: digits and punctuation do not count.
     expect(detectDirective("line", "// 1. ast-grep-ignore")).toBe("ast-grep-ignore");
-    expect(detectDirective("line", "// note: ast-grep-ignore is prose here")).toBeUndefined();
-    expect(detectDirective("line", "// é ast-grep-ignore")).toBeUndefined();
+    // 0.45.3 and later read these as prose; up to 0.45.2 any comment holding
+    // the marker suppresses.
+    expect(detectDirective("line", "// note: ast-grep-ignore is prose here")).toBe("ast-grep-ignore");
+    expect(detectDirective("line", "// é ast-grep-ignore")).toBe("ast-grep-ignore");
+    // The comparison is case-sensitive.
+    expect(detectDirective("line", "// AST-GREP-IGNORE")).toBeUndefined();
+  });
+
+  it("names a comment opening with another directive after it, while it still carries the suppression", () => {
+    const text = "// eslint-disable-next-line no-eval -- ast-grep-ignore";
+
+    expect(detectDirective("line", text)).toBe("eslint-disable-next-line");
+    expect(detectDirective("block", "/* ast-grep-ignore\n @ts-ignore */")).toBe("@ts-ignore");
+    expect(carriesAstGrepSuppression(text)).toBe(true);
+    expect(carriesAstGrepSuppression("// ast-grep is a linter")).toBe(false);
   });
 
   it("reads Jest's docblock pragmas with any value, in the file's first comment only", () => {

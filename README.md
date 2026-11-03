@@ -215,7 +215,7 @@ ts-comment-scanner --remove --diff main...HEAD
 - **スペルチェック**: cspell(`cspell:` など)、`LocalWords`、codespell
 - **エディタ・IDE**: VS Code・JetBrains(`#region`)、JetBrains(`noinspection`・`<editor-fold>`・`language=`)、ReSharper
 
-判定は、各ツールのパーサーと同じ規則で行います。ファイルの先頭や `switch` 文の特定の位置でだけ効くディレクティブは、その位置にあるときだけディレクティブとして扱います。ツールやバージョンによって解釈が分かれる書き方は、どれか 1 つでも有効とみなせばディレクティブとして扱うので、`--remove` では残ります。TypeScript のディレクティブは、tsc 6 と tsc 7 のどちらかが有効とみなすものが対象です。
+判定は、各ツールのパーサーと同じ規則で行います。ファイルの先頭や `switch` 文の特定の位置でだけ効くディレクティブは、その位置にあるときだけディレクティブとして扱います。ツールやバージョンによって解釈が分かれる書き方は、どれか 1 つでも有効とみなせばディレクティブとして扱うので、`--remove` では残ります。TypeScript のディレクティブは、tsc 6 と tsc 7 のどちらかが有効とみなすものが対象です。ast-grep の `ast-grep-ignore` は 0.31.1 以降のリリースが対象で、0.45.2 までは文中に書いただけでも有効なので、そうしたコメントも残ります。
 
 ### ライブラリとして使う
 
@@ -460,7 +460,7 @@ Comments read by these tools are detected as directives:
 - **Spell checkers**: cspell (`cspell:` and its aliases), `LocalWords`, codespell
 - **Editors and IDEs**: VS Code and JetBrains (`#region`), JetBrains (`noinspection`, `<editor-fold>`, `language=`), ReSharper
 
-Each rule matches a comment the way the tool's own parser does. Directives that only work in certain positions, such as at the top of the file or at particular points in a `switch`, are detected only there. Where tools or versions read a comment differently, it counts as a directive if any of them honours it, so `--remove` keeps it. For TypeScript, a directive counts if either tsc 6 or tsc 7 honours it.
+Each rule matches a comment the way the tool's own parser does. Directives that only work in certain positions, such as at the top of the file or at particular points in a `switch`, are detected only there. Where tools or versions read a comment differently, it counts as a directive if any of them honours it, so `--remove` keeps it. For TypeScript, a directive counts if either tsc 6 or tsc 7 honours it. For ast-grep, the releases from 0.31.1 on count; up to 0.45.2 a mere mention of `ast-grep-ignore` in a comment suppresses, so such comments stay too.
 
 ### Using it as a library
 

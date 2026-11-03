@@ -1,7 +1,7 @@
 import ts from "typescript";
-import { bunMarkerOffset, detectDirective, type DirectivePlacement } from "./directives.js";
+import { isFileWidePosition, type PrecedingNode } from "./astgrep.js";
+import { bunMarkerOffset, carriesAstGrepSuppression, detectDirective, type DirectivePlacement } from "./directives.js";
 import { jsxLayout, type JsxLayout } from "./jsx.js";
-import { isBlank } from "./lines.js";
 import { firstIndexAtOrAfter } from "./ranges.js";
 import type { Comment, CommentKind } from "./types.js";
 
@@ -17,6 +17,8 @@ export function scanComments(source: string, options: ScanOptions = {}): Comment
 export interface SourceAnalysis {
   comments: Comment[];
   jsx: JsxLayout;
+  /** What stands in front of each comment carrying an ast-grep suppression (see precedingNode). */
+  preceding: ReadonlyMap<Comment, PrecedingNode>;
 }
 
 export function analyzeSource(source: string, options: ScanOptions = {}): SourceAnalysis {
@@ -113,6 +115,8 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
       header: range.pos < firstTokenStart,
       firstComment: firstComment && /^\s*$/.test(source.slice(shebangEnd, range.pos)),
       fileStart: range.pos === bunMarkerPos,
+      // A comment opening the first row has only whitespace in front of it,
+      // so only the first comment needs the check.
       fileWide: firstComment && isFileWidePosition(source, range.pos, range.end),
       get fallthroughSlot() {
         return slotsOf().fallthroughSlot;
@@ -142,31 +146,42 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
     };
   });
 
-  return { comments, jsx: jsxLayout(source, sourceFile, jsxParents, comments) };
+  const preceding = new Map<Comment, PrecedingNode>();
+  for (const [index, comment] of comments.entries()) {
+    if (carriesAstGrepSuppression(comment.text)) {
+      preceding.set(comment, precedingNode(sourceFile, tokens, comments[index - 1], comment.start));
+    }
+  }
+
+  return { comments, jsx: jsxLayout(source, sourceFile, jsxParents, comments), preceding };
 }
 
 /**
- * Whether a comment from `start` to `end` sits where ast-grep's suppression
- * comment covers the whole file (`get_suppression_kind` in its `combined.rs`):
- * on the first line with nothing but whitespace in front of it, and with the
- * next node — code or another comment — starting two or more lines further
- * down, or with nothing after it at all. Lines are counted the way tree-sitter
- * counts its rows, by line feeds alone.
+ * What stands in front of the comment at `offset` in tree-sitter's tree.
+ * tree-sitter puts a comment in the innermost node with code on both sides
+ * of it, so the comment's previous sibling is the comment right before it
+ * when no token stands between them, and otherwise the outermost node that
+ * ends with the token before it. TypeScript's nodes end where tree-sitter's
+ * do, except that tree-sitter's automatic semicolon can take a trailing
+ * comment into its statement, which makes the sibling smaller and starting
+ * no earlier: the start read off here is never on a later row.
  */
-export function isFileWidePosition(text: string, start: number, end: number): boolean {
-  if (!opensFirstRow(text, start)) return false;
-  const next = text.slice(end).search(/\S/);
-  return next === -1 || lineFeedCount(text.slice(0, end + next)) >= 2;
-}
-
-/** Whether nothing but whitespace, and no line feed, precedes the offset: the start of tree-sitter's first row. */
-export function opensFirstRow(text: string, offset: number): boolean {
-  const before = text.slice(0, offset);
-  return isBlank(before) && !before.includes("\n");
-}
-
-function lineFeedCount(text: string): number {
-  return text.split("\n").length - 1;
+function precedingNode(
+  sourceFile: ts.SourceFile,
+  tokens: readonly ts.Node[],
+  previous: Comment | undefined,
+  offset: number,
+): PrecedingNode {
+  // Empty lists are leaves too, as are missing tokens; neither holds text.
+  let index = firstIndexAtOrAfter(tokens, offset + 1, (token) => token.end) - 1;
+  while (index >= 0 && (tokens[index] as ts.Node).getStart(sourceFile) >= (tokens[index] as ts.Node).end) index -= 1;
+  const token = tokens[index];
+  const tokenEnd = token?.end ?? 0;
+  if (previous !== undefined && previous.end > tokenEnd) return { start: previous.start, tokenEnd };
+  if (token === undefined) return { tokenEnd };
+  let node = token;
+  while (!ts.isSourceFile(node.parent) && node.parent.end === token.end) node = node.parent;
+  return { start: node.getStart(sourceFile), tokenEnd };
 }
 
 /**

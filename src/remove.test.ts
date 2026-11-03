@@ -982,6 +982,74 @@ describe("removeComments keeps what tools read in large real-world codebases", (
     expect(removeComments(source).code).toBe("// ast-grep-ignore\neval(x);\n");
   });
 
+  it("keeps a comment that only mentions ast-grep-ignore, which suppresses up to ast-grep 0.45.2", () => {
+    const source = "x();\n// TODO: drop the ast-grep-ignore below\neval(y);\n";
+
+    expect(removeComments(source).changed).toBe(false);
+  });
+
+  it("reads the ast-grep suppression a comment carries whatever directive names it", () => {
+    // `/* note */` is what the suppression trails; without it the suppression
+    // would trail `foo(...)`, which starts two rows up.
+    const eslint = "foo(\n  1,\n); /* note */ // eslint-disable-next-line no-eval -- ast-grep-ignore\neval(y);\n";
+    const tsc = "foo(\n  1,\n); /* note */ /* ast-grep-ignore\n @ts-ignore */\neval(y);\n";
+
+    expect(removeComments(eslint).changed).toBe(false);
+    expect(removeComments(tsc).changed).toBe(false);
+  });
+
+  it("shields the row below a suppression trailing a statement that starts rows up, as releases up to 0.43 read it", () => {
+    // From 0.44.0 it suppresses `foo(...)`; up to 0.43 it suppresses the next row.
+    const source = "foo(\n  1,\n); // ast-grep-ignore\n// shielded\neval(y);\n";
+
+    expect(removeComments(source).changed).toBe(false);
+  });
+
+  it("keeps the comments whose removal would join the rows an ast-grep suppression covers", () => {
+    // Dropping `/* x\n */` would pull `hit(3)` onto the suppressed row below the comment,
+    const below = "x();\n/* ast-grep-ignore */ hit(/* x\n */ 2);\nhit(3);\n";
+    // and `hit(1)` onto the row of the node it trails (its own row up to 0.43).
+    const trailed = "hit(/* x\n */ 1); /* y\n */ /* ast-grep-ignore */\nfoo();\n";
+    const own = "x(); /* ast-grep-ignore */ y(/* x\n */ hit(1));\n";
+
+    expect(removeComments(below).changed).toBe(false);
+    expect(removeComments(trailed).changed).toBe(false);
+    expect(removeComments(own).changed).toBe(false);
+  });
+
+  it("removes the comments in front of the last token before a trailing ast-grep suppression", () => {
+    // They decide neither what it trails nor which rows it covers.
+    const source = "foo(/* inline */ a); // ast-grep-ignore: no-eval\n";
+
+    expect(removeComments(source).code).toBe("foo(a); // ast-grep-ignore: no-eval\n");
+  });
+
+  it("shields nothing below an ast-grep block comment spanning three rows, which covers its own second row", () => {
+    const source = "x();\n/* ast-grep-ignore: no-eval\n   because of y\n */\n// gone\neval(y);\n";
+
+    expect(removeComments(source).code).toBe("x();\n/* ast-grep-ignore: no-eval\n   because of y\n */\neval(y);\n");
+  });
+
+  it("counts ast-grep's rows by line feeds, which a lone CR or U+2028 does not end", () => {
+    // `foo();` shares the comment's row, so the row it covers is the next one.
+    const bareCr = "x();\n// ast-grep-ignore\rfoo();\n// shielded\neval(y);\n";
+    const separator = "x();\n// ast-grep-ignore\u2028foo();\n// shielded\neval(y);\n";
+    // `x();` shares the comment's row, so the comment trails it and covers no row below.
+    const trailing = "x();\r// ast-grep-ignore\n// gone\neval(y);\n";
+
+    expect(removeComments(bareCr).changed).toBe(false);
+    expect(removeComments(separator).changed).toBe(false);
+    expect(removeComments(trailing).code).toBe("x();\r// ast-grep-ignore\neval(y);\n");
+  });
+
+  it("shields no row below an ast-grep suppression in JSX braces, which trails the brace", () => {
+    const source = "x(\n  <div>\n    {/* ast-grep-ignore */}\n    {/* gone */}\n    <b />\n  </div>,\n);\n";
+
+    expect(removeComments(source, { jsx: true }).code).toBe(
+      "x(\n  <div>\n    {/* ast-grep-ignore */}\n    <b />\n  </div>,\n);\n",
+    );
+  });
+
   it("keeps copyright headers in their conventional wording", () => {
     const header = [
       "/*---------------------------------------------------------------------------------------------",
