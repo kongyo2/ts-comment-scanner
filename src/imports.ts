@@ -1,5 +1,8 @@
 import ts from "typescript";
+import { LINE_TERMINATOR } from "./lines.js";
 import { firstIndexAtOrAfter, type Range } from "./ranges.js";
+
+type ImportSorter = "typescript" | "dprint" | "biome";
 
 /**
  * The gap in front of an import or export declaration that an import sorter
@@ -9,7 +12,7 @@ import { firstIndexAtOrAfter, type Range } from "./ranges.js";
  */
 export interface ImportGroupGap extends Range {
   /** The sorters that start a new group at the declaration after the gap. */
-  splits: Array<"typescript" | "dprint">;
+  splits: ImportSorter[];
 }
 
 /**
@@ -33,14 +36,22 @@ export interface ImportGroupGap extends Range {
  *   A declaration a `dprint-ignore` comment exempts ends dprint's run, and
  *   stays in it here, which only reads more gaps. `deno fmt`, which runs the
  *   plugin, keeps the order.
+ * - Biome's organizeImports (`assist/source/organizeImports`, on by default,
+ *   and enforced by `biome check` and `biome ci`) sorts chunks of adjacent
+ *   imports, and of adjacent `export … from`s and local `export { … }`s, in
+ *   the file and in each ambient module, and starts a new chunk at a
+ *   declaration whose leading trivia holds a detached comment (see
+ *   detachedComments); a blank line alone starts none. Bare imports end its
+ *   chunks unless its `sortBareImports` option sorts them too, and are read
+ *   here either way.
  */
 export function importGroupGaps(
   source: string,
   sourceFile: ts.SourceFile,
   comments: readonly Range[],
 ): ImportGroupGap[] {
-  const readers = new Map<ts.Statement, Set<"typescript" | "dprint">>();
-  const read = (declaration: ts.Statement, sorter: "typescript" | "dprint"): void => {
+  const readers = new Map<ts.Statement, Set<ImportSorter>>();
+  const read = (declaration: ts.Statement, sorter: ImportSorter): void => {
     const sorters = readers.get(declaration) ?? new Set();
     sorters.add(sorter);
     readers.set(declaration, sorters);
@@ -51,29 +62,45 @@ export function importGroupGaps(
   for (const run of exportRuns(sourceFile.statements)) {
     for (const declaration of run.slice(1)) read(declaration, "typescript");
   }
-  for (const [index, statement] of sourceFile.statements.entries()) {
-    const kind = dprintKind(statement);
-    if (index > 0 && kind !== undefined && dprintKind(sourceFile.statements[index - 1] as ts.Statement) === kind) {
-      read(statement, "dprint");
-    }
+  for (const declaration of adjacentOfOneKind(sourceFile.statements, dprintKind)) read(declaration, "dprint");
+  for (const statements of [sourceFile.statements, ...ambientModuleBodies(sourceFile)]) {
+    for (const declaration of adjacentOfOneKind(statements, biomeKind)) read(declaration, "biome");
   }
   return [...readers]
     .sort(([a], [b]) => a.pos - b.pos)
     .map(([declaration, sorters]) => {
       const gap = { start: declaration.pos, end: declaration.getStart(sourceFile) };
-      const splits = [...sorters].filter((sorter) =>
-        sorter === "typescript"
-          ? newLineTrivia(source, gap, comments) >= 2
-          : source.slice(gap.start, gap.end).split("\n").length > 2,
-      );
+      const splits = [...sorters].filter((sorter) => STARTS_GROUP[sorter](source, gap, comments));
       return { ...gap, splits };
     });
+}
+
+// Whether the sorter starts a new group at the declaration after the gap.
+const STARTS_GROUP: Readonly<
+  Record<ImportSorter, (source: string, gap: Range, comments: readonly Range[]) => boolean>
+> = {
+  typescript: (source, gap, comments) => newLineTrivia(source, gap, comments) >= 2,
+  dprint: (source, gap) => source.slice(gap.start, gap.end).split("\n").length > 2,
+  biome: (source, gap, comments) => detachedComments(source, gap, comments).length > 0,
+};
+
+/** The statements past the first of each run of adjacent ones that `kindOf` puts in one kind. */
+function adjacentOfOneKind(
+  statements: readonly ts.Statement[],
+  kindOf: (statement: ts.Statement) => string | undefined,
+): ts.Statement[] {
+  return statements.filter((statement, index) => {
+    const kind = kindOf(statement);
+    return index > 0 && kind !== undefined && kindOf(statements[index - 1] as ts.Statement) === kind;
+  });
 }
 
 /**
  * The statements of the ambient modules (`declare module "m" { … }`,
  * `declare global { … }`) at the top of the file, whose imports
- * organizeImports sorts too; it leaves their exports in one run.
+ * organizeImports sorts too (it leaves their exports in one run), and whose
+ * imports and exports Biome sorts. Biome sorts those of a `namespace` too,
+ * where no import or export declaration is valid TypeScript.
  */
 function ambientModuleBodies(sourceFile: ts.SourceFile): Array<ts.NodeArray<ts.Statement>> {
   return sourceFile.statements.flatMap((statement) =>
@@ -122,6 +149,46 @@ function dprintKind(statement: ts.Statement): "imports" | "exports" | undefined 
     return specified ? "imports" : undefined;
   }
   return ts.isExportDeclaration(statement) && statement.moduleSpecifier !== undefined ? "exports" : undefined;
+}
+
+/** What Biome sorts the statement among: imports, exports (`export … from`s and local `export { … }`s), or neither. */
+function biomeKind(statement: ts.Statement): "imports" | "exports" | undefined {
+  if (ts.isImportDeclaration(statement)) return "imports";
+  return ts.isExportDeclaration(statement) ? "exports" : undefined;
+}
+
+// An empty line as Biome reads one: a line break right after another, of its
+// `\r\n`, `\n`, `\r`, U+2028 and U+2029 each, so the CR of a CRLF is never one
+// on its own. A line holding spaces or tabs is no empty line to it.
+const EMPTY_LINE = /(?:\r\n|\r(?!\n)|[\n\u2028\u2029])[\n\r\u2028\u2029]/;
+
+/**
+ * The comments that Biome's organizeImports reads as detached in front of the
+ * declaration after the gap, and that start a new chunk there
+ * (`has_detached_leading_comment`): those of the declaration's leading
+ * trivia that an empty line comes after, outside comments. The leading trivia
+ * starts at the first line break outside comments; the comments in front of
+ * it trail the token before the gap.
+ */
+export function detachedComments<T extends Range>(source: string, gap: Range, comments: readonly T[]): T[] {
+  const leading: T[] = [];
+  let detached = 0;
+  let inLeadingTrivia = false;
+  let from = gap.start;
+  for (
+    let index = firstIndexAtOrAfter(comments, gap.start, (comment) => comment.start);
+    (comments[index]?.start ?? gap.end) < gap.end;
+    index += 1
+  ) {
+    const comment = comments[index] as T;
+    const text = source.slice(from, comment.start);
+    if (EMPTY_LINE.test(text)) detached = leading.length;
+    inLeadingTrivia ||= LINE_TERMINATOR.test(text);
+    if (inLeadingTrivia) leading.push(comment);
+    from = comment.end;
+  }
+  if (EMPTY_LINE.test(source.slice(from, gap.end))) detached = leading.length;
+  return leading.slice(0, detached);
 }
 
 /** The line breaks TypeScript's scanner reads as NewLineTrivia in the gap, past its (sorted) comments. */

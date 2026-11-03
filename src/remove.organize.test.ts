@@ -8,7 +8,8 @@ import { analyzeSource } from "./scanner.js";
 // the typescript@6 package the scanner parses with, which tsserver, VS Code
 // and prettier-plugin-organize-imports run — so the mirror cannot drift from
 // tsc 6 silently. tsc 7's port groups imports the same way and ends runs of
-// exports at more statements, never at fewer; dprint is checked by hand.
+// exports at more statements, never at fewer; dprint and Biome are checked by
+// hand.
 
 const FILE = "/main.ts";
 

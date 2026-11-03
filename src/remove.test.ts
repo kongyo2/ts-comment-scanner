@@ -1302,7 +1302,6 @@ describe("removeComments between groups of imports", () => {
   });
 
   it("removes it where a blank line stays to hold the groups apart", () => {
-    expect(removeComments(`${b}\n// note\n\n${a}\n`).code).toBe(`${b}\n\n${a}\n`);
     expect(removeComments(`${b}\n\n// note\n${a}\n`).code).toBe(`${b}\n\n${a}\n`);
   });
 
@@ -1373,6 +1372,79 @@ describe("removeComments between groups of imports", () => {
     const source = `${b}\n// eslint-disable-next-line import/no-cycle\n${a}\n`;
 
     expect(removeComments(source, { removeDirectives: true }).code).toBe(source);
+  });
+});
+
+// Checked against the real Biome 2.0.0, 2.4.16 and 2.6.4, with and without
+// sortBareImports: 1.17.0's removal joined the chunks these comments start,
+// which `biome check` then reported as unsorted and `--write` sorted as one.
+describe("removeComments between Biome's chunks of imports and exports", () => {
+  const b = 'import { b } from "./b";';
+  const a = 'import { a } from "./a";';
+
+  it("keeps a comment an empty line comes after, which starts a chunk of its own", () => {
+    const source = [
+      'import { z } from "./z";',
+      "// local modules",
+      "",
+      'import { a } from "./a";',
+      "",
+      "export const all = [a, z]; // gone",
+      "",
+    ].join("\n");
+    const result = removeComments(source);
+
+    expect(result.code).toBe(source.replace(" // gone", ""));
+    expect(result.kept.map((comment) => comment.text)).toEqual(["// local modules"]);
+  });
+
+  it("keeps only the last comment the empty line comes after", () => {
+    expect(removeComments(`${b}\n// one\n// two\n\n${a}\n`).code).toBe(`${b}\n// two\n\n${a}\n`);
+    expect(removeComments(`${b}\n// one\n\n// two\n${a}\n`).code).toBe(`${b}\n// one\n\n${a}\n`);
+    expect(removeComments(`${b}\n// one\n\n// two\n\n${a}\n`).code).toBe(`${b}\n\n// two\n\n${a}\n`);
+  });
+
+  it("still removes a comment a line of spaces follows, or one trailing the import above", () => {
+    expect(removeComments(`${b}\n// note\n  \n${a}\n`).code).toBe(`${b}\n  \n${a}\n`);
+    expect(removeComments(`${b} // note\n\n${a}\n`).code).toBe(`${b}\n\n${a}\n`);
+  });
+
+  it("keeps the comments between exports, bare imports and the imports of an ambient module", () => {
+    const sources = [
+      'export * from "./b";\n// note\n\nexport { a } from "./a";\n',
+      "export { b };\n// note\n\nexport { a };\n",
+      'import "./b";\n// note\n\nimport "./a";\n',
+      `declare module "m" {\n  ${b}\n  // note\n\n  ${a}\n}\n`,
+    ];
+
+    for (const source of sources) expect(removeComments(source).code).toBe(source);
+  });
+
+  it("keeps a comment that only Biome's line breaks set apart: a lone CR, U+2028 or U+2029", () => {
+    for (const source of [`${b}\n// note\r\r${a}\n`, `${b}\n// note\u2028\u2029${a}\n`]) {
+      expect(removeComments(source).code).toBe(source);
+    }
+  });
+
+  it("keeps a multi-line comment a line break would take the place of, detaching the comment after it", () => {
+    // Going for a line break, the multi-line comment would put the legal
+    // comment on a line of its own, in front of the empty line.
+    const source = `${b} /* note\n more */ /*! legal */\n\n${a}\n`;
+
+    expect(removeComments(source).code).toBe(source);
+  });
+
+  it("lets a kept directive be the detached comment, so the comment line above it still goes", () => {
+    const source = `${b}\n// note\n// eslint-disable-next-line import/order\n\n${a}\n`;
+
+    expect(removeComments(source).code).toBe(`${b}\n// eslint-disable-next-line import/order\n\n${a}\n`);
+  });
+
+  it("removes the comment where another statement, or exports after imports, end the chunk anyway", () => {
+    expect(removeComments(`${b}\nf();\n// note\n\n${a}\n`).code).toBe(`${b}\nf();\n\n${a}\n`);
+    expect(removeComments(`${b}\n// note\n\nexport { a } from "./a";\n`).code).toBe(
+      `${b}\n\nexport { a } from "./a";\n`,
+    );
   });
 });
 
