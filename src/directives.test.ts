@@ -871,12 +871,61 @@ describe("detectDirective against the current tool sources", () => {
     expect(detectDirective("block", "/** global foo */")).toBeUndefined();
   });
 
+  it("detects ESLint's configuration comments with nothing after the label, which it lists all the same", () => {
+    expect(detectDirective("block", "/* eslint */")).toBe("eslint");
+    expect(detectDirective("block", "/*eslint*/")).toBe("eslint");
+    expect(detectDirective("block", "/* eslint -- nothing to configure yet */")).toBe("eslint");
+    expect(detectDirective("block", "/* global */")).toBe("global");
+    expect(detectDirective("block", "/* globals\n */")).toBe("globals");
+    expect(detectDirective("block", "/* exported -- reason */")).toBe("exported");
+    expect(detectDirective("block", "/* eslint-env */")).toBe("eslint-env");
+    // The label still ends at whitespace or the end of the comment.
+    expect(detectDirective("block", "/* globals: foo */")).toBeUndefined();
+    expect(detectDirective("block", "/* eslintrc */")).toBeUndefined();
+    expect(detectDirective("block", "/* exported_ */")).toBeUndefined();
+    expect(detectDirective("line", "// eslint")).toBeUndefined();
+    expect(detectDirective("line", "// global")).toBeUndefined();
+  });
+
+  it("lets U+0085 stand around the label as whitespace, as oxlint's Rust trimming does", () => {
+    expect(detectDirective("block", "/* eslint-disable\u0085no-console */")).toBe("eslint-disable");
+    expect(detectDirective("line", "//\u0085oxlint-disable-next-line")).toBe("oxlint-disable-next-line");
+    expect(detectDirective("line", "// \u0085 eslint-disable-line")).toBe("eslint-disable-line");
+    // Bun's linter reads ESLint's other labels the same way in its oxlint mode.
+    expect(detectDirective("block", "/* global\u0085foo */")).toBe("global");
+    expect(detectDirective("block", "/*\u0085eslint-env node */")).toBe("eslint-env");
+    // U+FEFF, which `\s` and ESLint's trimming cover, counts too.
+    expect(detectDirective("block", "/* ﻿eslint-disable */")).toBe("eslint-disable");
+    expect(detectDirective("block", "/* eslint-disable\u0086 */")).toBeUndefined();
+  });
+
+  it("finds eslint-env inside any comment, as eslintrc mode's scan of the file text does", () => {
+    expect(detectDirective("line", "// see /* eslint-env mocha */ for tests")).toBe("eslint-env");
+    expect(detectDirective("line", "// /*eslint-env mocha*/")).toBe("eslint-env");
+    expect(detectDirective("block", "/* a /* eslint-env mocha */")).toBe("eslint-env");
+    expect(detectDirective("block", "/** /* eslint-env mocha */")).toBe("eslint-env");
+    // The scan needs `/*`, optional whitespace and whitespace after the label.
+    expect(detectDirective("line", "// eslint-env mocha")).toBeUndefined();
+    expect(detectDirective("block", "/** eslint-env mocha */")).toBeUndefined();
+    expect(detectDirective("block", "/*\n * eslint-env mocha\n */")).toBeUndefined();
+    expect(detectDirective("line", "// /* eslint-envy */")).toBeUndefined();
+  });
+
   it("detects the react-hooks suppressions React Compiler searches every comment for", () => {
     expect(detectDirective("block", "/** eslint-disable-next-line react-hooks/exhaustive-deps */")).toBe(
       "eslint-disable-next-line",
     );
     expect(detectDirective("line", "// TODO eslint-disable react-hooks/rules-of-hooks")).toBe("eslint-disable");
-    expect(detectDirective("block", "/* see eslint-enable react-hooks/exhaustive-deps */")).toBe("eslint-enable");
+    expect(detectDirective("block", "/** eslint-disable react-hooks/exhaustive-deps, no-console */")).toBe(
+      "eslint-disable",
+    );
+    // One literal space, then the rule: other text or a tab in between is no
+    // suppression to the compiler.
+    expect(detectDirective("block", "/** eslint-disable no-console, react-hooks/exhaustive-deps */")).toBeUndefined();
+    expect(detectDirective("block", "/** eslint-disable-next-line\treact-hooks/rules-of-hooks */")).toBeUndefined();
+    expect(detectDirective("line", "// we used eslint-disable for react-hooks/exhaustive-deps")).toBeUndefined();
+    // An eslint-enable never ends the compiler's range.
+    expect(detectDirective("block", "/* see eslint-enable react-hooks/exhaustive-deps */")).toBeUndefined();
     expect(detectDirective("block", "/** eslint-disable no-console */")).toBeUndefined();
     expect(detectDirective("line", "// TODO $FlowFixMe[react-rule-hook]")).toBe("$FlowFixMe");
     expect(detectDirective("line", "// see $FlowFixMeProps[react-rule-hook]")).toBe("$FlowFixMe");
@@ -1190,6 +1239,21 @@ describe("detectDirective for markers real codebases rely on", () => {
     expect(detectDirective("line", "// falls through", { ...midFile, noDefaultSlot: true, nextToken: "}" })).toBe(
       "fallthrough",
     );
+  });
+
+  it("names a comment inside an empty block for the empty-block rules that count it as content", () => {
+    const inEmptyBlock = { ...midFile, emptyBlock: true };
+
+    expect(detectDirective("line", "// ignore", inEmptyBlock)).toBe("empty-block");
+    expect(detectDirective("block", "/* empty */", inEmptyBlock)).toBe("empty-block");
+    // A directive keeps its own name there, and a dead one gives way.
+    expect(detectDirective("line", "// eslint-disable-line no-empty", inEmptyBlock)).toBe("eslint-disable-line");
+    expect(detectDirective("line", "// note: nosemgrep", inEmptyBlock)).toBe("nosemgrep");
+    expect(detectDirective("line", "// @ts-nocheck", inEmptyBlock)).toBe("empty-block");
+    // Elsewhere, or with the placement unknown, it is an ordinary comment.
+    expect(detectDirective("line", "// ignore", { ...midFile, emptyBlock: false })).toBeUndefined();
+    expect(detectDirective("line", "// ignore", midFile)).toBeUndefined();
+    expect(detectDirective("line", "// ignore")).toBeUndefined();
   });
 });
 
