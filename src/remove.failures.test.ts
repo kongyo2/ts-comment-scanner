@@ -121,6 +121,20 @@ describe("removeComments import group verification", () => {
       removeComments('import { b } from "./b";\n/*! kept */\n\nimport { a } from "./a";\n// gone\n'),
     ).toThrow(/unexpected result/);
   });
+
+  it("throws when the output loses the empty line after the imports where no removal holds the gap", () => {
+    // A blank line holds the code below the import, which no removal touches.
+    vi.mocked(analyzeSource)
+      .mockImplementationOnce(realAnalyze)
+      .mockImplementationOnce(
+        tampered((analysis) => ({
+          ...analysis,
+          importGroups: analysis.importGroups.map((gap) => ({ ...gap, spaced: [] })),
+        })),
+      );
+
+    expect(() => removeComments('import { a } from "./a";\n\nf(a);\n// gone\n')).toThrow(/unexpected result/);
+  });
 });
 
 describe("removeComments JSX rendering verification", () => {

@@ -45,9 +45,12 @@ export interface RemoveResult {
    * them for (or the JSX sibling it applies to), comments whose removal
    * would move a position-dependent directive
    * (prettier's first-comment pragma, Deno's coverage file pragma, Bun's
-   * file-start marker) into effect, and comments whose removal would join
+   * file-start marker) into effect, comments whose removal would join
    * two groups of imports or exports that TypeScript's organizeImports,
-   * dprint or Biome sorts apart, or split one.
+   * dprint or Biome sorts apart, or split one, and comments whose removal
+   * would bring the code after an import up to the line below it, where the
+   * newline-after-import rules of eslint-plugin-import and oxlint want an
+   * empty line.
    */
   kept: Comment[];
   /** Comments excluded from removal by the `shouldRemove` predicate. */
@@ -83,7 +86,9 @@ export interface RemoveResult {
  * - Imports and exports stay in the groups the import sorters read: where
  *   deleting a comment would join two groups that TypeScript's
  *   organizeImports, dprint or Biome sorts apart, or split one, the comment
- *   stays.
+ *   stays. So does a comment line that keeps the code after an import two
+ *   lines down, where the newline-after-import rules of eslint-plugin-import
+ *   and oxlint want an empty line.
  * - A leading byte-order mark is preserved. Reported positions index into the
  *   `source` string exactly as `scanComments(source)` reports them (a BOM
  *   counts as its first character).
@@ -258,13 +263,15 @@ function closestRemovalBefore(removals: readonly Comment[], comment: Comment): C
 
 /**
  * The removals to re-protect so that the output starts exactly the groups of
- * imports and exports the source starts. The gaps belong to the same
- * declarations in both texts, since removing comments leaves the statements
- * as they are. Where the output joins two groups at a gap for some sorter,
- * the removal holding the gap open stays (see joiningRemoval, and
- * detachedRemoval for Biome's chunks); where it splits one there, the
- * multi-line comment a line break took the place of stays (see
- * partingRemoval).
+ * imports and exports the source starts, and keeps the empty lines the
+ * linters find after its imports. The gaps belong to the same statements in
+ * both texts, since removing comments leaves the statements as they are.
+ * Where the output joins two groups at a gap for some sorter, or a linter
+ * no longer finds its empty line there, the removal holding the gap open
+ * stays (see joiningRemoval, and detachedRemoval for Biome's chunks); where
+ * it splits a group there, the multi-line comment a line break took the
+ * place of stays (see partingRemoval). An empty line a linter only finds in
+ * the output leaves it nothing to report.
  */
 function importGroupHolders(
   source: string,
@@ -280,14 +287,17 @@ function importGroupHolders(
     holders.add(holder);
   };
   for (const [index, gap] of before.entries()) {
-    const splits = (after[index] as ImportGroupGap).splits;
+    const { splits, spaced } = after[index] as ImportGroupGap;
     const joined = gap.splits.filter((sorter) => !splits.includes(sorter));
     const parted = splits.some((sorter) => !gap.splits.includes(sorter));
-    if (joined.length === 0 && !parted) continue;
+    const unspaced = gap.spaced.some((linter) => !spaced.includes(linter));
+    if (joined.length === 0 && !parted && !unspaced) continue;
     const inGap = removals.filter((comment) => comment.start >= gap.start && comment.end <= gap.end);
-    // TypeScript and dprint count the gap's line breaks, Biome reads its comments.
+    // TypeScript, dprint and the linters count the gap's line breaks, Biome reads its comments.
     const linesJoined = joined.filter((sorter) => sorter !== "biome");
-    if (linesJoined.length > 0) hold(joiningRemoval(source, gap, inGap, linesJoined.includes("typescript")));
+    if (linesJoined.length > 0 || unspaced) {
+      hold(joiningRemoval(source, gap, inGap, linesJoined.includes("typescript")));
+    }
     if (joined.includes("biome")) hold(detachedRemoval(source, gap, comments, inGap));
     if (parted) hold(partingRemoval(source, gap, inGap, removals));
   }
@@ -312,14 +322,15 @@ function detachedRemoval(
 
 /**
  * The removal in the gap whose deletion takes line breaks out of it: one
- * spanning lines, or one on a line below the token the gap follows. When only
- * dprint joins the groups, it counted line breaks inside a comment, and the
- * first comment spanning lines stays: the removals after it then trail it
- * and go without their line breaks, while in front of a later one a line
- * break would take their place. Otherwise the last of them that ends above
- * the declaration's line stays, holding a line of its own with the line break
- * TypeScript counts and the line dprint counts; failing that, the last of
- * them, which still keeps the declaration's line down.
+ * spanning lines, or one on a line below the token the gap follows. When
+ * TypeScript does not join the groups, the tools that lose the break —
+ * dprint, the linters — counted line breaks inside a comment, and the first
+ * comment spanning lines stays: the removals after it then trail it and go
+ * without their line breaks, while in front of a later one a line break
+ * would take their place. Otherwise the last of them that ends above the
+ * statement's line stays, holding a line of its own with the line break
+ * TypeScript counts and the line the others count; failing that, the last
+ * of them, which still keeps the statement's line down.
  */
 function joiningRemoval(
   source: string,

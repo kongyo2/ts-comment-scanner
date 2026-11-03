@@ -418,6 +418,28 @@
           </div>
           <div class="guard">
             <div class="danger">
+              <span class="ja"
+                ><code>import</code> 直下のコメント行を消すと、eslint-plugin-import・oxlint の
+                <code>newline-after-import</code> が空行の欠落を報告する</span
+              >
+              <span class="en"
+                >deleting the comment line right below the imports makes the <code>newline-after-import</code> rule of
+                eslint-plugin-import and oxlint report the missing empty line</span
+              >
+            </div>
+            <div class="fix">
+              <span class="ja"
+                ><code>import</code> や <code>require</code> と次の文を 2
+                行離しているコメントは削除しない(空行が残るときは削除)</span
+              >
+              <span class="en"
+                >the comment holding the code two lines below an <code>import</code> or <code>require</code> is kept,
+                unless a blank line still does</span
+              >
+            </div>
+          </div>
+          <div class="guard">
+            <div class="danger">
               <span class="ja"><code>@ts-expect-error</code> 直下の行が消えると適用先がズレる</span>
               <span class="en">deleting the line under <code>@ts-expect-error</code> shifts its target</span>
             </div>
@@ -464,11 +486,11 @@
         </div>
         <p class="proof-line">
           <span class="ja"
-            >// この挙動は <strong>1038 本のテスト</strong>と <strong>100% カバレッジ</strong>(statements / branches /
+            >// この挙動は <strong>1062 本のテスト</strong>と <strong>100% カバレッジ</strong>(statements / branches /
             functions / lines)で固定しています</span
           >
           <span class="en"
-            >// pinned by <strong>1038 tests</strong> at <strong>100% coverage</strong> — statements, branches,
+            >// pinned by <strong>1062 tests</strong> at <strong>100% coverage</strong> — statements, branches,
             functions and lines</span
           >
         </p>
