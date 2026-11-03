@@ -102,6 +102,25 @@ describe("removeComments import group verification", () => {
       /unexpected result/,
     );
   });
+
+  it("throws when the output joins Biome's chunks where no removal is a detached comment of the gap", () => {
+    // The legal comment that starts the chunk stays, which no removal touches.
+    vi.mocked(analyzeSource)
+      .mockImplementationOnce(realAnalyze)
+      .mockImplementationOnce(
+        tampered((analysis) => ({
+          ...analysis,
+          importGroups: analysis.importGroups.map((gap) => ({
+            ...gap,
+            splits: gap.splits.filter((sorter) => sorter !== "biome"),
+          })),
+        })),
+      );
+
+    expect(() =>
+      removeComments('import { b } from "./b";\n/*! kept */\n\nimport { a } from "./a";\n// gone\n'),
+    ).toThrow(/unexpected result/);
+  });
 });
 
 describe("removeComments JSX rendering verification", () => {

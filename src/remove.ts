@@ -6,7 +6,7 @@ import {
   isLegalComment,
   type DirectivePlacement,
 } from "./directives.js";
-import type { ImportGroupGap } from "./imports.js";
+import { detachedComments, type ImportGroupGap } from "./imports.js";
 import type { JsxContainer } from "./jsx.js";
 import { LINE_TERMINATOR, isBlank, lineStartOffsets } from "./lines.js";
 import { firstIndexAtOrAfter, rangeAt, type Range } from "./ranges.js";
@@ -46,8 +46,8 @@ export interface RemoveResult {
    * would move a position-dependent directive
    * (prettier's first-comment pragma, Deno's coverage file pragma, Bun's
    * file-start marker) into effect, and comments whose removal would join
-   * two groups of imports or exports that TypeScript's organizeImports or
-   * dprint sorts apart, or split one.
+   * two groups of imports or exports that TypeScript's organizeImports,
+   * dprint or Biome sorts apart, or split one.
    */
   kept: Comment[];
   /** Comments excluded from removal by the `shouldRemove` predicate. */
@@ -82,7 +82,8 @@ export interface RemoveResult {
  *   lines already against that edge stay.
  * - Imports and exports stay in the groups the import sorters read: where
  *   deleting a comment would join two groups that TypeScript's
- *   organizeImports or dprint sorts apart, or split one, the comment stays.
+ *   organizeImports, dprint or Biome sorts apart, or split one, the comment
+ *   stays.
  * - A leading byte-order mark is preserved. Reported positions index into the
  *   `source` string exactly as `scanComments(source)` reports them (a BOM
  *   counts as its first character).
@@ -145,7 +146,7 @@ export function removeComments(source: string, options: RemoveOptions = {}): Rem
     // Where the output joins two groups of imports or exports, or splits one,
     // a sorter would sort them differently: the removal that does it is
     // re-protected, and the attempt repeated.
-    const holders = importGroupHolders(source, analysis.importGroups, output.importGroups, removed);
+    const holders = importGroupHolders(source, comments, analysis.importGroups, output.importGroups, removed);
     if (holders.length > 0) {
       const holding = new Set(holders);
       removed = removed.filter((comment) => !holding.has(comment));
@@ -260,12 +261,14 @@ function closestRemovalBefore(removals: readonly Comment[], comment: Comment): C
  * imports and exports the source starts. The gaps belong to the same
  * declarations in both texts, since removing comments leaves the statements
  * as they are. Where the output joins two groups at a gap for some sorter,
- * the removal holding the gap open stays (see joiningRemoval); where it
- * splits one there, the multi-line comment a line break took the place of
- * stays (see partingRemoval).
+ * the removal holding the gap open stays (see joiningRemoval, and
+ * detachedRemoval for Biome's chunks); where it splits one there, the
+ * multi-line comment a line break took the place of stays (see
+ * partingRemoval).
  */
 function importGroupHolders(
   source: string,
+  comments: readonly Comment[],
   before: readonly ImportGroupGap[],
   after: readonly ImportGroupGap[],
   removals: readonly Comment[],
@@ -282,10 +285,29 @@ function importGroupHolders(
     const parted = splits.some((sorter) => !gap.splits.includes(sorter));
     if (joined.length === 0 && !parted) continue;
     const inGap = removals.filter((comment) => comment.start >= gap.start && comment.end <= gap.end);
-    if (joined.length > 0) hold(joiningRemoval(source, gap, inGap, joined.includes("typescript")));
+    // TypeScript and dprint count the gap's line breaks, Biome reads its comments.
+    const linesJoined = joined.filter((sorter) => sorter !== "biome");
+    if (linesJoined.length > 0) hold(joiningRemoval(source, gap, inGap, linesJoined.includes("typescript")));
+    if (joined.includes("biome")) hold(detachedRemoval(source, gap, comments, inGap));
     if (parted) hold(partingRemoval(source, gap, inGap, removals));
   }
   return [...holders];
+}
+
+/**
+ * The removal that Biome's chunk boundary at the gap rests on: the last of
+ * the gap's detached comments that goes (see detachedComments). Kept, it is
+ * detached again, for the empty line after it stays: the removals past it all
+ * come after the gap's last empty line, and a run of blank lines keeps the
+ * ones in front of its first vanishing line (see blankLineEdits).
+ */
+function detachedRemoval(
+  source: string,
+  gap: Range,
+  comments: readonly Comment[],
+  inGap: readonly Comment[],
+): Comment | undefined {
+  return detachedComments(source, gap, comments).findLast((comment) => inGap.includes(comment));
 }
 
 /**
