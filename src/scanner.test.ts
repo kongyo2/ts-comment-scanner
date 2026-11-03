@@ -387,7 +387,9 @@ describe("scanComments switch-clause slots", () => {
     const nestedInCase =
       "switch (x) {\n  case 0:\n    if (y) {\n      a(); // falls through\n    }\n  case 1:\n    b();\n}\n";
 
-    expect(directivesOf(ifBlock)).toEqual([undefined, undefined]);
+    // The catch block holds nothing else, so its comment is what keeps
+    // no-empty quiet, though it is no fall-through comment.
+    expect(directivesOf(ifBlock)).toEqual([undefined, "empty-block"]);
     expect(directivesOf(nestedInCase)).toEqual([undefined]);
   });
 
@@ -400,7 +402,9 @@ describe("scanComments switch-clause slots", () => {
     expect(directivesOf(afterLast)).toEqual(["no-default"]);
     expect(directivesOf(withDefault)).toEqual([undefined]);
     expect(directivesOf(objectLiteral)).toEqual([undefined]);
-    expect(directivesOf(emptySwitch)).toEqual([undefined]);
+    // default-case skips a switch without clauses; no-empty reads the comment
+    // as the switch's content instead.
+    expect(directivesOf(emptySwitch)).toEqual(["empty-block"]);
   });
 
   it("also reads a no-default comment anywhere inside the last clause, as oxlint does", () => {
@@ -441,6 +445,88 @@ describe("scanComments switch-clause slots", () => {
     ].join("\n");
 
     expect(directivesOf(source)).toEqual(["fallthrough", "no-default"]);
+  });
+});
+
+describe("scanComments empty blocks", () => {
+  const directivesOf = (source: string, jsx = false) =>
+    scanComments(source, { jsx }).map((comment) => comment.directive);
+
+  it("names every comment of a block, function body or switch that holds nothing else", () => {
+    const source = [
+      "try {",
+      "  run();",
+      "} catch {",
+      "  // ignore",
+      "} finally { /* nothing to clean up */ }",
+      "if (a) {",
+      "  // later",
+      "  /* still later */",
+      "} else {}",
+      "for (;;) { // spin",
+      "}",
+      "label: { /* x */ }",
+      "switch (x) { /* no cases yet */ }",
+      "switch (y) {",
+      "  case 1: { /* nothing */ }",
+      "}",
+      "function noop() { /* noop */ }",
+      "const f = () => { // noop",
+      "};",
+      "class C {",
+      "  constructor() { /* nothing */ }",
+      "  static { /* nothing */ }",
+      "}",
+      "const o = { m() { /* noop */ } };",
+      "",
+    ].join("\n");
+
+    expect(directivesOf(source)).toEqual(Array.from({ length: 13 }, () => "empty-block"));
+  });
+
+  it("leaves comments outside the braces, or in blocks that hold anything else, alone", () => {
+    const source = [
+      "if (a) /* before */ {} // after",
+      "if (b) { run(); /* with code */ }",
+      "if (c) { ; /* an empty statement */ }",
+      "function f(/* param */) {}",
+      'function g() { "use strict"; /* a directive prologue */ }',
+      "switch (x) /* before */ {}",
+      "switch (y) { case 1: /* in a clause */ }",
+      "namespace N { /* namespace body */ }",
+      "interface I { /* interface body */ }",
+      "class C { /* class body */ }",
+      "const o = { /* object literal */ };",
+      "enum E { /* enum */ }",
+      "type T = { /* type literal */ };",
+      "",
+    ].join("\n");
+
+    expect(directivesOf(source)).toEqual(Array.from({ length: 14 }, () => undefined));
+  });
+
+  it("keeps the name a rule gives a comment inside an empty block", () => {
+    const source = [
+      "try {",
+      "  run();",
+      "} catch {",
+      "  // eslint-disable-next-line no-empty",
+      "  // @ts-nocheck (too late in the file to count)",
+      "}",
+      "",
+    ].join("\n");
+
+    expect(directivesOf(source)).toEqual(["eslint-disable-next-line", "empty-block"]);
+  });
+
+  it("reads the empty blocks inside JSX attributes too", () => {
+    const source = "const el = <button onClick={() => { /* noop */ }}>{/* label */}</button>;\n";
+
+    expect(directivesOf(source, true)).toEqual(["empty-block", undefined]);
+  });
+
+  it("treats a block the parser had to make up as holding nothing", () => {
+    expect(directivesOf("try\n// c\n")).toEqual([undefined]);
   });
 });
 

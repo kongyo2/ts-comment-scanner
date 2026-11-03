@@ -37,7 +37,11 @@ describe("removeComments blank lines", () => {
     expect(code("f(\n  // c\n\n  a,\n);\nconst x = [\n  1,\n\n  // c\n];\n")).toBe(
       "f(\n  a,\n);\nconst x = [\n  1,\n];\n",
     );
-    expect(code("function f() {\n\n  // c\n\n}\n")).toBe("function f() {\n\n}\n");
+    // The only comment of an empty block keeps the block off the linters'
+    // empty-block reports, so only removeDirectives lets it go.
+    expect(removeComments("function f() {\n\n  // c\n\n}\n", { removeDirectives: true }).code).toBe(
+      "function f() {\n\n}\n",
+    );
   });
 
   it("does not take a bracket inside a kept comment for the start of a block", () => {

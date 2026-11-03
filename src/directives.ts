@@ -93,33 +93,53 @@ const JSX_PRAGMAS: ReadonlyMap<string, string> = new Map(
 const tsStrictName = (match: RegExpExecArray): string => (match[1] === undefined ? "@ts-strict" : "@ts-strict-ignore");
 
 const RULES: DirectiveRule[] = [
-  // ESLint and oxlint. ESLint 10 takes the label from the trimmed comment value
+  // ESLint and oxlint. ESLint takes the label from the trimmed comment value
   // (`[a-z]+(?:-[a-z]+)*` followed by whitespace or the end) and honours only
   // `eslint-disable-line`/`-next-line` in `//` comments; oxlint reads all four
   // commands, and its own prefix, from comments of either kind, under the
   // same boundary. A JSDoc star in front of the label defeats both, and so
-  // does a glued suffix (`eslint-disable-foo`, `eslint-disable:foo`).
-  { pattern: /^(?:eslint|oxlint)-(?:disable(?:-next-line|-line)?|enable)(?=\s|$)/, keepStars: true },
-  // React Compiler (babel-plugin-react-compiler, and Bun's port of it) skips a
-  // component whose comments suppress its react-hooks rules: it searches each
-  // comment for `eslint-disable`/`-next-line`/`eslint-enable` followed by one
-  // of the rules, anywhere in the text — JSDoc blocks and mid-text mentions
-  // included.
+  // does a glued suffix (`eslint-disable-foo`, `eslint-disable:foo`). oxlint
+  // trims and splits on Rust's whitespace, which adds U+0085 to what `\s`
+  // matches, so a next-line character may stand around the label too. Bun's
+  // linter ports both readings (all labels, U+0085 included, in its oxlint
+  // mode).
   {
-    pattern: /eslint-(disable(?:-next-line)?|enable)\s[^]*react-hooks\/(?:exhaustive-deps|rules-of-hooks)/,
+    pattern: /^[\s\u0085]*((?:eslint|oxlint)-(?:disable(?:-next-line|-line)?|enable))(?=[\s\u0085]|$)/,
+    keepStars: true,
+    name: (match) => match[1] as string,
+  },
+  // React Compiler (babel-plugin-react-compiler) skips the functions a
+  // suppression of its react-hooks rules covers. It searches every comment
+  // value for `eslint-disable-next-line ` or `eslint-disable ` with one of
+  // the rules right after that one space, anywhere in the text — JSDoc blocks
+  // and mid-text mentions included. Its `eslint-enable` pattern never takes
+  // effect: the range is closed in the loop pass that found its
+  // `eslint-disable`, before a later comment is read. (The compiler's Rust
+  // port and Bun's and oxc's ports only read a value that opens with the
+  // suppression, which the rule above already names.)
+  {
+    pattern: /eslint-(disable(?:-next-line)?) react-hooks\/(?:exhaustive-deps|rules-of-hooks)/,
     rawText: true,
     name: (match) => `eslint-${match[1] as string}`,
   },
-  // ESLint 10 reports `/* eslint-env */` comments as no longer supported, and
-  // ESLint 9's eslintrc mode still applies them; both read block comments
-  // only, like the configuration comments below.
-  { pattern: /^eslint-env(?=\s|$)/, blockOnly: true, keepStars: true },
-  { pattern: /^eslint\s+\S/, name: "eslint", blockOnly: true, joinLines: true, keepStars: true },
+  // ESLint's other labels, read from block comments only. ESLint 10 reports
+  // `/* eslint-env */` comments as no longer supported, and ESLint 9 warns of
+  // them in flat config. The label alone makes a configuration comment:
+  // ESLint lists a bare `/* eslint */`, `/* global */` or `/* exported */`
+  // with the others and warns of it under noInlineConfig. Same boundary as
+  // above.
+  { pattern: /^[\s\u0085]*(eslint-env)(?=[\s\u0085]|$)/, blockOnly: true, keepStars: true, name: "eslint-env" },
+  // ESLint 8 and 9's eslintrc mode instead find `eslint-env` with a regex over
+  // the whole file text, /\/\*\s*eslint-env\s.+?(?:\*\/|$)/gsu, so a
+  // `/* eslint-env mocha */` written inside any comment — `// see /*
+  // eslint-env mocha */`, or after other text in a block comment — enables
+  // the environment as well.
+  { pattern: /\/\*\s*eslint-env\s/, rawText: true, name: "eslint-env" },
+  { pattern: /^[\s\u0085]*eslint(?=[\s\u0085]|$)/, name: "eslint", blockOnly: true, keepStars: true },
   {
-    pattern: /^(globals?|exported)\s+\S/,
+    pattern: /^[\s\u0085]*(globals?|exported)(?=[\s\u0085]|$)/,
     name: (match) => match[1] as string,
     blockOnly: true,
-    joinLines: true,
     keepStars: true,
   },
   // TSLint (legacy): tslint:(enable|disable)(-line|-next-line)? ending at a
@@ -546,11 +566,15 @@ const RULES: DirectiveRule[] = [
   { pattern: /^[/*#-]*\s*#?(region|endregion)\b/, rawText: true, name: (match) => `#${match[1] as string}` },
   // ESLint's no-fallthrough (in eslint:recommended) accepts a case that falls
   // through when the last comment before the next case matches
-  // /falls?\s?through/iu anywhere in its value; oxlint's port and JSHint's
-  // `/* falls through */` accept narrower forms of the same words. ESLint's and
-  // oxlint's default-case accept a final comment that is exactly `no default`,
-  // in any case. Both only count in front of the code those rules read them
-  // before (see SWITCH_CLAUSE_TARGETS), so the same words elsewhere are prose.
+  // /falls?\s?through/iu anywhere in its value (unless the value is an ESLint
+  // directive); oxlint's port and JSHint's `/* falls through */` accept
+  // narrower forms of the same words, and deno_lint any comment there holding
+  // `fallthrough`, `falls through` or `fall through`, directives included.
+  // ESLint's and oxlint's default-case, and typescript-eslint's
+  // switch-exhaustiveness-check, accept a final comment that is exactly `no
+  // default`, in any case. Both only count in front of the code those rules
+  // read them before (see SWITCH_CLAUSE_SLOTS), so the same words elsewhere
+  // are prose.
   { pattern: /falls?\s?through/iu, rawText: true, name: "fallthrough" },
   { pattern: /^\/(?:\/\s*no default\s*|\*\s*no default\s*\*\/)$/iu, rawText: true, name: "no-default" },
 ];
@@ -620,6 +644,14 @@ export interface DirectivePlacement {
    * (oxlint). Left out, nextToken decides.
    */
   noDefaultSlot?: boolean;
+  /**
+   * The comment sits inside a block that holds no statements — a function
+   * body, a class static block, any other `{}` block — or inside a `switch`
+   * with no clauses. The linters' empty-block rules count any comment there as
+   * the block's content and leave the block unreported (see EMPTY_BLOCK).
+   * Left out, the comment is assumed not to.
+   */
+  emptyBlock?: boolean;
   /**
    * The token that follows the comment past any further comments (`case`,
    * `}`, an identifier, ...), or `""` when only comments follow: a coarser
@@ -700,6 +732,16 @@ const SWITCH_CLAUSE_SLOTS: ReadonlyMap<
   ["no-default", { slot: (placement) => placement.noDefaultSlot, tokens: new Set(["}"]) }],
 ]);
 
+// ESLint's no-empty and no-empty-static-block (both in eslint:recommended)
+// and no-empty-function leave a block alone once a comment sits inside it, as
+// do typescript-eslint's no-empty-function, oxlint's and deno_lint's ports
+// and Biome's noEmptyBlockStatements: whatever it says, such a comment is
+// what keeps an empty block, function body or switch from being reported
+// (see DirectivePlacement.emptyBlock). It is named for that when no rule
+// names it. Every comment of the block gets the name, so removing some of
+// them never changes what the others are called.
+const EMPTY_BLOCK = "empty-block";
+
 function isActiveAt(name: string, placement: DirectivePlacement): boolean {
   if (FILE_START_ONLY_DIRECTIVES.has(name)) return placement.fileStart;
   if (FIRST_COMMENT_ONLY_DIRECTIVES.has(name)) return placement.firstComment;
@@ -750,7 +792,9 @@ const FLOW_BLOCK_SUPPRESSION = /^\/\*[ \t\r\n*]*@ts-(ignore|expect-error)(?![\w-
  * honours in certain positions (header pragmas, prettier's docblock pragma,
  * `// @bun`) are skipped elsewhere — and the remaining rules still run, so a
  * live directive later in the same comment (`// deno-lint-ignore-file
- * nosemgrep` in mid-file) is not masked by a positionally dead one.
+ * nosemgrep` in mid-file) is not masked by a positionally dead one. A comment
+ * no rule names is still `empty-block` where the placement puts it inside an
+ * empty block.
  */
 export function detectDirective(kind: CommentKind, text: string, placement?: DirectivePlacement): string | undefined {
   const at = placement ?? ANY_PLACEMENT;
@@ -783,7 +827,7 @@ export function detectDirective(kind: CommentKind, text: string, placement?: Dir
     if (match.opening) return match.name;
     mention ??= match.name;
   }
-  return mention;
+  return mention ?? (at.emptyBlock === true ? EMPTY_BLOCK : undefined);
 }
 
 /**

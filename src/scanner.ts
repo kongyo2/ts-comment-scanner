@@ -2,7 +2,7 @@ import ts from "typescript";
 import { isFileWidePosition, type PrecedingNode } from "./astgrep.js";
 import { bunMarkerOffset, carriesAstGrepSuppression, detectDirective, type DirectivePlacement } from "./directives.js";
 import { jsxLayout, type JsxLayout } from "./jsx.js";
-import { firstIndexAtOrAfter } from "./ranges.js";
+import { firstIndexAtOrAfter, rangeAt, type Range } from "./ranges.js";
 import type { Comment, CommentKind } from "./types.js";
 
 export interface ScanOptions {
@@ -33,6 +33,13 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
   const seen = new Set<number>();
   /** Every token, in document order. */
   const tokens: ts.Node[] = [];
+  /**
+   * The insides of the blocks with no statements and the switches with no
+   * clauses (see DirectivePlacement.emptyBlock), from just past the opening
+   * brace to the block's end, in document order. Nothing but comments sits
+   * in such a block, so no two of them overlap.
+   */
+  const emptyBlocks: Range[] = [];
 
   const collect = (found: readonly ts.CommentRange[] | undefined): void => {
     if (!found) return;
@@ -50,6 +57,11 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
   while (pending.length > 0) {
     const node = pending.pop() as ts.Node;
     if (ts.isJsxElement(node) || ts.isJsxFragment(node)) jsxParents.push(node);
+    if ((ts.isBlock(node) && node.statements.length === 0) || (ts.isCaseBlock(node) && node.clauses.length === 0)) {
+      // A block the parser had to make up, with no opening brace, holds nothing.
+      const start = node.getStart(sourceFile);
+      if (source[start] === "{") emptyBlocks.push({ start: start + 1, end: node.end });
+    }
     // JSDoc nodes start inside the comment text itself; descending into them
     // would hide the comment (e.g. a trailing JSDoc attached to the
     // end-of-file token). Treat them as trivia like any other comment.
@@ -118,6 +130,7 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
       // A comment opening the first row has only whitespace in front of it,
       // so only the first comment needs the check.
       fileWide: firstComment && isFileWidePosition(source, range.pos, range.end),
+      emptyBlock: rangeAt(emptyBlocks, range.pos) !== undefined,
       get fallthroughSlot() {
         return slotsOf().fallthroughSlot;
       },

@@ -1089,3 +1089,47 @@ describe("removeComments keeps what tools read in large real-world codebases", (
     expect(result.kept.map((comment) => comment.text)).toEqual(["// INJECT:nextConfigOutput"]);
   });
 });
+
+describe("removeComments in blocks that hold nothing but comments", () => {
+  it("keeps the comment that keeps an empty catch block off no-empty's report", () => {
+    const source = "try {\n  run();\n} catch {\n  // ignore\n}\n// gone\n";
+    const result = removeComments(source);
+
+    expect(result.code).toBe("try {\n  run();\n} catch {\n  // ignore\n}\n");
+    expect(result.kept.map((comment) => comment.directive)).toEqual(["empty-block"]);
+    expect(removeComments(source, { removeDirectives: true }).code).toBe("try {\n  run();\n} catch {\n}\n");
+  });
+
+  it("keeps the comments of empty function bodies, static blocks and switches", () => {
+    const source = [
+      "const noop = () => {",
+      "  /* noop */",
+      "};",
+      "class C {",
+      "  static {",
+      "    // nothing to set up",
+      "  }",
+      "}",
+      "switch (kind) {",
+      "  // no kinds yet",
+      "}",
+      "",
+    ].join("\n");
+
+    expect(removeComments(source).changed).toBe(false);
+  });
+
+  it("removes the comments of blocks that hold code as usual", () => {
+    const source = "if (a) {\n  // gone\n  run();\n}\n";
+
+    expect(removeComments(source).code).toBe("if (a) {\n  run();\n}\n");
+  });
+
+  it("tells the comment of an empty function body from one in a body that holds code", () => {
+    const source = "function f() {\n  // gone\n  return;\n}\nfunction g() {\n  // kept\n}\n";
+    const result = removeComments(source);
+
+    expect(result.code).toBe("function f() {\n  return;\n}\nfunction g() {\n  // kept\n}\n");
+    expect(scanComments(result.code).map((comment) => comment.directive)).toEqual(["empty-block"]);
+  });
+});
