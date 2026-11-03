@@ -101,6 +101,19 @@ const JSX_PRAGMAS: ReadonlyMap<string, string> = new Map(
 // typescript-strict-plugin's two pragmas; the capture is the `-ignore` suffix.
 const tsStrictName = (match: RegExpExecArray): string => (match[1] === undefined ? "@ts-strict" : "@ts-strict-ignore");
 
+/**
+ * The name of a coverage hint, from the tool and the mode its rule captures
+ * (one pair per alternative): `<tool>-ignore-<mode>`, except that Node's
+ * `ignore next` keeps the plain `node:coverage-ignore`, as the line-counted
+ * pragma it is to Node, and its `disable`/`enable` go without `ignore`.
+ */
+function coverageName(match: RegExpExecArray): string {
+  const [tool, mode] = match.slice(1).filter((group) => group !== undefined) as [string, string];
+  if (tool !== "node:coverage") return `${tool}-ignore-${mode}`;
+  if (mode.endsWith("next")) return "node:coverage-ignore";
+  return mode === "disable" || mode === "enable" ? `node:coverage-${mode}` : `node:coverage-ignore-${mode}`;
+}
+
 const RULES: DirectiveRule[] = [
   // ESLint and oxlint. ESLint takes the label from the trimmed comment value
   // (`[a-z]+(?:-[a-z]+)*` followed by whitespace or the end) and honours only
@@ -296,34 +309,59 @@ const RULES: DirectiveRule[] = [
     blockOnly: true,
     name: "beautify",
   },
-  // Coverage tools. The mode is part of the name so that consumers can tell
-  // next-statement pragmas (`next`, `if`, ...) from file/range ones (`file`,
-  // `start`, `stop`). The c8 CLI (v8-to-istanbul) and Node core only parse
-  // block comments, but istanbul-lib-instrument and Vitest's v8 provider
-  // (ast-v8-to-istanbul) honour line comments too, so no rule is block-only.
-  { pattern: /^istanbul\s+ignore\s+([a-z]+)/, name: (match) => `istanbul-ignore-${match[1]}` },
-  { pattern: /^istanbul\s+ignore\b/, name: "istanbul-ignore" },
-  { pattern: /^c8\s+ignore\s+([a-z]+)/, name: (match) => `c8-ignore-${match[1]}` },
-  { pattern: /^c8\s+ignore\b/, name: "c8-ignore" },
-  { pattern: /^v8\s+ignore\s+([a-z]+)/, name: (match) => `v8-ignore-${match[1]}` },
-  { pattern: /^v8\s+ignore\b/, name: "v8-ignore" },
-  // Node core reads `node:coverage` with `ignore next [N]`, `disable` and
-  // `enable`; Vitest's v8 provider also takes its `ignore` with `start`/`stop`
-  // as a range, which gets a range name like the other tools'
-  // (`node:coverage-ignore` stays the counted next-line pragma). Source text
-  // must never spell a range pragma out: the v8 provider finds one on any line
-  // of this file too, and would drop the rest of it from coverage.
+  // Coverage hints, named for the tool and the mode (see coverageName) so
+  // that consumers can tell the next-node hints (`next`, `if`, `else`) from
+  // the file and range ones. Each coverage tool reads them its own way, and
+  // a comment counts when one of them reads it. Comments in this file must
+  // never open with a hint, nor spell a range hint out on any line: Vitest's
+  // v8 provider would read them here too and change this file's coverage.
+  //
+  // ast-v8-to-istanbul (Vitest's v8 provider) cuts `/**` or `/*`, then a
+  // `//`, off the comment and wants the tool, `ignore` and a mode at the
+  // start of what is left, with any whitespace between, line breaks
+  // included; a JSDoc star in front of the hint on a later line defeats it.
   {
-    pattern: /^node:coverage\s+(?:ignore\s+(start|stop)(?=\W|$)|(disable|enable|ignore)\b)/,
-    name: (match) =>
-      match[1] === undefined ? `node:coverage-${match[2] as string}` : `node:coverage-ignore-${match[1]}`,
+    pattern: /^\/(?:\/|\*\*?(?:\/\/)?)\s*(istanbul|[cv]8|node:coverage)\s+ignore\s+(if|else|next|file)(?=\W|$)/,
+    rawText: true,
+    name: coverageName,
   },
-  // ast-v8-to-istanbul finds `ignore start`/`stop` ranges with a plain text
-  // search over every line, so those count after any other text as well.
+  // istanbul-lib-instrument (nyc, babel-plugin-istanbul, Vitest's istanbul
+  // provider) matches the comment value the same way but cuts no JSDoc star;
+  // its swc port, swc-plugin-coverage-instrument, takes Rust's whitespace,
+  // U+0085 included.
   {
-    pattern: /(istanbul|[cv]8|node:coverage)\s+ignore\s+(start|stop)(?=\W|$)/,
-    name: (match) => `${match[1] as string}-ignore-${match[2] as string}`,
-    anyLine: true,
+    pattern: /^[\s\u0085]*(istanbul)[\s\u0085]+ignore[\s\u0085]+(if|else|next|file)(?=\W|$)/,
+    value: true,
+    name: coverageName,
+  },
+  // monocart-coverage-reports trims the value and wants `v8 ignore` or
+  // `c8 ignore`, one space between, then a mode as the prefix of what
+  // follows past any whitespace, so `nextLine` is `next` and `stopwatch` a
+  // range hint; after `node:coverage`, `disable`, `enable` or `ignore next`.
+  {
+    pattern: /^\/[/*]\s*(?:([cv]8) ignore\s*(next|start|stop)|(node:coverage)\s*(disable|enable|ignore next))/,
+    rawText: true,
+    name: coverageName,
+  },
+  // c8 (v8-to-istanbul) and Node's test runner search every line for the
+  // block comment with single spaces in it, so it counts inside another
+  // comment too: `foo(); // see /* c8 ... */` exempts the call's line.
+  {
+    pattern:
+      /\/\* (?:([cv]8|node:coverage) ignore (next)|([cv]8) ignore (start|stop)|(node:coverage) (disable|enable))/,
+    rawText: true,
+    name: coverageName,
+  },
+  // ast-v8-to-istanbul and Vitest's istanbul provider find the ranges with a
+  // text search over every line, after any other text, and split the lines
+  // at `\n` alone, so a lone CR or U+2028 can stand between the words. The
+  // istanbul provider wants no boundary after the mode: `startup` opens a
+  // range to it.
+  {
+    pattern:
+      /(?:(istanbul)(?:[^\S\r\n]|\r(?!\n))+ignore(?:[^\S\r\n]|\r(?!\n))+(start|stop)|([cv]8|node:coverage)(?:[^\S\r\n]|\r(?!\n))+ignore(?:[^\S\r\n]|\r(?!\n))+(start|stop)(?=\W|$))/,
+    rawText: true,
+    name: coverageName,
   },
   // type-coverage: substring match in any comment. There is no ignore-file
   // comment — file-level ignores are a CLI option only.
@@ -485,17 +523,23 @@ const RULES: DirectiveRule[] = [
   },
   // Test runners. Jest reads these from the file's leading docblock, but
   // Vitest (which also honours the @jest- spellings) matches the pragma with
-  // a bare regex over the whole file, so any comment kind and position can be
-  // active; both regexes require a value after the tag.
+  // a bare regex over the whole file (detectCodeBlock in its
+  // test-helpers.ts), so any comment kind and position can be active, and the
+  // whitespace after the tag runs onto later lines of a block comment, which
+  // may hold the value on a line of its own. The environment is `[\w-]+` up
+  // to a word boundary, so it holds a word character; the options are
+  // whatever follows on that line, parsed as JSON. A JSDoc star there fails
+  // the whole run, and a bare `/* …-options */` counts too: only the first
+  // match is read, so it hides any later options.
   {
-    pattern: /@((?:jest|vitest)-environment)\s+[\w-]/,
+    pattern: /@((?:jest|vitest)-environment)\s+[\w-]*\w/,
+    rawText: true,
     name: (match) => `@${match[1]}`,
-    anyLine: true,
   },
   {
-    pattern: /@((?:jest|vitest)-environment-options)\s+\S/,
+    pattern: /@((?:jest|vitest)-environment-options)\s+./,
+    rawText: true,
     name: (match) => `@${match[1]}`,
-    anyLine: true,
   },
   // Jest itself reads the two @jest- pragmas from the docblock opening the
   // file, through jest-docblock (`docblock.parse(docblock.extract(source))`
@@ -516,6 +560,11 @@ const RULES: DirectiveRule[] = [
   // whole file, so the tag has to follow a `//` or a `*` — any of the
   // comment's — with only whitespace between.
   { pattern: /(?:\/\/|\*)\s*@module-tag\s+[\w/-]*\w/, rawText: true, name: "@module-tag" },
+  // Vitest runs a file that its `includeSource` globs match as a test file
+  // when the text holds `import.meta.vitest` anywhere, comments included
+  // (isInSourceTestCode in its globProjectFiles.ts): deleting the only
+  // mention drops the file, and the tests it registers, from the run.
+  { pattern: /import\.meta\.vitest/, rawText: true, name: "import.meta.vitest" },
   // SonarQube/SonarCloud (SonarJS): the comment value, minus ONE leading `*`,
   // trimmed, has to START with NOSONAR, case-insensitively; any suffix keeps
   // it active. A star-prefixed line inside a block comment does not count.

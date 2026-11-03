@@ -1231,3 +1231,50 @@ describe("removeComments in files that hold no code", () => {
     expect(removeComments("/// note\nexport const x = 1;\n").code).toBe("export const x = 1;\n");
   });
 });
+
+// Verified against Vitest 5.1's v8 and istanbul providers (ast-v8-to-istanbul
+// 1.0.7, @vitest/istanbul-lib-instrument 2.1.0), c8 and monocart-coverage-reports.
+describe("removeComments around the coverage hints Vitest's providers read", () => {
+  it("keeps the comments between a next-node hint and its node, which leave ast-v8-to-istanbul's hint without a target", () => {
+    const sameLine = "/* v8 ignore next */ /* see #12 */ export function f() {}\n";
+    const trailing = "/* v8 ignore next */ // why\nb();\n";
+    const below = "/* istanbul ignore if */\n\n// rare, see #12\nif (x) {\n  f();\n}\n";
+
+    expect(removeComments(sameLine).code).toBe(sameLine);
+    expect(removeComments(trailing).code).toBe(trailing);
+    expect(removeComments(below).kept.map((comment) => comment.text)).toEqual([
+      "/* istanbul ignore if */",
+      "// rare, see #12",
+    ]);
+  });
+
+  it("still removes the comments past the start of the node, and those after a hint no code follows", () => {
+    const inside = "/* c8 ignore else */\nif (x) {\n  f(); // gone\n} else {\n  g();\n}\n";
+
+    expect(removeComments(inside).code).toBe("/* c8 ignore else */\nif (x) {\n  f();\n} else {\n  g();\n}\n");
+    expect(removeComments("f();\n/* v8 ignore next */\n\n// gone\n").code).toBe("f();\n/* v8 ignore next */\n\n");
+  });
+
+  it("does not shield the gap after a file hint, which applies wherever it stands", () => {
+    expect(removeComments("/* v8 ignore file */\n\n// gone\nf();\n").code).toBe("/* v8 ignore file */\n\nf();\n");
+  });
+
+  it("shields one line below a counted istanbul hint, which only istanbul and ast-v8-to-istanbul read", () => {
+    expect(removeComments("/* istanbul ignore next 2 */\nf();\n// gone\ng();\n").code).toBe(
+      "/* istanbul ignore next 2 */\nf();\ng();\n",
+    );
+  });
+
+  it("counts the lines monocart reads from digits glued to `next`", () => {
+    const source = "// v8 ignore next3\nf();\n// kept\ng();\n// gone\nh();\n";
+
+    expect(removeComments(source).code).toBe("// v8 ignore next3\nf();\n// kept\ng();\nh();\n");
+  });
+
+  it("keeps a comment mentioning import.meta.vitest, which makes Vitest run an includeSource file", () => {
+    const inSource = ["import", "meta", "vitest"].join(".");
+    const source = `// tests run through ${inSource}\nexport const a = 1;\n`;
+
+    expect(removeComments(source).kept.map((comment) => comment.directive)).toEqual([inSource]);
+  });
+});

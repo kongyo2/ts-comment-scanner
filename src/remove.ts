@@ -507,8 +507,9 @@ interface RemovalUnit extends Range {
  * reach further get more: below a tsc suppression the first line each
  * compiler cannot step over stays, oxlint's line-feed rows add the lines they
  * run over, between a directive that only counts as the last comment before
- * its target (`@deno-types`, ...) and that target every comment stays, and a
- * JSX comment container right after a directive in a container
+ * its target (`@deno-types`, ...) or a coverage hint that ast-v8-to-istanbul
+ * only applies to the node right after it and that target every comment
+ * stays, and a JSX comment container right after a directive in a container
  * (`{/* prettier-ignore *​/}`, which applies to the next sibling) stays too.
  *
  * The line checks work on whole lines, not single comments: a line holding
@@ -569,13 +570,14 @@ function shieldNextLineDirectives(
         }
         added = true;
       }
-      if (LAST_COMMENT_DIRECTIVES.has(directive)) {
+      const lastComment = LAST_COMMENT_DIRECTIVES.has(directive);
+      if (lastComment || NEXT_TOKEN_DIRECTIVES.has(directive)) {
         const codeStart = codeStartAfter(source, comment.end, context.skippable);
         if (codeStart > comment.end && codeStart < source.length) {
           shieldedGaps.push([comment.end, codeStart]);
           added = true;
         }
-        continue;
+        if (lastComment) continue;
       }
       if (TSC_SUPPRESSIONS.has(directive)) {
         for (const line of firstBlockingLines(source, comment, lineOffsets, context.skippable)) {
@@ -915,9 +917,32 @@ const LAST_COMMENT_DIRECTIVES = new Set([
   "no-default",
 ]);
 
+// The coverage hints ast-v8-to-istanbul, Vitest's v8 provider, applies to the
+// node that starts at the very token after them: with another comment in
+// between, the hint has no target, and deleting that comment would bring it
+// into effect. The gap up to the code is shielded like the one above, on top
+// of the lines below the hint, which c8, Node and monocart count.
+const NEXT_TOKEN_DIRECTIVES = new Set([
+  "istanbul-ignore-next",
+  "istanbul-ignore-if",
+  "istanbul-ignore-else",
+  "c8-ignore-next",
+  "c8-ignore-if",
+  "c8-ignore-else",
+  "v8-ignore-next",
+  "v8-ignore-if",
+  "v8-ignore-else",
+  "node:coverage-ignore",
+  "node:coverage-ignore-if",
+  "node:coverage-ignore-else",
+]);
+
 // Directives that target the line or node directly below them. File- and
-// range-scoped pragmas (`c8 ignore start`, `istanbul ignore file`, ...) are
+// range-scoped pragmas (`istanbul-ignore-file`, `c8-ignore-start`, ...) are
 // absent: they do not target the following line, so they never shield it.
+// They go by their names here: Vitest's v8 provider reads a range hint
+// spelled out on any line of this file, and would drop the rest of the file
+// from this project's coverage.
 const NEXT_LINE_DIRECTIVES = new Set([
   "@ts-ignore",
   "@ts-expect-error",
@@ -929,19 +954,18 @@ const NEXT_LINE_DIRECTIVES = new Set([
   "oxfmt-ignore",
   "dprint-ignore",
   "rome-ignore",
-  "istanbul-ignore",
   "istanbul-ignore-next",
   "istanbul-ignore-if",
   "istanbul-ignore-else",
-  "c8-ignore",
   "c8-ignore-next",
   "c8-ignore-if",
   "c8-ignore-else",
-  "v8-ignore",
   "v8-ignore-next",
   "v8-ignore-if",
   "v8-ignore-else",
   "node:coverage-ignore",
+  "node:coverage-ignore-if",
+  "node:coverage-ignore-else",
   // Directives that hang off the node or line directly below them: a
   // whole-line comment between them and their target would change what
   // they apply to, so the line below stays shielded.
@@ -972,17 +996,24 @@ function isNextLineDirective(name: string): boolean {
   return name.endsWith("-next-line") || NEXT_LINE_DIRECTIVES.has(name);
 }
 
-// The coverage pragmas that actually parse a line count after `ignore next`
-// (c8 / v8-to-istanbul, Vitest's ast-v8-to-istanbul, and Node's test-runner
-// coverage). Everything else — `@ts-expect-error`, `eslint-disable-next-line`
-// and friends — covers exactly one line, no matter what prose like
-// "we ignore next 3 legacy calls" appears in the reason text.
-const COUNTED_NEXT_LINE = new Set(["istanbul-ignore-next", "c8-ignore-next", "v8-ignore-next", "node:coverage-ignore"]);
+// The coverage pragmas a line count after `ignore next` applies to: c8
+// (v8-to-istanbul), Node's test-runner coverage and monocart-coverage-reports
+// count lines. istanbul and ast-v8-to-istanbul, Vitest's providers, apply the
+// hint to the next node whatever count follows, so `istanbul ignore next 3`
+// covers one line. Everything else — `@ts-expect-error`,
+// `eslint-disable-next-line` and friends — covers exactly one line too, no
+// matter what prose like "we ignore next 3 legacy calls" appears in the
+// reason text.
+const COUNTED_NEXT_LINE = new Set(["c8-ignore-next", "v8-ignore-next", "node:coverage-ignore"]);
 
-/** Number of following lines a next-line pragma covers (`c8 ignore next 3` → 3). */
+/**
+ * Number of following lines a next-line pragma covers (`c8 ignore next 3` →
+ * 3). monocart reads the count past any whitespace or none, and c8 and
+ * monocart stop at the last digit, so `next3` and `next 3x` count 3 as well.
+ */
 function shieldedLineCount(comment: Comment): number {
   if (comment.directive === undefined || !COUNTED_NEXT_LINE.has(comment.directive)) return 1;
-  const match = /\bignore\s+next\s+(\d+)\b/.exec(comment.text);
+  const match = /\bignore\s*next\s*(\d+)/.exec(comment.text);
   return match ? Math.max(1, Number(match[1])) : 1;
 }
 
