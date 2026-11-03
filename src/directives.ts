@@ -431,14 +431,32 @@ const RULES: DirectiveRule[] = [
   },
   // Bundlers. webpack's gate regex requires the colon to follow the key
   // immediately and evaluates the body as an object literal, which JSDoc
-  // stars break. Turbopack reads the whole trimmed comment as one `key:
-  // value` pair instead — blanks before the colon allowed — and honours
-  // webpackIgnore and webpackExports as well as its own keys.
+  // stars break. Turbopack reads the whole comment as one `key: value` pair
+  // instead, split at its first colon and trimmed of Rust's whitespace,
+  // which takes in U+0085 — so blanks and line breaks may stand before the
+  // colon — and honours webpackIgnore and webpackExports as well as its own
+  // keys.
   { pattern: /^webpack[A-Z][A-Za-z]+:/, name: "webpack-magic-comment", keepStars: true },
   {
-    pattern: /^(?:turbopack[A-Z][A-Za-z]+|webpack(?:Ignore|Exports))\s*:/,
+    pattern: /^[\s\u0085]*(?:turbopack[A-Z][A-Za-z]+|webpack(?:Ignore|Exports))[\s\u0085]*:/,
+    value: true,
     name: "turbopack-magic-comment",
-    keepStars: true,
+  },
+  // Rspack reads block comments only, and has found the keys three ways. 1.x
+  // pulls `webpack<Name>: value` pairs out of the text wherever they stand —
+  // glued to other words, behind prose or JSDoc stars — with any whitespace
+  // before the colon, U+0085 included. 2.0 parses the whole comment as an
+  // object literal, so a key may be quoted. Since 2.1 the `rspack` prefix
+  // works too (`rspackChunkName`, `rspackIgnore`), and the text is parsed
+  // from the first key, quoted or not, that no word character (Rust's
+  // Unicode `\w`) precedes. The value is not checked: Rspack 2 leaves a
+  // `new URL()` alone when its ignore key holds anything but a boolean.
+  {
+    pattern:
+      /webpack[A-Z][A-Za-z]+[\s\u0085]*:|(?<![\p{Alphabetic}\p{M}\p{Nd}\p{Pc}\p{Join_Control}])(?:rspack[A-Z][A-Za-z]+|(["'])(?:webpack|rspack)[A-Z][A-Za-z]+\1)[\s\u0085]*:/u,
+    rawText: true,
+    blockOnly: true,
+    name: "rspack-magic-comment",
   },
   // Vite tests the source of an `import()` call (or of a `new URL()` or
   // worker argument) against /\/\*\s*@vite-ignore\s*\*\// (hasViteIgnoreRE

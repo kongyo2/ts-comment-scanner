@@ -1375,3 +1375,23 @@ describe("removeComments between groups of imports", () => {
     expect(removeComments(source, { removeDirectives: true }).code).toBe(source);
   });
 });
+
+// Checked against the real Rspack 1.7.12, 2.0.8 and 2.3.1: 1.16.0's removal
+// renamed the chunks these comments name and bundled the URL the ignore key
+// leaves alone.
+describe("removeComments around the magic comments Rspack reads", () => {
+  it("keeps the rspack-prefixed ones and the webpack keys Rspack finds past other text", () => {
+    const source = [
+      'import(/* rspackChunkName: "settings" */ /* lazy */ "./settings");',
+      'new URL(/* rspackIgnore: true */ "./logo.svg", import.meta.url);',
+      'import(/* load later; webpackChunkName: "chart" */ "./chart");',
+      'import(/* "webpackChunkName": "table" */ "./table");',
+      "",
+    ].join("\n");
+
+    const result = removeComments(source);
+
+    expect(result.code).toBe(source.replace(" /* lazy */", ""));
+    expect(result.kept.map((comment) => comment.directive)).toEqual(Array(4).fill("rspack-magic-comment"));
+  });
+});

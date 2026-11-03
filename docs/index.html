@@ -6,7 +6,7 @@
     <title>ts-comment-scanner — TypeScript のコメントを検出・集計し、安全に削除する CLI</title>
     <meta
       name="description"
-      content="コーディングエージェントが焼き込む“経緯コメント”を TypeScript の AST で安全に掃除する CLI。91 種のディレクティブを保持し、--diff でエージェントが触ったファイルだけを対象にできます。/ A CLI that detects, reports and safely removes comments across a TypeScript project."
+      content="コーディングエージェントが焼き込む“経緯コメント”を TypeScript の AST で安全に掃除する CLI。92 種のディレクティブを保持し、--diff でエージェントが触ったファイルだけを対象にできます。/ A CLI that detects, reports and safely removes comments across a TypeScript project."
     />
     <link rel="canonical" href="https://kongyo2.github.io/ts-comment-scanner/" />
     <link rel="icon" type="image/svg+xml" href="./assets/logo.svg" />
@@ -65,12 +65,12 @@
           <p class="lede">
             <span class="ja">
               コーディングエージェントが焼き込む“開発の経緯”コメントを、TypeScript の AST で検出して安全に削除する
-              CLI。ビルドを支える 91 種類のディレクティブは残したまま、
+              CLI。ビルドを支える 92 種類のディレクティブは残したまま、
               <code>--diff</code> でエージェントが触ったファイルだけを掃除します。
             </span>
             <span class="en">
               A CLI that detects and safely removes the narration comments coding agents bake into TypeScript — via the
-              AST. It keeps all 91 directive kinds your build depends on, and
+              AST. It keeps all 92 directive kinds your build depends on, and
               <code>--diff</code> scopes the sweep to the files the agent just touched.
             </span>
           </p>
@@ -225,14 +225,14 @@
             </p>
           </div>
           <div class="feature">
-            <span class="flag-chip">91 rules</span>
+            <span class="flag-chip">92 rules</span>
             <h3><span class="ja">ディレクティブを知っている</span><span class="en">Knows the directives</span></h3>
             <p>
               <span class="ja"
-                >@ts-expect-error から webpackChunkName: まで、消すと挙動が変わるコメントを 91 本のルールで判定。</span
+                >@ts-expect-error から webpackChunkName: まで、消すと挙動が変わるコメントを 92 本のルールで判定。</span
               >
               <span class="en"
-                >From @ts-expect-error to webpackChunkName:, 91 rules identify the comments whose removal would change
+                >From @ts-expect-error to webpackChunkName:, 92 rules identify the comments whose removal would change
                 behaviour.</span
               >
             </p>
@@ -458,11 +458,11 @@
         </div>
         <p class="proof-line">
           <span class="ja"
-            >// この挙動は <strong>1017 本のテスト</strong>と <strong>100% カバレッジ</strong>(statements / branches /
+            >// この挙動は <strong>1024 本のテスト</strong>と <strong>100% カバレッジ</strong>(statements / branches /
             functions / lines)で固定しています</span
           >
           <span class="en"
-            >// pinned by <strong>1017 tests</strong> at <strong>100% coverage</strong> — statements, branches,
+            >// pinned by <strong>1024 tests</strong> at <strong>100% coverage</strong> — statements, branches,
             functions and lines</span
           >
         </p>
@@ -471,7 +471,7 @@
       <!-- ====================================================== directives -->
       <section id="directives">
         <p class="sec-eyebrow">
-          <span class="ja">// 91 のディレクティブ</span><span class="en">// the 91 directives</span>
+          <span class="ja">// 92 のディレクティブ</span><span class="en">// the 92 directives</span>
         </p>
         <h2>
           <span class="ja">消すとビルドが壊れるコメントを、知っている</span>
@@ -525,19 +525,21 @@
             ><span class="chip">codespell:ignore</span><span class="chip">noinspection</span
             ><span class="chip">&lt;editor-fold&gt;</span><span class="chip">ReSharper disable</span
             ><span class="chip">#region</span><span class="chip">@deno-types=</span
-            ><span class="chip">language=SQL</span>
+            ><span class="chip">language=SQL</span><span class="chip">rspackChunkName:</span>
           </div>
         </div>
         <ul class="parser-notes">
           <li>
-            <span class="rule-name">webpackChunkName:</span>
+            <span class="rule-name">rspackChunkName:</span>
             <span class="ja"
-              >/** 始まりの docblock では判定しない — webpack
-              はコメント本体をオブジェクトリテラルとして評価するため、JSDoc の * が壊すから。</span
+              >ブロックコメントの途中にあっても有効 — Rspack 1.x と 2.1 以降は文章や JSDoc の *
+              の後ろにあるキーも拾うため、webpack では無効な /** webpackChunkName: … */
+              もディレクティブとして保持。rspackChunkName のような rspack 接頭辞のキーは 2.1 から。</span
             >
             <span class="en"
-              >Not detected in /** docblocks — webpack evaluates the comment body as an object literal, and JSDoc stars
-              break it.</span
+              >Live anywhere in a block comment — Rspack 1.x and 2.1+ pick the key out past prose or a JSDoc star, so
+              /** webpackChunkName: … */, void to webpack, is kept as a directive. Keys with the rspack prefix work
+              since 2.1.</span
             >
           </li>
           <li>
