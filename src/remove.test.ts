@@ -1379,6 +1379,122 @@ describe("removeComments between groups of imports", () => {
   });
 });
 
+// Checked against the real eslint-plugin-import 2.32.0, eslint-plugin-import-x
+// 4.17.1, eslint-plugin-import-lite 0.6.0 and oxlint 1.91.0: 1.19.0's removal
+// put the code right below the import, which their newline-after-import
+// reported as missing its empty line.
+describe("removeComments between the imports and the code after them", () => {
+  const a = 'import { a } from "./a";';
+
+  it("removes the comment line right below the imports, leaving an empty line in its place", () => {
+    const source = [
+      'import { readFile } from "node:fs/promises";',
+      'import { parse } from "./parse.js";',
+      "// read the config the way the CLI does, per the review",
+      "export const load = (path: string) => parse(readFile(path)); // gone",
+      "",
+    ].join("\n");
+    const result = removeComments(source);
+
+    expect(result.code).toBe(
+      source.replace("// read the config the way the CLI does, per the review\n", "\n").replace(" // gone", ""),
+    );
+    expect(result.removed).toHaveLength(2);
+    expect(result.kept).toEqual([]);
+  });
+
+  it("adds no empty line where a blank line stays", () => {
+    expect(removeComments(`${a}\n\n// note\nf(a);\n`).code).toBe(`${a}\n\nf(a);\n`);
+    expect(removeComments(`${a}\n// note\n\nf(a);\n`).code).toBe(`${a}\n\nf(a);\n`);
+  });
+
+  it("leaves one empty line for all the comments after the import", () => {
+    for (const between of ["\n// one\n// two\n", "\n/* one */ /* two */\n", " // trailing\n// note\n"]) {
+      expect(removeComments(`${a}${between}f(a);\n`).code).toBe(`${a}\n\nf(a);\n`);
+    }
+  });
+
+  it("leaves an empty line in place of a multi-line comment whose own line breaks the rules count", () => {
+    expect(removeComments(`${a}\n/**\n * The parser.\n */ export const p = a;\n`).code).toBe(
+      `${a}\n\nexport const p = a;\n`,
+    );
+    expect(removeComments(`${a} /* note\n */\nf(a);\n`).code).toBe(`${a}\n\nf(a);\n`);
+  });
+
+  it("leaves an empty line after a require and an `import x = …`, and in front of a decorated class", () => {
+    expect(removeComments('const fs = require("node:fs");\n// note\nfs.readFileSync("a");\n').code).toBe(
+      'const fs = require("node:fs");\n\nfs.readFileSync("a");\n',
+    );
+    expect(removeComments('import fs = require("node:fs");\n// note\nfs.readFileSync("a");\n').code).toBe(
+      'import fs = require("node:fs");\n\nfs.readFileSync("a");\n',
+    );
+    expect(removeComments(`${a}\n// note\n@sealed\nexport class C {}\n`).code).toBe(
+      `${a}\n\n@sealed\nexport class C {}\n`,
+    );
+  });
+
+  it("measures a class from its first decorator, past an `export` in front of it", () => {
+    // `export` holds the decorator two lines down without the comment.
+    expect(removeComments(`${a}\n// gone\nexport\n@sealed class C {}\n`).code).toBe(
+      `${a}\nexport\n@sealed class C {}\n`,
+    );
+    expect(removeComments(`${a} export\n// note\n@sealed class C {}\n`).code).toBe(
+      `${a} export\n\n@sealed class C {}\n`,
+    );
+  });
+
+  it("leaves an empty line that only eslint-plugin-import's line breaks set apart, after a lone CR or U+2028", () => {
+    expect(removeComments(`${a}\r// note\rf(a);\r`).code).toBe(`${a}\r\n\nf(a);\r`);
+    expect(removeComments(`${a}\u2028// note\u2029f(a);\n`).code).toBe(`${a}\u2028\n\nf(a);\n`);
+  });
+
+  it("leaves an empty line after the imports of an ambient module or a namespace", () => {
+    expect(removeComments(`declare module "m" {\n  ${a}\n  // note\n  export const x: typeof a;\n}\n`).code).toBe(
+      `declare module "m" {\n  ${a}\n\n  export const x: typeof a;\n}\n`,
+    );
+    expect(removeComments("namespace N {\n  import n = M.n;\n  // note\n  export const y = n;\n}\n").code).toBe(
+      "namespace N {\n  import n = M.n;\n\n  export const y = n;\n}\n",
+    );
+  });
+
+  it("leaves an empty line in each gap where groups of imports and the code after them would touch", () => {
+    const b = 'import { b } from "./b";';
+
+    expect(removeComments(`${b}\n// local\n${a}\n// the code\nf(a, b);\n`).code).toBe(`${b}\n\n${a}\n\nf(a, b);\n`);
+  });
+
+  it("removes the comments after an `export import`, between imports and at the end of the file as before", () => {
+    expect(removeComments("export import n = N.m;\n// gone\nf(n);\n").code).toBe("export import n = N.m;\nf(n);\n");
+    expect(removeComments("import n = N.m;\n// gone\nimport o = N.o;\n\nf(n, o);\n").code).toBe(
+      "import n = N.m;\nimport o = N.o;\n\nf(n, o);\n",
+    );
+    expect(removeComments('const x = require("x");\n// gone\nconst y = require("y");\n\nf(x, y);\n').code).toBe(
+      'const x = require("x");\nconst y = require("y");\n\nf(x, y);\n',
+    );
+    expect(removeComments(`${a}\n// gone\n`).code).toBe(`${a}\n`);
+  });
+
+  it("lets a removal go that gives a linter an empty line it did not find before", () => {
+    // The multi-line comment goes for a line feed, which oxlint counts where
+    // it counted none in the comment's lone CR.
+    const source = `${a} /* note\r more */ /*! legal */\nf(a);\n`;
+
+    expect(removeComments(source).code).toBe(`${a}\n /*! legal */\nf(a);\n`);
+  });
+
+  it("lets a kept directive hold the line, so no empty line goes in", () => {
+    const source = `${a}\n// note\n// eslint-disable-next-line no-console\nconsole.log(a);\n`;
+
+    expect(removeComments(source).code).toBe(`${a}\n// eslint-disable-next-line no-console\nconsole.log(a);\n`);
+  });
+
+  it("leaves an empty line in place of a directive holding the line when directives go", () => {
+    const source = `${a}\n// eslint-disable-next-line no-console\nconsole.log(a);\n`;
+
+    expect(removeComments(source, { removeDirectives: true }).code).toBe(`${a}\n\nconsole.log(a);\n`);
+  });
+});
+
 // Checked against the real Rspack 1.7.12, 2.0.8 and 2.3.1: 1.16.0's removal
 // renamed the chunks these comments name and bundled the URL the ignore key
 // leaves alone.

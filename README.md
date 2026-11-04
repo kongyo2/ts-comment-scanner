@@ -129,7 +129,7 @@ ts-comment-scanner --remove --diff main...HEAD
 
 削除した後のコードは次のように整えます。
 
-- コメントだけの行は行ごと、行末のコメントは手前の空白ごと削除します。空行に挟まれたコメント行を消したときは空行を 1 行にまとめ、ファイルやブロックの先頭・末尾でコメントとコードを隔てていた空行は一緒に削除します。import・export のグループの間にあるコメントを消すと間の空行がなくなるときは、空行に置き換えて organizeImports や dprint のグループを保ちます。
+- コメントだけの行は行ごと、行末のコメントは手前の空白ごと削除します。空行に挟まれたコメント行を消したときは空行を 1 行にまとめ、ファイルやブロックの先頭・末尾でコメントとコードを隔てていた空行は一緒に削除します。import・export のグループの間や、import・require とその次の文の間にあるコメントを消すと間の空行がなくなるときは、空行に置き換えて organizeImports や dprint のグループと、newline-after-import が求める空行を保ちます。
 - トークンがつながる位置には空白を入れます(`a/* x */b` → `a b`)。コードに挟まれた、改行を含むブロックコメントは改行に置き換え、自動セミコロン挿入による文の区切りを保ちます。
 - JSX の `{/* … */}` は波かっこごと削除します。波かっこを外すと表示されるテキストが変わる位置では、`{" "}` か `{}` を残します。
 
@@ -374,7 +374,7 @@ Files deleted within the range are skipped, and renamed files are handled at the
 
 The code left behind is tidied up:
 
-- Comment-only lines go entirely, and trailing comments go with the whitespace before them. Removing a comment line between two blank lines leaves one blank line, and at the start or end of the file or of a block, the blank lines that only separated the comment from the code go with it. Where removing the comments between two groups of imports or exports would leave no empty line between them, an empty line takes their place, so organizeImports and dprint keep the groups apart.
+- Comment-only lines go entirely, and trailing comments go with the whitespace before them. Removing a comment line between two blank lines leaves one blank line, and at the start or end of the file or of a block, the blank lines that only separated the comment from the code go with it. Where removing the comments between two groups of imports or exports, or between an import or require and the statement after it, would leave no empty line between them, an empty line takes their place, so organizeImports and dprint keep the groups apart and newline-after-import keeps its empty line.
 - A space is inserted where tokens would otherwise join (`a/* x */b` → `a b`). A multi-line block comment with code on both sides is replaced with a line break, so automatic semicolon insertion still splits the statements the same way.
 - A JSX `{/* … */}` goes with its braces. Where dropping the braces would change the rendered text, `{" "}` or `{}` takes their place.
 
