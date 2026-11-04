@@ -8,8 +8,7 @@ import { analyzeSource } from "./scanner.js";
 // the typescript@6 package the scanner parses with, which tsserver, VS Code
 // and prettier-plugin-organize-imports run — so the mirror cannot drift from
 // tsc 6 silently. tsc 7's port groups imports the same way and ends runs of
-// exports at more statements, never at fewer; dprint and Biome are checked by
-// hand.
+// exports at more statements, never at fewer; dprint is checked by hand.
 
 const FILE = "/main.ts";
 
@@ -60,8 +59,12 @@ function modules(text: string): string[] {
   return names;
 }
 
-const splitsForTypeScript = (source: string): boolean =>
-  analyzeSource(source).importGroups.some((gap) => gap.splits.includes("typescript"));
+const splitsFor =
+  (sorter: "typescript" | "dprint") =>
+  (source: string): boolean =>
+    analyzeSource(source).importGroups.some((gap) => gap.splits.includes(sorter));
+const splitsForTypeScript = splitsFor("typescript");
+const splitsForDprint = splitsFor("dprint");
 
 // Two declarations of `./b` and `./a` with a gap between them: organizeImports
 // leaves `./b` first only where it sorts the two in groups of their own.
@@ -106,12 +109,16 @@ const gaps = [
 ];
 
 describe.each(layouts)("import groups of %s, against tsc 6's organizeImports", (_, layout) => {
-  it.each(gaps)("agrees on where a group starts, and keeps it there, across %j", (gap) => {
+  it.each(gaps)("agrees on where a group starts, and never joins two after removal, across %j", (gap) => {
     const source = layout(gap);
     const organized = modules(organize(source));
+    const result = removeComments(source);
 
     expect(splitsForTypeScript(source)).toBe(organized[0] === "./b");
-    expect(modules(organize(removeComments(source).code))).toEqual(organized);
+    expect(result.kept).toEqual([]);
+    // The empty line that takes the comments' place starts a group for both
+    // sorters, so where only dprint started one, organizeImports does too.
+    expect(modules(organize(result.code))[0] === "./b").toBe(splitsForTypeScript(source) || splitsForDprint(source));
   });
 });
 
@@ -142,7 +149,10 @@ describe("comment removal in files organizeImports sorts, against tsc 6", () => 
       "",
     ].join("\n"),
     'import { z } from "z";\r\n// local\r\nimport { a } from "./a";\r\nexport const az = [a, z];\r\n',
-  ])("keeps what organizeImports does to %j", (source) => {
-    expect(modules(organize(removeComments(source).code))).toEqual(modules(organize(source)));
+  ])("removes every comment and keeps what organizeImports does to %j", (source) => {
+    const result = removeComments(source);
+
+    expect(result.kept).toEqual([]);
+    expect(modules(organize(result.code))).toEqual(modules(organize(source)));
   });
 });
