@@ -20,7 +20,11 @@ export interface SourceAnalysis {
   jsx: JsxLayout;
   /** What stands in front of each comment carrying an ast-grep suppression (see precedingNode). */
   preceding: ReadonlyMap<Comment, PrecedingNode>;
-  /** The gaps in front of the import and export declarations the import sorters group (see importGroupGaps). */
+  /**
+   * The gaps in front of the import and export declarations the import
+   * sorters group, and in front of the statements after the imports, where
+   * the linters want an empty line (see importGroupGaps).
+   */
   importGroups: ImportGroupGap[];
 }
 

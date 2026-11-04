@@ -80,7 +80,10 @@ export interface RemoveResult {
  *   lines already against that edge stay.
  * - Imports and exports stay in the groups TypeScript's organizeImports and
  *   dprint sort apart: where deleting the comments between two groups would
- *   leave no empty line between them, an empty line takes their place.
+ *   leave no empty line between them, an empty line takes their place. So it
+ *   does where deleting the comments after an import or a require would
+ *   bring the code after it up to the line below, keeping the empty line the
+ *   newline-after-import rules of eslint-plugin-import and oxlint want.
  * - A leading byte-order mark is preserved. Reported positions index into the
  *   `source` string exactly as `scanComments(source)` reports them (a BOM
  *   counts as its first character).
@@ -122,7 +125,8 @@ export function removeComments(source: string, options: RemoveOptions = {}): Rem
   // without the collapse before any removal is given up.
   let tidyBlankLines = true;
   // The removals that leave an empty line in their place, holding two groups
-  // of imports or exports apart (see gapHolders).
+  // of imports or exports apart, or the code after the imports two lines
+  // below them (see gapHolders).
   const holders = new Set<Comment>();
 
   for (;;) {
@@ -144,8 +148,9 @@ export function removeComments(source: string, options: RemoveOptions = {}): Rem
     if (search.adjust(changedSegments(analysis.jsx.segments, output.jsx.segments))) continue;
 
     // Where the output joins two groups of imports or exports that a sorter
-    // sorts apart, a removal between them leaves an empty line in its place,
-    // and the attempt is repeated.
+    // sorts apart, or loses the empty line a linter finds after the imports,
+    // a removal in the gap leaves an empty line in its place, and the attempt
+    // is repeated.
     const holding = gapHolders(source, analysis.importGroups, output.importGroups, removed, holders);
     if (holding.length > 0) {
       for (const holder of holding) holders.add(holder);
@@ -255,14 +260,16 @@ function closestRemovalBefore(removals: readonly Comment[], comment: Comment): C
 /**
  * The removals that are to leave an empty line in their place (see
  * Edit.blankLine), so that the output starts every group of imports and
- * exports the source starts. The gaps belong to the same declarations in
- * both texts, since removing comments leaves the statements as they are.
- * Where the output joins two groups at a gap, the deleted comments took the
- * gap's line breaks along, and the last of them that held any — one spanning
- * lines, or one on a line below the token the gap follows — leaves an empty
- * line, which starts a group for both sorters. A group the output starts
- * where the source starts none can stand, for both parts of a sorted group
- * are sorted.
+ * exports the source starts, and keeps every empty line the linters find
+ * after its imports. The gaps belong to the same statements in both texts,
+ * since removing comments leaves the statements as they are. Where the
+ * output joins two groups at a gap, or a linter no longer finds its empty
+ * line there, the deleted comments took the gap's line breaks along, and the
+ * last of them that held any — one spanning lines, or one on a line below
+ * the token the gap follows — leaves an empty line, which starts a group for
+ * both sorters and is the empty line both linters want. A group the output
+ * starts where the source starts none can stand, for both parts of a sorted
+ * group are sorted, and so can an empty line only the output has.
  */
 function gapHolders(
   source: string,
@@ -274,10 +281,13 @@ function gapHolders(
   if (before.length !== after.length) throw unexpectedResult();
   const found: Comment[] = [];
   for (const [index, gap] of before.entries()) {
-    const splits = (after[index] as ImportGroupGap).splits;
-    if (gap.splits.every((sorter) => splits.includes(sorter))) continue;
+    const { splits, spaced } = after[index] as ImportGroupGap;
+    const intact =
+      gap.splits.every((sorter) => splits.includes(sorter)) && gap.spaced.every((linter) => spaced.includes(linter));
+    if (intact) continue;
     const inGap = removals.filter((comment) => comment.start >= gap.start && comment.end <= gap.end);
-    // An empty line in the gap already starts a group for both sorters.
+    // An empty line in the gap already starts a group for both sorters and
+    // is the empty line both linters want.
     if (inGap.some((comment) => holders.has(comment))) throw unexpectedResult();
     const holder = inGap.findLast(
       (comment) => comment.endLine > comment.line || LINE_TERMINATOR.test(source.slice(gap.start, comment.start)),
@@ -405,8 +415,8 @@ function skippableRanges(
 
 /**
  * The edits that remove the comments: one per comment, or one per container
- * going with its braces. A holder of a gap between groups of imports leaves an
- * empty line in its place.
+ * going with its braces. A holder of a gap around the imports (see
+ * gapHolders) leaves an empty line in its place.
  */
 function removalEdits(
   removed: readonly Comment[],
