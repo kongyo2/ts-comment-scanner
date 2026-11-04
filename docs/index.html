@@ -397,22 +397,21 @@
           <div class="guard">
             <div class="danger">
               <span class="ja"
-                ><code>import</code> の間のコメント行を消すと、organizeImports・dprint・Biome
+                ><code>import</code> の間のコメント行を消すと、organizeImports や dprint
                 が別々に並べ替えていたグループが 1 つになる</span
               >
               <span class="en"
-                >deleting a comment line between imports merges the groups organizeImports, dprint and Biome sort
+                >deleting a comment line between imports merges the groups organizeImports and dprint sort
                 separately</span
               >
             </div>
             <div class="fix">
               <span class="ja"
-                >グループを隔てているコメントは削除しない(空行が残って隔てるときは削除。Biome
-                は空行の上のコメントで分け、空行だけでは分けないので、そのコメントは残す)</span
+                >コメントは削除し、グループを隔てる空行に置き換える(空行が残って隔てるときはそのまま)</span
               >
               <span class="en"
-                >the comment holding the groups apart is kept, unless a blank line still does — Biome splits at a
-                comment above a blank line, never at the blank line alone, so that comment stays</span
+                >the comment goes and an empty line takes its place, unless a blank line still holds the groups
+                apart</span
               >
             </div>
           </div>
@@ -464,11 +463,11 @@
         </div>
         <p class="proof-line">
           <span class="ja"
-            >// この挙動は <strong>1038 本のテスト</strong>と <strong>100% カバレッジ</strong>(statements / branches /
+            >// この挙動は <strong>1024 本のテスト</strong>と <strong>100% カバレッジ</strong>(statements / branches /
             functions / lines)で固定しています</span
           >
           <span class="en"
-            >// pinned by <strong>1038 tests</strong> at <strong>100% coverage</strong> — statements, branches,
+            >// pinned by <strong>1024 tests</strong> at <strong>100% coverage</strong> — statements, branches,
             functions and lines</span
           >
         </p>

@@ -11,6 +11,13 @@ export interface Edit extends Range {
    * those neighbours are JSX text and tags, not tokens.
    */
   jsx?: boolean;
+  /**
+   * An empty line takes the deleted range's place, instead of its lines
+   * vanishing or joining what surrounds them: what precedes the range on its
+   * first line ends there, and what follows it on its last line starts below
+   * the empty line.
+   */
+  blankLine?: boolean;
 }
 
 const isHorizontalSpace = (char: string | undefined): boolean => char === " " || char === "\t";
@@ -123,6 +130,23 @@ export function applyEdits(source: string, edits: readonly Edit[]): string {
     const lineEnd = lineBreak === null ? source.length : lineBreak.index + lineBreak[0].length;
     const restContent = source.slice(cursor, contentEnd);
     const deleted = source.slice(edit.start, edit.end);
+
+    if (edit.blankLine === true) {
+      // Both line breaks around the empty line end in a line feed, which tsc
+      // and dprint alike count, so after a lone CR, U+2028 or U+2029 one more
+      // goes in.
+      const lineFeed = source.slice(edit.start, lineEnd).includes("\r\n") ? "\r\n" : "\n";
+      if (lineIsBlank) {
+        dropCurrentLine(false);
+        if (lastChar !== "\n") push(lineFeed);
+      } else {
+        trimLineEnd();
+        push(lineFeed);
+      }
+      push(lineFeed);
+      cursor = isBlank(restContent) ? lineEnd : skipSpaces(cursor);
+      continue;
+    }
 
     if (lineIsBlank && isBlank(restContent)) {
       // The range occupied whole line(s): drop them entirely, with the

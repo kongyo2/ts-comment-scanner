@@ -103,23 +103,24 @@ describe("removeComments import group verification", () => {
     );
   });
 
-  it("throws when the output joins Biome's chunks where no removal is a detached comment of the gap", () => {
-    // The legal comment that starts the chunk stays, which no removal touches.
+  it("throws when the output still joins import groups with an empty line in place of the comment", () => {
+    // An empty line starts a group for both sorters, so only a tampered
+    // re-scan reads the gap joined once the comment leaves one behind.
     vi.mocked(analyzeSource)
       .mockImplementationOnce(realAnalyze)
-      .mockImplementationOnce(
+      .mockImplementation(
         tampered((analysis) => ({
           ...analysis,
-          importGroups: analysis.importGroups.map((gap) => ({
-            ...gap,
-            splits: gap.splits.filter((sorter) => sorter !== "biome"),
-          })),
+          importGroups: analysis.importGroups.map((gap) => ({ ...gap, splits: [] })),
         })),
       );
-
-    expect(() =>
-      removeComments('import { b } from "./b";\n/*! kept */\n\nimport { a } from "./a";\n// gone\n'),
-    ).toThrow(/unexpected result/);
+    try {
+      expect(() => removeComments('import { b } from "./b";\n// note\nimport { a } from "./a";\n')).toThrow(
+        /unexpected result/,
+      );
+    } finally {
+      vi.mocked(analyzeSource).mockImplementation(realAnalyze);
+    }
   });
 });
 
