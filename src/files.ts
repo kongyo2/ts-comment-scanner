@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { Dirent, Stats } from "node:fs";
 import { chmod, open, readFile, readdir, realpath, rename, rm, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import picomatch from "picomatch";
@@ -54,16 +53,15 @@ export async function collectFiles(inputs: string[], options: CollectOptions = {
         throw new Error("empty path is not a valid input");
       }
       const input = normalize(rawInput);
-      const info = await statInput(input);
+      const info = await withFriendlyNotFound(input, () => stat(input));
       if (info.isDirectory()) {
         // Directory inputs are themselves subject to the ignored directory
         // names and the ignore patterns; only explicitly listed files bypass
         // them.
-        if (!ignoreDirs.has(foldPathCase(basename(input))) && !isIgnored(input, input, true)) {
-          await walk(input, { extensions, ignoreDirs, isIgnored, root: input, visited: new Set() }, remember);
-        }
+        const context: WalkContext = { extensions, ignoreDirs, isIgnored, root: input, visited: new Set() };
+        if (entersDirectory(context, input, basename(input))) await walk(input, context, remember);
       } else {
-        explicitFiles[index] = { path: input, real: await realpathInput(input) };
+        explicitFiles[index] = { path: input, real: await withFriendlyNotFound(input, () => realpath(input)) };
       }
     }),
   );
@@ -88,16 +86,7 @@ export function foldPathCase(path: string): string {
   return process.platform === "win32" ? path.toLowerCase() : path;
 }
 
-async function statInput(input: string): Promise<Stats> {
-  return withFriendlyNotFound(input, () => stat(input));
-}
-
-/** Real path of an explicit input, with the same friendly error statInput gives. */
-async function realpathInput(input: string): Promise<string> {
-  return withFriendlyNotFound(input, () => realpath(input));
-}
-
-/** Runs the lookup, reporting a missing path under the name the user spelled it with. */
+/** Runs the lookup of an explicit input, reporting a missing path under the name the user spelled it with. */
 async function withFriendlyNotFound<T>(input: string, lookup: () => Promise<T>): Promise<T> {
   try {
     return await lookup();
@@ -110,14 +99,20 @@ async function withFriendlyNotFound<T>(input: string, lookup: () => Promise<T>):
 }
 
 /**
- * True for the errors a walk may step over: entries that vanished mid-walk
- * (ENOENT, ENOTDIR after a directory was replaced) and symlinks that do not
- * resolve (broken targets, ELOOP cycles). Anything else — permissions, I/O
- * failures — propagates, so a partial scan cannot masquerade as a clean one.
+ * Runs a lookup of the walk, undefined when it fails with an error the walk
+ * may step over: entries that vanished mid-walk (ENOENT, ENOTDIR after a
+ * directory was replaced) and symlinks that do not resolve (broken targets,
+ * ELOOP cycles). Anything else — permissions, I/O failures — propagates, so
+ * a partial scan cannot masquerade as a clean one.
  */
-function isSkippableWalkError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
-  return code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP";
+async function unlessSkippable<T>(lookup: () => Promise<T>): Promise<T | undefined> {
+  try {
+    return await lookup();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP") return undefined;
+    throw error;
+  }
 }
 
 interface WalkContext {
@@ -130,28 +125,23 @@ interface WalkContext {
   visited: Set<string>;
 }
 
+/** Whether a walk enters the directory: neither its name nor an ignore pattern excludes it. */
+function entersDirectory(context: WalkContext, path: string, name: string): boolean {
+  return !context.ignoreDirs.has(foldPathCase(name)) && !context.isIgnored(path, context.root, true);
+}
+
 async function walk(
   dir: string,
   context: WalkContext,
   remember: (path: string, realPath: string) => void,
 ): Promise<void> {
-  let real: string;
-  try {
-    real = await realpath(dir);
-  } catch (error) {
-    if (isSkippableWalkError(error)) return; // the directory vanished mid-walk
-    throw error;
-  }
+  const real = await unlessSkippable(() => realpath(dir));
+  if (real === undefined) return; // the directory vanished mid-walk
   if (context.visited.has(real)) return;
   context.visited.add(real);
 
-  let entries: Dirent[];
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch (error) {
-    if (isSkippableWalkError(error)) return; // the directory vanished after it resolved
-    throw error;
-  }
+  const entries = await unlessSkippable(() => readdir(dir, { withFileTypes: true }));
+  if (entries === undefined) return; // the directory vanished after it resolved
 
   await Promise.all(
     entries.map(async (entry) => {
@@ -161,19 +151,13 @@ async function walk(
       if (entry.isSymbolicLink()) {
         // Symlinks are followed, matching how explicitly listed inputs are
         // stat()ed; the visited set above keeps cycles from recursing forever.
-        try {
-          const info = await stat(full);
-          isDirectory = info.isDirectory();
-          isFile = info.isFile();
-        } catch (error) {
-          if (isSkippableWalkError(error)) return; // broken symlink
-          throw error;
-        }
+        const info = await unlessSkippable(() => stat(full));
+        if (info === undefined) return; // broken symlink
+        isDirectory = info.isDirectory();
+        isFile = info.isFile();
       }
       if (isDirectory) {
-        if (!context.ignoreDirs.has(foldPathCase(entry.name)) && !context.isIgnored(full, context.root, true)) {
-          await walk(full, context, remember);
-        }
+        if (entersDirectory(context, full, entry.name)) await walk(full, context, remember);
       } else if (
         isFile &&
         hasExtension(entry.name, context.extensions) &&
@@ -181,13 +165,8 @@ async function walk(
       ) {
         // Remembered under its real path, so several symlinks to one target
         // (or a link plus the target itself) count — and get rewritten — once.
-        let realFile: string;
-        try {
-          realFile = await realpath(full);
-        } catch (error) {
-          if (isSkippableWalkError(error)) return; // the file vanished mid-walk
-          throw error;
-        }
+        const realFile = await unlessSkippable(() => realpath(full));
+        if (realFile === undefined) return; // the file vanished mid-walk
         remember(full, realFile);
       }
     }),
@@ -385,14 +364,19 @@ export async function scanFile(file: string): Promise<FileScanResult> {
 }
 
 export async function scanPaths(inputs: string[], options: CollectOptions = {}): Promise<FileScanResult[]> {
-  const files = await collectFiles(inputs, options);
-  return mapLimit(files, FILE_CONCURRENCY, scanFile);
+  return mapFiles(await collectFiles(inputs, options), scanFile);
 }
 
-export const FILE_CONCURRENCY = 16;
+/** How many files are read and processed at once. */
+const FILE_CONCURRENCY = 16;
+
+/** Maps the files through `fn`, FILE_CONCURRENCY at a time, with the results in the files' order. */
+export function mapFiles<R>(files: readonly string[], fn: (file: string) => Promise<R>): Promise<R[]> {
+  return mapLimit(files, FILE_CONCURRENCY, fn);
+}
 
 /** Concurrency-limited map that keeps input order and starts work as slots free up. */
-export async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
   let nextIndex = 0;
 

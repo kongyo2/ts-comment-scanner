@@ -117,15 +117,22 @@ const STARTS_GROUP: Readonly<
   Record<ImportSorter, (source: string, gap: Range, comments: readonly Range[]) => boolean>
 > = {
   typescript: (source, gap, comments) => newLineTrivia(source, gap, comments) >= 2,
-  dprint: (source, gap) => source.slice(gap.start, gap.end).split("\n").length > 2,
+  dprint: holdsTwoBreaks("\n"),
 };
 
-// Whether the linter finds its empty line in the gap: two line breaks or
-// more, those inside comments included.
+// Whether the linter finds its empty line in the gap.
 const FINDS_EMPTY_LINE: Readonly<Record<ImportLinter, (source: string, gap: Range) => boolean>> = {
-  eslint: (source, gap) => source.slice(gap.start, gap.end).split(LINE_BREAK).length > 2,
-  oxlint: (source, gap) => source.slice(gap.start, gap.end).split("\n").length > 2,
+  eslint: holdsTwoBreaks(LINE_BREAK),
+  oxlint: holdsTwoBreaks("\n"),
 };
+
+/**
+ * Whether a gap holds two line breaks or more, those inside comments
+ * included, to a tool that counts what `lineBreak` matches as one.
+ */
+function holdsTwoBreaks(lineBreak: string | RegExp): (source: string, gap: Range) => boolean {
+  return (source, gap) => source.slice(gap.start, gap.end).split(lineBreak).length > 2;
+}
 
 /**
  * Where the gap in front of the statement ends: at its first token, or at the
