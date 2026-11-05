@@ -138,7 +138,7 @@ export function removeComments(source: string, options: RemoveOptions = {}): Rem
     }
 
     const removing = new Set(removed);
-    search.track(new Set(containers.filter((container) => container.comments.every((c) => removing.has(c)))));
+    search.track(new Set(containers.filter((container) => emptiedBy(container, removing))));
     const edits = removalEdits(removed, containerOf, search.droppable, holders);
     const deletions = edits.filter((edit) => edit.replacement === undefined);
     const blankEdits = tidyBlankLines ? blankLineEdits(source, deletions, comments, shielding.lines, analysis.jsx) : [];
@@ -189,6 +189,16 @@ function unexpectedResult(): Error {
 }
 
 /**
+ * The items of the source's list and of the output's that correspond, in
+ * pairs; throws when the lists differ in length, since removing comments
+ * never adds or drops what they list.
+ */
+function corresponding<T>(before: readonly T[], after: readonly T[]): Array<[T, T]> {
+  if (before.length !== after.length) throw unexpectedResult();
+  return before.map((item, index) => [item, after[index] as T]);
+}
+
+/**
  * Compares the spliced output's comments against the comments meant to
  * survive, in document order (removal never reorders them). Throws when the
  * texts themselves differ (the output would be corrupted) and returns the
@@ -206,12 +216,7 @@ function firstChangedSurvivor(
   kept: Comment[],
   skipped: Comment[],
 ): Comment | undefined {
-  const expected = [...kept, ...skipped].sort(byStart);
-  if (actual.length !== expected.length) {
-    throw unexpectedResult();
-  }
-  for (const [index, comment] of expected.entries()) {
-    const survivor = actual[index] as Comment;
+  for (const [comment, survivor] of corresponding([...kept, ...skipped].sort(byStart), actual)) {
     if (survivor.text !== comment.text) {
       throw unexpectedResult();
     }
@@ -273,10 +278,8 @@ function gapHolders(
   removals: readonly Comment[],
   holders: ReadonlySet<Comment>,
 ): Comment[] {
-  if (before.length !== after.length) throw unexpectedResult();
   const found: Comment[] = [];
-  for (const [index, gap] of before.entries()) {
-    const { splits, spaced } = after[index] as ImportGroupGap;
+  for (const [gap, { splits, spaced }] of corresponding(before, after)) {
     const intact =
       gap.splits.every((sorter) => splits.includes(sorter)) && gap.spaced.every((linter) => spaced.includes(linter));
     if (intact) continue;
@@ -362,14 +365,12 @@ function attachContainers(source: string, layouts: readonly JsxContainer[], comm
  */
 function spaceRange(source: string, container: Range): Range | undefined {
   if (LINE_TERMINATOR.test(source.slice(container.start, container.end))) return undefined;
-  let lineStart = container.start;
-  while (lineStart > 0 && !LINE_TERMINATOR.test(source[lineStart - 1] as string)) lineStart -= 1;
   let before = container.start;
   while (isHorizontalSpace(source[before - 1])) before -= 1;
   let after = container.end;
   while (isHorizontalSpace(source[after])) after += 1;
 
-  if (!isBlank(source.slice(lineStart, container.start))) {
+  if (!opensItsLine(source, container)) {
     return before < container.start ? { start: before, end: container.end } : undefined;
   }
   const codeAfter = after < source.length && !LINE_TERMINATOR.test(source[after] as string);
@@ -388,16 +389,31 @@ function skippableRanges(
   containerOf: ReadonlyMap<Comment, Container>,
   candidates: ReadonlySet<Comment>,
 ): Range[] {
-  const ranges: Range[] = [];
+  return mergeContainers(comments, containerOf, (container) => emptiedBy(container, candidates));
+}
+
+/**
+ * The comments, in document order, with those of every container that
+ * `merges` accepts merged into the container itself: one unit spanning its
+ * braces in place of the comments inside them.
+ */
+function mergeContainers(
+  comments: readonly Comment[],
+  containerOf: ReadonlyMap<Comment, Container>,
+  merges: (container: Container) => boolean,
+): Array<Comment | Container> {
+  const units: Array<Comment | Container> = [];
   for (const comment of comments) {
     const container = containerOf.get(comment);
-    if (container === undefined || !container.comments.every((inside) => candidates.has(inside))) {
-      ranges.push(comment);
-    } else if (ranges[ranges.length - 1] !== container) {
-      ranges.push(container);
-    }
+    if (container === undefined || !merges(container)) units.push(comment);
+    else if (units.at(-1) !== container) units.push(container);
   }
-  return ranges;
+  return units;
+}
+
+/** Whether the container's comments are all among the given ones, so that its braces can go with them. */
+function emptiedBy(container: Container, comments: ReadonlySet<Comment>): boolean {
+  return container.comments.every((comment) => comments.has(comment));
 }
 
 /**
@@ -411,28 +427,24 @@ function removalEdits(
   droppable: ReadonlySet<Container>,
   holders: ReadonlySet<Comment>,
 ): Edit[] {
-  const edits: Edit[] = [];
-  for (const comment of removed) {
-    const container = containerOf.get(comment);
-    if (container === undefined || !droppable.has(container) || container.mode === "keep") {
-      edits.push({ start: comment.start, end: comment.end, blankLine: holders.has(comment) });
-    } else if (comment === container.comments[0]) {
-      edits.push(
-        container.mode === "drop"
-          ? { start: container.start, end: container.end, jsx: true }
-          : { ...(container.spaceRange as Range), replacement: '{" "}' },
-      );
-    }
-  }
-  return edits;
+  const units = mergeContainers(
+    removed,
+    containerOf,
+    (container) => droppable.has(container) && container.mode !== "keep",
+  );
+  return units.map((unit): Edit => {
+    if (!("comments" in unit)) return { start: unit.start, end: unit.end, blankLine: holders.has(unit) };
+    return unit.mode === "drop"
+      ? { start: unit.start, end: unit.end, jsx: true }
+      : { ...(unit.spaceRange as Range), replacement: '{" "}' };
+  });
 }
 
 /** Indexes of the JSX stretches whose rendering differs; throws when the structure itself does. */
 function changedSegments(before: readonly string[], after: readonly string[]): Set<number> {
-  if (before.length !== after.length) throw unexpectedResult();
   const changed = new Set<number>();
-  for (const [index, rendering] of before.entries()) {
-    if (rendering !== after[index]) changed.add(index);
+  for (const [index, [rendering, now]] of corresponding(before, after).entries()) {
+    if (rendering !== now) changed.add(index);
   }
   return changed;
 }
@@ -547,7 +559,6 @@ interface Shielding {
  */
 interface RemovalUnit extends Range {
   comments: readonly Comment[];
-  container?: Container;
 }
 
 /**
@@ -594,6 +605,12 @@ function shieldNextLineDirectives(
   let rows: number[] | undefined;
   /** The (1-based) line holding the offset. */
   const lineOf = (offset: number): number => lineIndexAt(lineOffsets, offset) + 1;
+  /** The given (1-based) line, which the shields only name when the source has it, and the units on it. */
+  const unitsOnLine = (line: number): LineUnits => {
+    const start = lineOffsets[line - 1] as number;
+    const end = lineOffsets[line] ?? source.length;
+    return { start, end, units: currentUnits().filter((unit) => unit.start < end && unit.end > start) };
+  };
 
   const collectShields = (): boolean => {
     let added = false;
@@ -618,9 +635,7 @@ function shieldNextLineDirectives(
         );
         astGrepReaches.push(reach);
         if (reach.nextRow !== undefined && reach.nextRow.end > reach.nextRow.start) {
-          for (let line = lineOf(reach.nextRow.start); line <= lineOf(reach.nextRow.end - 1); line += 1) {
-            shieldedLines.add(line);
-          }
+          shieldLines(lineOf(reach.nextRow.start), lineOf(reach.nextRow.end - 1));
         }
         added = true;
       }
@@ -669,48 +684,30 @@ function shieldNextLineDirectives(
     return added;
   };
 
+  /** Takes the comments, all still being removed, out of the removal and keeps them. */
   const protect = (group: readonly Comment[]): void => {
+    if (group.length === 0) return;
     const grouped = new Set(group);
     stillRemoved = stillRemoved.filter((comment) => !grouped.has(comment));
     kept.push(...group);
     units = undefined;
   };
 
+  /** Protects what the shields collected so far hold in place; true when that kept anything. */
   const protectShields = (): boolean => {
-    let changed = false;
+    const removing = stillRemoved.length;
     for (const line of shieldedLines) {
-      const group =
-        vanishingLineGroup(source, line, lineOffsets, currentUnits()) ??
-        joiningLineGroup(source, line, lineOffsets, currentUnits());
-      if (group === undefined) continue;
-      protect(group);
-      changed = true;
+      // A shielded line may neither vanish nor be joined to another.
+      protect(vanishingLineGroup(source, unitsOnLine(line)));
+      protect(joiningLineGroup(source, unitsOnLine(line)));
     }
-    for (const line of blockingLines) {
-      const group = lineOpeningGroup(source, line, lineOffsets, currentUnits());
-      if (group === undefined) continue;
-      protect(group);
-      changed = true;
-    }
+    for (const line of blockingLines) protect(lineOpeningGroup(source, unitsOnLine(line)));
     for (const [from, to] of shieldedGaps) {
-      const group = stillRemoved.filter((comment) => comment.start >= from && comment.start < to);
-      if (group.length === 0) continue;
-      protect(group);
-      changed = true;
+      protect(stillRemoved.filter((comment) => comment.start >= from && comment.start < to));
     }
-    for (const target of siblingTargets) {
-      const group = stillRemoved.filter((comment) => target.comments.includes(comment));
-      if (group.length === 0) continue;
-      protect(group);
-      changed = true;
-    }
-    for (const reach of astGrepReaches) {
-      const group = currentUnits().filter((unit) => reach.holds(unit));
-      if (group.length === 0) continue;
-      protect(group.flatMap((unit) => unit.comments));
-      changed = true;
-    }
-    return changed;
+    for (const target of siblingTargets) protect(stillRemoved.filter((comment) => target.comments.includes(comment)));
+    for (const reach of astGrepReaches) protect(commentsOf(currentUnits().filter((unit) => reach.holds(unit))));
+    return stillRemoved.length < removing;
   };
 
   collectShields();
@@ -730,20 +727,17 @@ function shieldNextLineDirectives(
  */
 function removalUnits(removals: readonly Comment[], containerOf: ReadonlyMap<Comment, Container>): RemovalUnit[] {
   const removing = new Set(removals);
-  const units: RemovalUnit[] = [];
-  for (const comment of removals) {
-    const container = containerOf.get(comment);
-    if (
-      container === undefined ||
-      container.mode !== "drop" ||
-      !container.comments.every((inside) => removing.has(inside))
-    ) {
-      units.push({ start: comment.start, end: comment.end, comments: [comment] });
-    } else if (units[units.length - 1]?.container !== container) {
-      units.push({ start: container.start, end: container.end, comments: container.comments, container });
-    }
-  }
-  return units;
+  const units = mergeContainers(
+    removals,
+    containerOf,
+    (container) => container.mode === "drop" && emptiedBy(container, removing),
+  );
+  return units.map((unit) => ("comments" in unit ? unit : { start: unit.start, end: unit.end, comments: [unit] }));
+}
+
+/** The comments the units delete. */
+function commentsOf(units: readonly RemovalUnit[]): Comment[] {
+  return units.flatMap((unit) => unit.comments);
 }
 
 /**
@@ -806,51 +800,36 @@ function firstBlockingLines(
   return found;
 }
 
+/** A line, from its start to the next line's (past its line break), with the removal units holding part of it. */
+interface LineUnits extends Range {
+  units: RemovalUnit[];
+}
+
 /**
  * The removals on the given line when one of them opens it (holds its first
  * non-whitespace character), so that deleting them would change how the
- * line starts. Returns undefined when something that survives opens the line
- * instead, or nothing on it is to be removed.
+ * line starts. None when something that survives opens the line instead, or
+ * nothing on it is to be removed.
  */
-function lineOpeningGroup(
-  source: string,
-  line: number,
-  lineOffsets: readonly number[],
-  units: readonly RemovalUnit[],
-): Comment[] | undefined {
-  // A blocking line always lies above the code line, so the next offset exists.
-  const lineStart = lineOffsets[line - 1] as number;
-  const lineEnd = lineOffsets[line] as number;
-  const group = units.filter((unit) => unit.start < lineEnd && unit.end > lineStart);
-  let first = lineStart;
-  while (first < lineEnd && isBlank(source[first] as string)) first += 1;
-  return group.some((unit) => unit.start <= first && first < unit.end)
-    ? group.flatMap((unit) => unit.comments)
-    : undefined;
+function lineOpeningGroup(source: string, line: LineUnits): Comment[] {
+  let first = line.start;
+  while (first < line.end && isBlank(source[first] as string)) first += 1;
+  return line.units.some((unit) => unit.start <= first && first < unit.end) ? commentsOf(line.units) : [];
 }
 
 /**
  * The removals that would make the given line disappear: every
  * non-whitespace character of the line lies inside one of them, so deleting
- * them deletes the physical line. Returns undefined when the line survives
- * (it holds code, a kept comment, or nothing to remove at all).
+ * them deletes the physical line. None when the line survives (it holds
+ * code, a kept comment, or nothing to remove at all).
  */
-function vanishingLineGroup(
-  source: string,
-  line: number,
-  lineOffsets: readonly number[],
-  units: readonly RemovalUnit[],
-): Comment[] | undefined {
-  // collectShields never shields a line beyond the last one, so the offset exists.
-  const lineStart = lineOffsets[line - 1] as number;
-  const lineEnd = lineOffsets[line] ?? source.length;
-  const group = units.filter((unit) => unit.start < lineEnd && unit.end > lineStart);
-  if (group.length === 0) return undefined;
-  for (let index = lineStart; index < lineEnd; index += 1) {
+function vanishingLineGroup(source: string, line: LineUnits): Comment[] {
+  if (line.units.length === 0) return [];
+  for (let index = line.start; index < line.end; index += 1) {
     if (isBlank(source[index] as string)) continue;
-    if (!group.some((unit) => unit.start <= index && index < unit.end)) return undefined;
+    if (!line.units.some((unit) => unit.start <= index && index < unit.end)) return [];
   }
-  return group.flatMap((unit) => unit.comments);
+  return commentsOf(line.units);
 }
 
 /**
@@ -863,23 +842,14 @@ function vanishingLineGroup(
  * the line would cover other code. (With only whitespace beyond, the lines
  * the comment held vanish, which vanishingLineGroup weighs.)
  */
-function joiningLineGroup(
-  source: string,
-  line: number,
-  lineOffsets: readonly number[],
-  units: readonly RemovalUnit[],
-): Comment[] | undefined {
-  const lineStart = lineOffsets[line - 1] as number;
-  const nextLineStart = lineOffsets[line];
-  const lineEnd = nextLineStart ?? source.length;
-  const group = units.filter(
-    (unit) =>
-      unit.start < lineEnd &&
-      unit.end > lineStart &&
-      ((nextLineStart !== undefined && unit.end > nextLineStart && !closesItsLine(source, unit)) ||
-        (unit.start < lineStart && !opensItsLine(source, unit))),
+function joiningLineGroup(source: string, line: LineUnits): Comment[] {
+  return commentsOf(
+    line.units.filter(
+      (unit) =>
+        (unit.end > line.end && !closesItsLine(source, unit)) ||
+        (unit.start < line.start && !opensItsLine(source, unit)),
+    ),
   );
-  return group.length === 0 ? undefined : group.flatMap((unit) => unit.comments);
 }
 
 // The directives oxlint reads on rows of its own (see oxlintReachLines).
@@ -1082,19 +1052,22 @@ function occupiesWholeLines(source: string, range: Range): boolean {
 
 /** True when nothing but whitespace follows the range on its last line. */
 function closesItsLine(source: string, range: Range): boolean {
-  for (let index = range.end; index < source.length; index += 1) {
-    const char = source[index] as string;
-    if (LINE_TERMINATOR.test(char)) break;
-    if (!isBlank(char)) return false;
-  }
-  return true;
+  return blankToLineEdge(source, range.end, 1);
 }
 
 /** True when nothing but whitespace precedes the range on its first line. */
 function opensItsLine(source: string, range: Range): boolean {
-  for (let index = range.start - 1; index >= 0; index -= 1) {
+  return blankToLineEdge(source, range.start - 1, -1);
+}
+
+/**
+ * True when nothing but whitespace lies from the offset on, in the direction
+ * of `step`, up to the line break or the edge of the source.
+ */
+function blankToLineEdge(source: string, from: number, step: 1 | -1): boolean {
+  for (let index = from; index >= 0 && index < source.length; index += step) {
     const char = source[index] as string;
-    if (LINE_TERMINATOR.test(char)) break;
+    if (LINE_TERMINATOR.test(char)) return true;
     if (!isBlank(char)) return false;
   }
   return true;
