@@ -1,9 +1,8 @@
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import { hasDirective, kindOf } from "../test/comments.js";
 import { detectDirective } from "./directives.js";
 import { removeComments } from "./remove.js";
-import { scanComments } from "./scanner.js";
-import type { CommentKind } from "./types.js";
 
 // The TypeScript rules in directives.ts mirror the compiler's own comment
 // handling (the scanner's comment-directive regexes, the pragma parser, the
@@ -27,11 +26,6 @@ function diagnosticCodes(fileName: string, text: string, options: ts.CompilerOpt
   const program = ts.createProgram([fileName], compilerOptions, host);
   return program.getSemanticDiagnostics(program.getSourceFile(fileName)).map((diagnostic) => diagnostic.code);
 }
-
-const kindOf = (comment: string): CommentKind => (comment.startsWith("//") ? "line" : "block");
-
-const hasDirective = (source: string, names: readonly string[]): boolean =>
-  scanComments(source).some((comment) => comment.directive !== undefined && names.includes(comment.directive));
 
 /** Whether tsc 6 suppresses the type error on the line below the comment. */
 const suppressesNextLine = (comment: string): boolean =>

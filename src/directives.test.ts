@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { kindOf } from "../test/comments.js";
 import {
   activePositionalDirectives,
   bunMarkerOffset,
@@ -367,8 +368,7 @@ describe("detectDirective", () => {
     ["// ROME_IGNORE lint: legacy casing", "rome-ignore"],
     ["/* rome-ignore parse: why */", "rome-ignore"],
   ])("detects Rome suppressions: %s", (text, expected) => {
-    const kind = text.startsWith("//") ? "line" : "block";
-    expect(detectDirective(kind, text)).toBe(expected);
+    expect(detectDirective(kindOf(text), text)).toBe(expected);
   });
 
   it("requires Rome's mandatory colon and known categories", () => {
@@ -482,8 +482,7 @@ describe("detectDirective", () => {
     ["//@__PURE__", "@__PURE__"],
     ["/* hello @__NOINLINE__ because reasons */", "@__NOINLINE__"],
   ])("detects terser annotations as substrings like terser: %s", (text, expected) => {
-    const kind = text.startsWith("//") ? "line" : "block";
-    expect(detectDirective(kind, text)).toBe(expected);
+    expect(detectDirective(kindOf(text), text)).toBe(expected);
   });
 
   it("keeps lowercase or single-underscore lookalikes of terser annotations ordinary", () => {
