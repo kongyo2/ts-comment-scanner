@@ -7,12 +7,10 @@ import {
   encodeFileText,
   foldPathCase,
   isJsxFile,
-  mapLimit,
+  mapFiles,
   readFileText,
   scanFile,
   writeFileAtomic,
-  FILE_CONCURRENCY,
-  type CollectOptions,
 } from "./files.js";
 import { changedFiles } from "./git.js";
 import { removeComments, type RemoveResult } from "./remove.js";
@@ -109,17 +107,12 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
       return 0;
     }
 
-    const collectOptions: CollectOptions = {
-      ignore: options.ignore,
-      ...(options.extensions === undefined ? {} : { extensions: options.extensions }),
-    };
-
+    const files = await collectTargets(options);
     if (options.remove) {
-      return await runRemove(options, collectOptions, io);
+      return await runRemove(files, options, io);
     }
 
-    const files = await collectTargets(options, collectOptions);
-    const results = filterDirectives(await mapLimit(files, FILE_CONCURRENCY, scanFile), options.directives);
+    const results = filterDirectives(await mapFiles(files, scanFile), options.directives);
     io.out(`${render(results, options.format)}\n`);
 
     const total = results.reduce((sum, result) => sum + result.comments.length, 0);
@@ -141,8 +134,11 @@ function errorMessage(error: unknown): string {
  * (not the collected files, which could sit in a nested repository), so
  * scanning another repository's checkout works from anywhere.
  */
-async function collectTargets(options: CliOptions, collectOptions: CollectOptions): Promise<string[]> {
-  const files = await collectFiles(options.paths, collectOptions);
+async function collectTargets(options: CliOptions): Promise<string[]> {
+  const files = await collectFiles(options.paths, {
+    ignore: options.ignore,
+    ...(options.extensions === undefined ? {} : { extensions: options.extensions }),
+  });
   if (options.diff === undefined) return files;
 
   const first = resolve(options.paths[0] as string);
@@ -222,10 +218,8 @@ interface FileRemoval extends Pick<RemoveResult, "removed" | "kept" | "skipped">
   file: string;
 }
 
-async function runRemove(options: CliOptions, collectOptions: CollectOptions, io: CliIO): Promise<number> {
-  const files = await collectTargets(options, collectOptions);
-
-  const outcomes = await mapLimit(files, FILE_CONCURRENCY, async (file) => {
+async function runRemove(files: readonly string[], options: CliOptions, io: CliIO): Promise<number> {
+  const outcomes = await mapFiles(files, async (file) => {
     try {
       const { text, encoding, bom, lossless } = await readFileText(file);
       const result = removeComments(text, {

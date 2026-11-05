@@ -1,8 +1,7 @@
 import * as prettier from "prettier";
 import { describe, expect, it } from "vitest";
+import { hasDirective, kindOf } from "../test/comments.js";
 import { detectDirective } from "./directives.js";
-import { scanComments } from "./scanner.js";
-import type { CommentKind } from "./types.js";
 
 // The prettier rules in directives.ts mirror prettier's own comment checks
 // (isPrettierIgnoreComment, the jest-docblock pragma parser, isTypeCastComment,
@@ -17,11 +16,6 @@ const MISFORMATTED = "const x = [ 1,2 ]\n";
 function format(source: string, options: prettier.Options = {}): Promise<string> {
   return prettier.format(source, { parser: "typescript", ...options });
 }
-
-const kindOf = (comment: string): CommentKind => (comment.startsWith("//") ? "line" : "block");
-
-const hasDirective = (source: string, names: readonly string[]): boolean =>
-  scanComments(source).some((comment) => comment.directive !== undefined && names.includes(comment.directive));
 
 /** Whether prettier leaves the misformatted statement below the comment alone. */
 async function ignoresNextNode(comment: string): Promise<boolean> {
@@ -45,17 +39,21 @@ async function keepsCastParentheses(comment: string): Promise<boolean> {
   return output.includes("(foo)");
 }
 
-/** Whether prettier formats the template literal after the comment as HTML. */
-async function formatsAsHtml(comment: string): Promise<boolean> {
-  const output = await format(`const t = ${comment} \`<div   class="a"></div>\`;\n`);
-  return output.includes('<div class="a"></div>');
+/**
+ * Whether prettier formats the template literal after the comment as an
+ * embedded language: `template` comes out as `formatted`.
+ */
+async function formatsEmbedded(comment: string, template: string, formatted: string): Promise<boolean> {
+  const output = await format(`const t = ${comment} \`${template}\`;\n`);
+  return output.includes(formatted);
 }
 
+/** Whether prettier formats the template literal after the comment as HTML. */
+const formatsAsHtml = (comment: string): Promise<boolean> =>
+  formatsEmbedded(comment, '<div   class="a"></div>', '<div class="a"></div>');
+
 /** Whether prettier formats the template literal after the comment as GraphQL. */
-async function formatsAsGraphql(comment: string): Promise<boolean> {
-  const output = await format(`const q = ${comment} \`query{a}\`;\n`);
-  return output.includes("query {");
-}
+const formatsAsGraphql = (comment: string): Promise<boolean> => formatsEmbedded(comment, "query{a}", "query {");
 
 /** Whether prettier's babel parser reads the file as Flow: a numeric object key then keeps its quotes. */
 async function parsesAsFlow(source: string): Promise<boolean> {

@@ -1,7 +1,9 @@
+import { firstIndexAtOrAfter } from "./ranges.js";
+
 /**
- * Line handling shared by the scanner's consumers. Everything here counts
- * lines the way the TypeScript scanner does: LF, CR, U+2028 and U+2029 each
- * end a line, and CRLF is a single break.
+ * Line handling shared by the scanner's consumers. Unless given another line
+ * break, everything here counts lines the way the TypeScript scanner does:
+ * LF, CR, U+2028 and U+2029 each end a line, and CRLF is a single break.
  */
 
 /** Matches one ECMAScript line terminator character. */
@@ -15,6 +17,11 @@ export function isBlank(text: string): boolean {
   return /^\s*$/.test(text);
 }
 
+/** True for a space or a tab, the blanks that hold the tokens on a line apart. */
+export function isHorizontalSpace(char: string | undefined): boolean {
+  return char === " " || char === "\t";
+}
+
 /** Splits on every line break, so exotic terminators never leak into single-line output. */
 export function splitLines(text: string): string[] {
   return text.split(LINE_BREAK);
@@ -26,18 +33,20 @@ export function lastLine(text: string): string {
   return lines[lines.length - 1] as string;
 }
 
-/** Start offset of every line, numbered the way the scanner numbers them (line 1 starts at index 0). */
-export function lineStartOffsets(source: string): number[] {
+/**
+ * Start offset of every line, numbered the way the scanner numbers them
+ * (line 1 starts at index 0) — or, given another `lineBreak`, the way that
+ * pattern breaks lines.
+ */
+export function lineStartOffsets(source: string, lineBreak: RegExp = LINE_BREAK): number[] {
   const starts = [0];
-  for (let index = 0; index < source.length; index += 1) {
-    const char = source[index] as string;
-    if (char === "\r") {
-      // A CRLF pair is one break: skip the LF so it does not open a second line.
-      if (source[index + 1] === "\n") index += 1;
-      starts.push(index + 1);
-    } else if (char === "\n" || char === "\u2028" || char === "\u2029") {
-      starts.push(index + 1);
-    }
+  for (const match of source.matchAll(new RegExp(lineBreak, "g"))) {
+    starts.push(match.index + match[0].length);
   }
   return starts;
+}
+
+/** Index of the line holding the offset, given every line's start offset (see lineStartOffsets). */
+export function lineIndexAt(lineStarts: readonly number[], offset: number): number {
+  return firstIndexAtOrAfter(lineStarts, offset + 1, (start) => start) - 1;
 }

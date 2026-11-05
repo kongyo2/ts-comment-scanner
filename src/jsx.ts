@@ -1,6 +1,6 @@
 import ts from "typescript";
 import { LINE_TERMINATOR, isBlank } from "./lines.js";
-import { firstIndexAtOrAfter, type Range } from "./ranges.js";
+import { byStart, rangesWithin, type Range } from "./ranges.js";
 
 /**
  * JSX layout for comment removal.
@@ -102,7 +102,7 @@ export function jsxLayout(
     segments.push(renderParts(parts));
   }
 
-  containers.sort((a, b) => a.start - b.start);
+  containers.sort(byStart);
   return { segments, containers, openingTagEnds, closingTagStarts };
 }
 
@@ -142,16 +142,15 @@ function commentOnlyContainer(
   // merge-conflict marker, which is no comment.
   const start = child.getStart(sourceFile);
   const end = child.end;
+  const inside = rangesWithin(comments, { start, end });
   let cursor = start + 1;
   let uncommented = "";
-  let index = firstIndexAtOrAfter(comments, cursor, (comment) => comment.start);
-  for (let comment = comments[index]; comment !== undefined && comment.end < end; comment = comments[index]) {
+  for (const comment of inside) {
     uncommented += source.slice(cursor, comment.start);
     cursor = comment.end;
-    index += 1;
   }
   uncommented += source.slice(cursor, end - 1);
-  return cursor > start + 1 && isBlank(uncommented)
+  return inside.length > 0 && isBlank(uncommented)
     ? { start, end, segment: -1, suspect: false, next: undefined }
     : undefined;
 }

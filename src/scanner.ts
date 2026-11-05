@@ -3,7 +3,7 @@ import { isFileWidePosition, type PrecedingNode } from "./astgrep.js";
 import { bunMarkerOffset, carriesAstGrepSuppression, detectDirective, type DirectivePlacement } from "./directives.js";
 import { importGroupGaps, type ImportGroupGap } from "./imports.js";
 import { jsxLayout, type JsxLayout } from "./jsx.js";
-import { firstIndexAtOrAfter, rangeAt, type Range } from "./ranges.js";
+import { byStart, firstIndexAtOrAfter, rangeAt, type Range } from "./ranges.js";
 import type { Comment, CommentKind } from "./types.js";
 
 export interface ScanOptions {
@@ -34,7 +34,7 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
   const scriptKind = jsx ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
   const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, scriptKind);
 
-  const jsxTextSpans: Array<[number, number]> = [];
+  const jsxTextSpans: Range[] = [];
   const jsxParents: Array<ts.JsxElement | ts.JsxFragment> = [];
   const ranges: ts.CommentRange[] = [];
   const seen = new Set<number>();
@@ -83,7 +83,7 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
     if (children.length === 0) {
       tokens.push(node);
       if (node.kind === ts.SyntaxKind.JsxText) {
-        jsxTextSpans.push([node.getFullStart(), node.getEnd()]);
+        jsxTextSpans.push({ start: node.getFullStart(), end: node.getEnd() });
       }
       collect(ts.getLeadingCommentRanges(source, node.getFullStart()));
       collect(ts.getTrailingCommentRanges(source, node.getEnd()));
@@ -94,27 +94,10 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
     }
   }
 
-  // JsxText spans never overlap, so a position is inside one exactly when it
-  // is inside the closest span starting at or before it — found by binary
-  // search, keeping comment-dense TSX files out of quadratic time.
-  jsxTextSpans.sort((a, b) => a[0] - b[0]);
-  const insideJsxText = (pos: number): boolean => {
-    let low = 0;
-    let high = jsxTextSpans.length - 1;
-    let candidate = -1;
-    while (low <= high) {
-      const middle = (low + high) >> 1;
-      if ((jsxTextSpans[middle] as [number, number])[0] <= pos) {
-        candidate = middle;
-        low = middle + 1;
-      } else {
-        high = middle - 1;
-      }
-    }
-    return candidate >= 0 && pos < (jsxTextSpans[candidate] as [number, number])[1];
-  };
-
-  const sorted = ranges.filter((range) => !insideJsxText(range.pos)).sort((a, b) => a.pos - b.pos);
+  // JsxText spans never overlap, so the one a position is inside is found by
+  // binary search, keeping comment-dense TSX files out of quadratic time.
+  jsxTextSpans.sort(byStart);
+  const sorted = ranges.filter((range) => rangeAt(jsxTextSpans, range.pos) === undefined).sort((a, b) => a.pos - b.pos);
 
   // Directive rules with positional requirements (header pragmas, prettier's
   // first-comment docblock, Bun's file-start marker) get the comment's actual
