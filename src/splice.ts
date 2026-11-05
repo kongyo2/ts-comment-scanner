@@ -1,4 +1,4 @@
-import { LINE_BREAK, LINE_TERMINATOR, isBlank, lineStartOffsets } from "./lines.js";
+import { LINE_BREAK, LINE_TERMINATOR, isBlank, isHorizontalSpace, lineStartOffsets } from "./lines.js";
 import { firstIndexAtOrAfter, rangeAt, type Range } from "./ranges.js";
 
 /** One change to the source: a range to delete (tidying its line) or to replace verbatim. */
@@ -19,8 +19,6 @@ export interface Edit extends Range {
    */
   blankLine?: boolean;
 }
-
-const isHorizontalSpace = (char: string | undefined): boolean => char === " " || char === "\t";
 
 // Brackets never merge with what follows them, nor punctuation with what
 // precedes it, so removing a comment between them needs no space to keep

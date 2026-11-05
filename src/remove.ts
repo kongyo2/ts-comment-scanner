@@ -8,8 +8,8 @@ import {
 } from "./directives.js";
 import type { ImportGroupGap } from "./imports.js";
 import type { JsxContainer } from "./jsx.js";
-import { LINE_TERMINATOR, isBlank, lineStartOffsets } from "./lines.js";
-import { firstIndexAtOrAfter, type Range } from "./ranges.js";
+import { LINE_TERMINATOR, isBlank, isHorizontalSpace, lineIndexAt, lineStartOffsets } from "./lines.js";
+import { byStart, firstIndexAtOrAfter, rangesWithin, type Range } from "./ranges.js";
 import { analyzeSource } from "./scanner.js";
 import { applyEdits, blankLineEdits, type Edit } from "./splice.js";
 import type { Comment } from "./types.js";
@@ -188,11 +188,6 @@ function unexpectedResult(): Error {
   return new Error("comment removal produced an unexpected result; refusing to continue");
 }
 
-/** Sort comparator for document order: ranges are ordered by where they start. */
-function byStart(a: Range, b: Range): number {
-  return a.start - b.start;
-}
-
 /**
  * Compares the spliced output's comments against the comments meant to
  * survive, in document order (removal never reorders them). Throws when the
@@ -342,19 +337,13 @@ interface Container extends Range {
 function attachContainers(source: string, layouts: readonly JsxContainer[], comments: readonly Comment[]): Container[] {
   const containers = new Map<JsxContainer, Container>();
   for (const layout of layouts) {
-    const inside: Comment[] = [];
-    let index = firstIndexAtOrAfter(comments, layout.start, (comment) => comment.start);
-    for (let comment = comments[index]; comment !== undefined && comment.end < layout.end; comment = comments[index]) {
-      inside.push(comment);
-      index += 1;
-    }
     containers.set(layout, {
       start: layout.start,
       end: layout.end,
       segment: layout.segment,
       suspect: layout.suspect,
       next: undefined,
-      comments: inside,
+      comments: rangesWithin(comments, layout),
       mode: "drop",
       spaceRange: spaceRange(source, layout),
     });
@@ -364,8 +353,6 @@ function attachContainers(source: string, layouts: readonly JsxContainer[], comm
   }
   return [...containers.values()];
 }
-
-const isHorizontalSpace = (char: string | undefined): boolean => char === " " || char === "\t";
 
 /**
  * The range `{" "}` would take the place of: a one-line container and the
@@ -606,7 +593,7 @@ function shieldNextLineDirectives(
   const currentUnits = (): RemovalUnit[] => (units ??= removalUnits(stillRemoved, context.containerOf));
   let rows: number[] | undefined;
   /** The (1-based) line holding the offset. */
-  const lineOf = (offset: number): number => firstIndexAtOrAfter(lineOffsets, offset + 1, (start) => start);
+  const lineOf = (offset: number): number => lineIndexAt(lineOffsets, offset) + 1;
 
   const collectShields = (): boolean => {
     let added = false;
@@ -806,7 +793,7 @@ function firstBlockingLines(
   // (`/* @ts-ignore */ foo();`) does not end the search.
   const codeStart = codeStartAfter(source, lineOffsets[comment.endLine] ?? source.length, ranges);
   if (codeStart >= source.length) return [];
-  const codeLine = firstIndexAtOrAfter(lineOffsets, codeStart + 1, (offset) => offset);
+  const codeLine = lineIndexAt(lineOffsets, codeStart) + 1;
   const found: number[] = [];
   for (const passable of TSC_PASSABLE_LINES) {
     for (let line = comment.endLine + 1; line < codeLine; line += 1) {
@@ -922,7 +909,7 @@ function oxlintReachLines(
   comment: Comment,
   directive: string,
 ): { from: number; to: number } | undefined {
-  const rowOf = (offset: number): number => firstIndexAtOrAfter(rows, offset + 1, (start) => start) - 1;
+  const rowOf = (offset: number): number => lineIndexAt(rows, offset);
   if (!directive.endsWith("-next-line")) {
     return { from: lineOf(rows[rowOf(comment.start)] as number), to: comment.line };
   }

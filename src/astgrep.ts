@@ -1,5 +1,5 @@
-import { LINE_TERMINATOR } from "./lines.js";
-import { firstIndexAtOrAfter, type Range } from "./ranges.js";
+import { LINE_TERMINATOR, lineIndexAt, lineStartOffsets } from "./lines.js";
+import type { Range } from "./ranges.js";
 
 /**
  * Where ast-grep's suppression comments apply (`get_suppression_kind` in its
@@ -35,11 +35,7 @@ function lineFeedCount(text: string): number {
 
 /** Start offset of every tree-sitter row: the text's start and each offset just past a line feed. */
 export function rowStartOffsets(text: string): number[] {
-  const starts = [0];
-  for (let index = text.indexOf("\n"); index !== -1; index = text.indexOf("\n", index + 1)) {
-    starts.push(index + 1);
-  }
-  return starts;
+  return lineStartOffsets(text, /\n/);
 }
 
 /** What stands in front of a comment in tree-sitter's tree, which ast-grep reads a suppression's reach from. */
@@ -89,7 +85,7 @@ export function astGrepReach(
   comment: Range,
   preceding: PrecedingNode,
 ): AstGrepReach {
-  const rowOf = (offset: number): number => firstIndexAtOrAfter(rowStarts, offset + 1, (start) => start) - 1;
+  const rowOf = (offset: number): number => lineIndexAt(rowStarts, offset);
   const rowStart = (row: number): number => rowStarts[row] ?? text.length;
   const breaks = (unit: Range): boolean => LINE_TERMINATOR.test(text.slice(unit.start, unit.end));
   const row = rowOf(comment.start);
