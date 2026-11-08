@@ -29,6 +29,8 @@ export class UsageError extends Error {
 
 const FORMATS: readonly OutputFormat[] = ["text", "json", "github"];
 const DIRECTIVE_CONFLICT = "--skip-directives and --only-directives cannot be combined";
+const EXT_REQUIRED = "option --ext requires at least one extension";
+const DIFF_REQUIRED = "option --diff requires a git revision range (e.g. HEAD or main..HEAD)";
 
 export function parseArgs(argv: string[]): CliOptions {
   const paths: string[] = [];
@@ -56,13 +58,24 @@ export function parseArgs(argv: string[]): CliOptions {
     }
 
     const [flag, inlineValue] = splitFlag(arg);
-    const readValue = (): string => {
+    /**
+     * The option's value, given inline or as the next argument. A forgotten
+     * value must not swallow the next flag: `--ignore --dry-run` would turn a
+     * preview into an in-place removal. So a next argument starting with `-`
+     * is refused with `refusal`; a value that does start with `-` can still
+     * be given inline, as `--keep=-x`.
+     */
+    const readValue = (refusal = `option ${flag} requires a value`): string => {
       if (inlineValue !== undefined) return inlineValue;
       const next = argv[index + 1];
       if (next === undefined) throw new UsageError(`option ${flag} requires a value`);
+      if (next.startsWith("-")) throw new UsageError(refusal);
       index += 1;
       return next;
     };
+    /** The refusal for an option whose value may start with `-`, which then goes inline. */
+    const inlineForDash = (value: string, placeholder: string): string =>
+      `option ${flag} requires ${value} (use ${flag}=${placeholder} for one starting with "-")`;
     const rejectValue = (): void => {
       if (inlineValue !== undefined) throw new UsageError(`option ${flag} does not take a value`);
     };
@@ -85,27 +98,23 @@ export function parseArgs(argv: string[]): CliOptions {
         format = "json";
         break;
       case "--ignore": {
-        const value = readValue();
+        const value = readValue(inlineForDash("a glob pattern", "<glob>"));
         if (value === "") throw new UsageError("option --ignore requires a glob pattern");
         ignore.push(value);
         break;
       }
       case "--ext": {
-        const parsed = readValue()
+        const parsed = readValue(EXT_REQUIRED)
           .split(",")
           .map((extension) => extension.trim())
           .filter((extension) => extension !== "");
-        if (parsed.length === 0) {
-          throw new UsageError("option --ext requires at least one extension");
-        }
+        if (parsed.length === 0) throw new UsageError(EXT_REQUIRED);
         extensions.push(...parsed);
         break;
       }
       case "--diff": {
-        const value = readValue();
-        if (value === "" || value.startsWith("-")) {
-          throw new UsageError("option --diff requires a git revision range (e.g. HEAD or main..HEAD)");
-        }
+        const value = readValue(DIFF_REQUIRED);
+        if (value === "" || value.startsWith("-")) throw new UsageError(DIFF_REQUIRED);
         diff = value;
         break;
       }
@@ -135,18 +144,9 @@ export function parseArgs(argv: string[]): CliOptions {
         rejectValue();
         removeLegal = true;
         break;
-      case "--keep": {
-        // A forgotten pattern must not swallow the next flag: `--keep --dry-run`
-        // would turn a preview into an in-place removal. A pattern that does
-        // start with `-` can still be given inline, as `--keep=-x`.
-        if (inlineValue === undefined && argv[index + 1]?.startsWith("-") === true) {
-          throw new UsageError(
-            `option ${flag} requires a regular expression (use ${flag}=<regex> for one starting with "-")`,
-          );
-        }
-        keep.push(parsePattern(flag, readValue()));
+      case "--keep":
+        keep.push(parsePattern(flag, readValue(inlineForDash("a regular expression", "<regex>"))));
         break;
-      }
       case "--dry-run":
         rejectValue();
         dryRun = true;

@@ -79,6 +79,7 @@ describe("parseArgs", () => {
   it("rejects an empty or flag-like --diff value", () => {
     expect(() => parseArgs(["--diff", ""])).toThrow(/revision range/);
     expect(() => parseArgs(["--diff", "--remove"])).toThrow(/revision range/);
+    expect(() => parseArgs(["--diff=-p"])).toThrow(/revision range/);
     expect(() => parseArgs(["--diff"])).toThrow(/requires a value/);
   });
 
@@ -114,13 +115,24 @@ describe("parseArgs", () => {
     expect(keep[1]?.test("// INJECT:nextConfigOutput")).toBe(true);
   });
 
-  it("refuses to take the next flag as a --keep pattern, so --dry-run is never swallowed", () => {
+  it("refuses to take the next flag as an option's value, so --dry-run is never swallowed", () => {
     expect(() => parseArgs(["--remove", "--keep", "--dry-run", "src"])).toThrow(
       'option --keep requires a regular expression (use --keep=<regex> for one starting with "-")',
     );
+    expect(() => parseArgs(["--remove", "--ignore", "--dry-run", "src"])).toThrow(
+      'option --ignore requires a glob pattern (use --ignore=<glob> for one starting with "-")',
+    );
+    expect(() => parseArgs(["--remove", "--ext", "--dry-run", "src"])).toThrow(
+      "option --ext requires at least one extension",
+    );
+    expect(() => parseArgs(["--format", "--json"])).toThrow("option --format requires a value");
     expect(() => parseArgs(["--remove", "--keep", "-x"])).toThrow(UsageError);
+    expect(() => parseArgs(["--ignore", "-"])).toThrow(UsageError);
+    // The separator ends the options rather than giving one its value.
+    expect(() => parseArgs(["--ignore", "--", "--help"])).toThrow(UsageError);
     // Inline, a pattern may start with a dash.
     expect(parseArgs(["--remove", "--keep=-->"]).keep.map((pattern) => pattern.source)).toEqual(["-->"]);
+    expect(parseArgs(["--ignore=-draft.ts"]).ignore).toEqual(["-draft.ts"]);
   });
 
   it("rejects an empty or invalid --keep pattern", () => {

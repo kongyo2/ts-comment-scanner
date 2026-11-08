@@ -482,13 +482,31 @@ describe("run", () => {
 });
 
 describe("run regression fixes", () => {
-  it("prints help when --help hides behind an option that consumed --", async () => {
-    const { io, out } = capture();
+  it.each([["--ignore"], ["--ext"]])(
+    "leaves the files alone when %s lacks its value in front of --dry-run",
+    async (option) => {
+      const file = join(dir, "a.ts");
+      const source = "// note\nexport const x = 1;\n";
+      await writeFile(file, source);
+      const { io, out, err } = capture();
 
-    const code = await run(["--ignore", "--", "--help", "--ext", ".zzz", "."], io);
+      const code = await run(["--remove", option, "--dry-run", file], io);
 
-    expect(code).toBe(0);
-    expect(out()).toContain("Usage: ts-comment-scanner");
+      expect(code).toBe(2);
+      expect(err()).toContain(`option ${option} requires`);
+      expect(out()).toBe("");
+      expect(await readFile(file, "utf8")).toBe(source);
+    },
+  );
+
+  it("takes -- after an option as the end of the options, not as its value", async () => {
+    const { io, out, err } = capture();
+
+    const code = await run(["--ignore", "--", "--help"], io);
+
+    expect(code).toBe(2);
+    expect(err()).toContain("option --ignore requires a glob pattern");
+    expect(out()).toBe("");
   });
 
   it("removes comments from a UTF-16LE file and keeps its encoding", async () => {
