@@ -18,6 +18,12 @@ export interface Edit extends Range {
    * the empty line.
    */
   blankLine?: boolean;
+  /**
+   * With code on both sides of a range that spans lines, one of its own line
+   * breaks takes its place, wherever the range stands (see ownLineBreak), so
+   * the code on either side stays on lines and rows apart.
+   */
+  lineBreak?: boolean;
 }
 
 // Brackets never merge with what follows them, nor punctuation with what
@@ -30,6 +36,20 @@ const CLOSING_PUNCTUATION = ")]},;";
 /** Whether `before` and `after`, about to meet where a comment was, need a space between them. */
 function needsSpace(before: string, after: string): boolean {
   return !OPENING_BRACKETS.includes(before) && !CLOSING_PUNCTUATION.includes(after);
+}
+
+/**
+ * The line break that keeps the code on both sides of a deleted range apart
+ * as the range did: a line feed, with the CR in front of it when the range
+ * has a CRLF, for a range holding one, which ends a line for every tool, and
+ * otherwise the range's first line terminator, which ends one for tsc and
+ * ESLint but none for the tools that only count line feeds (tree-sitter,
+ * oxlint, Semgrep, c8).
+ */
+function ownLineBreak(deleted: string): string {
+  if (deleted.includes("\r\n")) return "\r\n";
+  if (deleted.includes("\n")) return "\n";
+  return (LINE_TERMINATOR.exec(deleted) as RegExpExecArray)[0];
 }
 
 // A global copy of the line-break matcher, so exec() can resume from a removal's end offset.
@@ -159,15 +179,20 @@ export function applyEdits(source: string, edits: readonly Edit[]): string {
       trimLineEnd();
       push(source.slice(contentEnd, lineEnd));
       cursor = lineEnd;
-    } else if (!lineIsBlank && LINE_TERMINATOR.test(deleted) && needsSpace(lastChar, source.charAt(cursor))) {
+    } else if (
+      !lineIsBlank &&
+      LINE_TERMINATOR.test(deleted) &&
+      (edit.lineBreak === true || needsSpace(lastChar, source.charAt(cursor)))
+    ) {
       // Code on both sides of a range that spans lines. Per ECMA-262 a
       // multi-line comment acts as a line terminator for semicolon
       // insertion, so a real line break (matching the file's style) takes
       // its place instead of merging the lines. (Right after an opening
       // bracket or before closing punctuation a line terminator changes
-      // nothing, so a multi-line comment there goes without one.)
+      // nothing, so a multi-line comment there goes without one, unless the
+      // lines are to stay apart.)
       trimLineEnd();
-      push(deleted.includes("\r\n") ? "\r\n" : "\n");
+      push(edit.lineBreak === true ? ownLineBreak(deleted) : deleted.includes("\r\n") ? "\r\n" : "\n");
     } else if (lastChar !== "" && !isBlank(lastChar)) {
       // Code right before the range, more on the same line after it.
       if (edit.jsx === true) continue;

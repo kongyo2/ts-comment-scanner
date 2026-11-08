@@ -910,39 +910,46 @@ const FLOW_BLOCK_SUPPRESSION = /^\/\*[ \t\r\n*]*@ts-(ignore|expect-error)(?![\w-
  * code.
  */
 export function detectDirective(kind: CommentKind, text: string, placement?: DirectivePlacement): string | undefined {
+  return directiveNames(kind, text, placement)[0];
+}
+
+/**
+ * Every directive the comment carries that is live at the placement, the
+ * name detectDirective reports first. A comment can carry several: what a
+ * removal has to leave in place for each of them (`// cspell:ignore foo --
+ * falls through`, read as a fall-through comment where it is the last
+ * comment before a `case`) must not hide behind the name.
+ */
+export function directiveNames(kind: CommentKind, text: string, placement?: DirectivePlacement): string[] {
   const at = placement ?? ANY_PLACEMENT;
+  const names: string[] = [];
   if (kind === "line") {
     const tripleSlash = tripleSlashDirective(text);
-    if (tripleSlash !== undefined && isActiveAt(tripleSlash, at)) return tripleSlash;
+    if (tripleSlash !== undefined && isActiveAt(tripleSlash, at)) names.push(tripleSlash);
     const suppression = TS_LINE_SUPPRESSION.exec(text) ?? FLOW_LINE_SUPPRESSION.exec(text);
-    if (suppression) {
-      return `@ts-${suppression[1]}`;
-    }
+    if (suppression) names.push(`@ts-${suppression[1]}`);
     const checkPragma = TS6_LINE_CHECK_PRAGMA.exec(text) ?? TS7_LINE_CHECK_PRAGMA.exec(text);
     if (checkPragma) {
       const name = `@ts-${checkPragma[1]?.toLowerCase()}`;
-      if (isActiveAt(name, at)) return name;
+      if (isActiveAt(name, at)) names.push(name);
     }
   } else {
     const suppression = TS_BLOCK_SUPPRESSION.exec(lastLine(text)) ?? FLOW_BLOCK_SUPPRESSION.exec(text);
-    if (suppression) {
-      return `@ts-${suppression[1]}`;
-    }
+    if (suppression) names.push(`@ts-${suppression[1]}`);
   }
 
   // A directive that opens the comment names it, however the comment goes on
   // to mention other tools' markers (`// nosemgrep: ... @jsx h` stays a
-  // Semgrep suppression, with the next-line shield that goes with it); only
-  // without one does a marker found after other text name the comment.
-  let mention: string | undefined;
+  // Semgrep suppression); only without one does a marker found after other
+  // text name the comment.
+  const mentions: string[] = [];
   for (const match of ruleMatches(kind, text)) {
-    if (!isMatchActiveAt(match, at)) continue;
-    if (match.opening) return match.name;
-    mention ??= match.name;
+    if (isMatchActiveAt(match, at)) (match.opening ? names : mentions).push(match.name);
   }
-  if (mention !== undefined) return mention;
-  if (at.emptyBlock === true) return EMPTY_BLOCK;
-  return at.emptyFile === true && kind === "line" && text.startsWith("///") ? EMPTY_FILE : undefined;
+  names.push(...mentions);
+  if (names.length > 0) return [...new Set(names)];
+  if (at.emptyBlock === true) return [EMPTY_BLOCK];
+  return at.emptyFile === true && kind === "line" && text.startsWith("///") ? [EMPTY_FILE] : [];
 }
 
 /**

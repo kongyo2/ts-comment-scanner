@@ -1,6 +1,6 @@
 import ts from "typescript";
 import { isFileWidePosition, type PrecedingNode } from "./astgrep.js";
-import { bunMarkerOffset, carriesAstGrepSuppression, detectDirective, type DirectivePlacement } from "./directives.js";
+import { bunMarkerOffset, carriesAstGrepSuppression, directiveNames, type DirectivePlacement } from "./directives.js";
 import { importGroupGaps, type ImportGroupGap } from "./imports.js";
 import { jsxLayout, type JsxLayout } from "./jsx.js";
 import { byStart, firstIndexAtOrAfter, rangeAt, type Range } from "./ranges.js";
@@ -17,6 +17,11 @@ export function scanComments(source: string, options: ScanOptions = {}): Comment
 /** A source's comments together with the layout of its JSX children, from a single parse. */
 export interface SourceAnalysis {
   comments: Comment[];
+  /**
+   * Every directive each directive comment carries, its `directive` first
+   * (see directiveNames).
+   */
+  directives: ReadonlyMap<Comment, readonly string[]>;
   jsx: JsxLayout;
   /** What stands in front of each comment carrying an ast-grep suppression (see precedingNode). */
   preceding: ReadonlyMap<Comment, PrecedingNode>;
@@ -139,13 +144,15 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
     };
   };
 
+  const directives = new Map<Comment, readonly string[]>();
   const comments = sorted.map((range): Comment => {
     const kind: CommentKind = range.kind === ts.SyntaxKind.SingleLineCommentTrivia ? "line" : "block";
     const text = source.slice(range.pos, range.end);
     const startPosition = sourceFile.getLineAndCharacterOfPosition(range.pos);
     const endPosition = sourceFile.getLineAndCharacterOfPosition(range.end);
-    const directive = detectDirective(kind, text, placementOf(range));
-    return {
+    const names = directiveNames(kind, text, placementOf(range));
+    const directive = names[0];
+    const comment: Comment = {
       kind,
       text,
       start: range.pos,
@@ -156,6 +163,8 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
       endColumn: endPosition.character + 1,
       ...(directive === undefined ? {} : { directive }),
     };
+    if (directive !== undefined) directives.set(comment, names);
+    return comment;
   });
 
   const preceding = new Map<Comment, PrecedingNode>();
@@ -167,6 +176,7 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
 
   return {
     comments,
+    directives,
     jsx: jsxLayout(source, sourceFile, jsxParents, comments),
     preceding,
     importGroups: importGroupGaps(source, sourceFile, comments),
