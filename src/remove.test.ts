@@ -538,24 +538,34 @@ describe("removeComments next-line shielding by whole lines", () => {
     expect(result.removed.map((comment) => comment.text)).toEqual(["// gone"]);
   });
 
-  it("keeps a multi-line comment whose removal would pull the next line's code onto a shielded one", () => {
-    // Right after an opening bracket or before closing punctuation a removed
-    // comment leaves no line break behind, so `debugger` (or `bad()`) would
-    // join the line the directive covers and lose its report.
-    for (const source of [
+  it.each([
+    [
       "// eslint-disable-next-line no-debugger\nfoo(/* a\n*/); debugger;\n",
+      "// eslint-disable-next-line no-debugger\nfoo(\n); debugger;\n",
+    ],
+    [
       "// oxlint-disable-next-line no-debugger\nfoo([/* a\n*/]); debugger;\n",
+      "// oxlint-disable-next-line no-debugger\nfoo([\n]); debugger;\n",
+    ],
+    [
       "// eslint-disable-next-line no-debugger\nconst x = 1 /* a\n*/; debugger;\n",
-      "// @ts-expect-error\nfoo(/* a\n*/); bad();\n",
-    ]) {
-      expect(removeComments(source).changed).toBe(false);
-    }
-  });
+      "// eslint-disable-next-line no-debugger\nconst x = 1\n; debugger;\n",
+    ],
+    ["// @ts-expect-error\nfoo(/* a\n*/); bad();\n", "// @ts-expect-error\nfoo(\n); bad();\n"],
+  ])(
+    "leaves a line break where a multi-line comment's removal would pull code onto a shielded line: %j",
+    (source, code) => {
+      // Right after an opening bracket or before closing punctuation a removed
+      // comment otherwise leaves no line break behind, so `debugger` (or
+      // `bad()`) would join the line the directive covers and lose its report.
+      expect(removeComments(source).code).toBe(code);
+    },
+  );
 
-  it("keeps a multi-line comment whose removal would pull a shielded line's code onto the one above", () => {
+  it("leaves a line break where a multi-line comment's removal would pull a shielded line's code onto the one above", () => {
     const source = "/* eslint-disable-next-line no-debugger */ foo(/* a\n*/ debugger);\nbar();\n";
 
-    expect(removeComments(source).changed).toBe(false);
+    expect(removeComments(source).code).toBe("/* eslint-disable-next-line no-debugger */ foo(\n debugger);\nbar();\n");
   });
 
   it("still removes a multi-line comment that trails a shielded line with nothing after it", () => {
@@ -564,13 +574,45 @@ describe("removeComments next-line shielding by whole lines", () => {
     expect(removeComments(source).code).toBe("// @ts-expect-error -- legacy\nlegacy();\nnext();\n");
   });
 
-  it("keeps a multi-line comment whose removal would join another line to a line directive's own", () => {
+  it("leaves a line break where a multi-line comment's removal would join another line to a line directive's own", () => {
     const joining = "foo(/* a\n*/ bar); // eslint-disable-line no-undef\n";
     const opening = "/* a\n*/ foo(); // eslint-disable-line no-undef\n";
 
-    expect(removeComments(joining).changed).toBe(false);
+    expect(removeComments(joining).code).toBe("foo(\n bar); // eslint-disable-line no-undef\n");
+    expect(removeComments(joining.replaceAll("\n", "\r\n")).code).toBe(
+      "foo(\r\n bar); // eslint-disable-line no-undef\r\n",
+    );
     // With nothing in front of it, the comment's removal only moves the line up whole.
     expect(removeComments(opening).code).toBe("foo(); // eslint-disable-line no-undef\n");
+  });
+
+  it.each([
+    ["const a = [/* note\n*/ secret()]; // nosemgrep\n", "const a = [\n secret()]; // nosemgrep\n"],
+    ['const a = ["AKIA", /* note\n*/]; // gitleaks:allow\n', 'const a = ["AKIA",\n]; // gitleaks:allow\n'],
+    ["foo(/* note\n*/ bar()); // NOSONAR\n", "foo(\n bar()); // NOSONAR\n"],
+    [
+      "foo(/* note\n*/ bar()); // lgtm[js/unused-local-variable]\n",
+      "foo(\n bar()); // lgtm[js/unused-local-variable]\n",
+    ],
+    // c8 ignores the line holding an `ignore next` hint, wherever on it.
+    [
+      "function never() { return [/* note\n*/ 1]; /* c8 ignore next */\n}\n",
+      "function never() { return [\n 1]; /* c8 ignore next */\n}\n",
+    ],
+  ])("keeps the line a suppression trailing code covers apart from the line above: %j", (source, code) => {
+    // Semgrep reads `nosemgrep` on the line a finding starts on, CodeQL
+    // `lgtm` up to the comment and the others the whole line, so code joined
+    // onto that line would be suppressed too.
+    expect(removeComments(source).code).toBe(code);
+  });
+
+  it("reads the line break a comment leaves off the comment, so tsc and the line-feed tools count it alike", () => {
+    // A comment holding only a CR (or a U+2028) leaves one, which ends a line
+    // to tsc and ESLint and none to Semgrep, as it did.
+    expect(removeComments("foo(/* a\r*/ bar()); // nosemgrep\n").code).toBe("foo(\r bar()); // nosemgrep\n");
+    expect(removeComments("foo(/* a\u2028*/ bar()); // nosemgrep\n").code).toBe("foo(\u2028 bar()); // nosemgrep\n");
+    // One holding a line feed leaves a line feed.
+    expect(removeComments("foo(/* a\u2028b\n*/ bar()); // nosemgrep\n").code).toBe("foo(\n bar()); // nosemgrep\n");
   });
 });
 
@@ -588,18 +630,18 @@ describe("removeComments on the rows oxlint reads its line directives on", () =>
     expect(removeComments("/* eslint-disable-next-line no-debugger */\u2028foo();\n// note").changed).toBe(false);
   });
 
-  it("keeps a comment whose line break would split the row a next-line directive covers", () => {
+  it("leaves a comment's U+2028 where a line feed would split the row a next-line directive covers", () => {
     // Replaced by a line feed, the U+2028 inside the comment would end the row
     // in front of `debugger`.
     const source = "// oxlint-disable-next-line no-debugger\nfoo(); /* a\u2028b */ debugger;\n";
 
-    expect(removeComments(source).changed).toBe(false);
+    expect(removeComments(source).code).toBe("// oxlint-disable-next-line no-debugger\nfoo();\u2028 debugger;\n");
   });
 
-  it("keeps the lines in front of a line directive that share its row", () => {
+  it("keeps the lines in front of a line directive on its row, a comment's U+2028 between them", () => {
     const source = "foo(); /* a\u2028*/ bar(); // oxlint-disable-line no-undef\n";
 
-    expect(removeComments(source).changed).toBe(false);
+    expect(removeComments(source).code).toBe("foo();\u2028 bar(); // oxlint-disable-line no-undef\n");
   });
 
   it("removes comments around a next-line directive on the file's last row as usual", () => {
@@ -881,6 +923,55 @@ describe("removeComments shields from directives that mention another tool's mar
     const source = "// nosemgrep: react-dangerously-set-inner-html -- @jsx h below\n// note\nrender();\n";
 
     expect(removeComments(source).changed).toBe(false);
+  });
+
+  it("shields what a directive another one names the comment for reaches", () => {
+    // ESLint's no-fallthrough reads the last comment before `case 2`: with
+    // `// explanation` gone, the cspell comment's words would let the case
+    // fall through unreported.
+    const source = [
+      "switch (x) {",
+      "  case 1:",
+      "    work();",
+      "    // cspell:ignore flibbertigibbet -- falls through",
+      "    // explanation",
+      "  case 2:",
+      "    work();",
+      "}",
+      "",
+    ].join("\n");
+    // Outside a fall-through slot the words are prose, and the comment after them goes.
+    const elsewhere = "// cspell:ignore flibbertigibbet -- falls through\n// explanation\nwork();\n";
+
+    expect(removeComments(source).changed).toBe(false);
+    expect(removeComments(elsewhere).code).toBe("// cspell:ignore flibbertigibbet -- falls through\nwork();\n");
+  });
+
+  it("shields the line below a nosemgrep that only non-alphanumerics precede on its line", () => {
+    // Semgrep reads the line above a finding for such a nosemgrep, code and
+    // all: `});` in front of it does not stop it.
+    const opening = "// nosemgrep: secret-call\n// note\nsecret();\n";
+    const lastLine = "/* reason\nnosemgrep */\n// note\nsecret();\n";
+    const punctuation = "foo(() => {\n}); // nosemgrep\n// note\nsecret();\n";
+    const prose = "// TODO nosemgrep\n// note\nsecret();\n";
+    const firstLine = "/* nosemgrep\n   reason */\n// note\nsecret();\n";
+    const trailing = "foo(); // nosemgrep\n// note\nsecret();\n";
+
+    expect(removeComments(opening).changed).toBe(false);
+    expect(removeComments(lastLine).changed).toBe(false);
+    expect(removeComments(punctuation).changed).toBe(false);
+    expect(removeComments(prose).code).toBe("// TODO nosemgrep\nsecret();\n");
+    expect(removeComments(firstLine).code).toBe("/* nosemgrep\n   reason */\nsecret();\n");
+    expect(removeComments(trailing).code).toBe("foo(); // nosemgrep\nsecret();\n");
+  });
+
+  it("reads the line a nosemgrep stands on without the comments in front of it, which may go", () => {
+    expect(removeComments("/* x */ // nosemgrep\n// note\nsecret();\n").code).toBe(
+      "// nosemgrep\n// note\nsecret();\n",
+    );
+    expect(removeComments("/* a\nb */ // nosemgrep\n// note\nsecret();\n").code).toBe(
+      "// nosemgrep\n// note\nsecret();\n",
+    );
   });
 
   it("does not shield the line below a node:coverage range pragma", () => {

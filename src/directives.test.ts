@@ -5,6 +5,7 @@ import {
   bunMarkerOffset,
   carriesAstGrepSuppression,
   detectDirective,
+  directiveNames,
   isLegalComment,
 } from "./directives.js";
 
@@ -832,6 +833,39 @@ describe("detectDirective placement", () => {
     expect(detectDirective("line", "// @bun", header)).toBeUndefined();
     expect(detectDirective("block", "/** @format */", { ...header, firstComment: true })).toBe("@format");
     expect(detectDirective("line", "// @bun", { ...header, firstComment: true, fileStart: true })).toBe("@bun");
+  });
+});
+
+describe("directiveNames", () => {
+  const nowhere = { header: false, firstComment: false, fileStart: false };
+
+  it("lists every directive the comment carries, the one detectDirective reports first", () => {
+    const cspell = "// cspell:ignore flibbertigibbet -- falls through";
+
+    expect(directiveNames("line", cspell)).toEqual(["cspell:ignore", "fallthrough"]);
+    expect(directiveNames("line", "// @ts-expect-error -- nosemgrep")).toEqual(["@ts-expect-error", "nosemgrep"]);
+    expect(directiveNames("line", "// note: @ts-strict-ignore and gitleaks:allow")).toEqual([
+      "@ts-strict-ignore",
+      "gitleaks:allow",
+    ]);
+    expect(directiveNames("line", "// note")).toEqual([]);
+  });
+
+  it("leaves out the directives the placement makes inert", () => {
+    const cspell = "// cspell:ignore flibbertigibbet -- falls through";
+
+    expect(directiveNames("line", cspell, { ...nowhere, fallthroughSlot: true })).toEqual([
+      "cspell:ignore",
+      "fallthrough",
+    ]);
+    expect(directiveNames("line", cspell, { ...nowhere, fallthroughSlot: false })).toEqual(["cspell:ignore"]);
+    expect(directiveNames("line", "// @ts-nocheck nosemgrep", nowhere)).toEqual(["nosemgrep"]);
+  });
+
+  it("names a comment in an empty block or file only when nothing else does", () => {
+    expect(directiveNames("line", "// nothing yet", { ...nowhere, emptyBlock: true })).toEqual(["empty-block"]);
+    expect(directiveNames("line", "/// note", { ...nowhere, emptyFile: true })).toEqual(["empty-file"]);
+    expect(directiveNames("line", "// nosemgrep", { ...nowhere, emptyBlock: true })).toEqual(["nosemgrep"]);
   });
 });
 

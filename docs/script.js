@@ -54,6 +54,8 @@
 
   /* ------------------------------------------- seamless ticker duplication */
   document.querySelectorAll(".ticker-track").forEach((track) => {
-    track.append(...[...track.children].map((chip) => chip.cloneNode(true)));
+    const copies = [...track.children].map((chip) => chip.cloneNode(true));
+    for (const copy of copies) copy.dataset.clone = "";
+    track.append(...copies);
   });
 })();

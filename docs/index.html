@@ -444,11 +444,11 @@
             </div>
             <div class="fix">
               <span class="ja"
-                >次行指示子の直下にあるコメント行と、消すとその行を隣の行とつなげる複数行コメントは削除しない</span
+                >次行指示子の直下にあるコメント行は削除しない。消すとその行や行指示子の行を隣の行とつなげる複数行コメントは、削除して改行を残す</span
               >
               <span class="en"
-                >comment lines shielded by next-line directives are kept, and so are multi-line comments whose removal
-                would join that line to another</span
+                >comment lines shielded by next-line directives are kept, and a multi-line comment whose removal would
+                join that line, or a line directive's own, to another goes with a line break left in its place</span
               >
             </div>
           </div>
@@ -485,11 +485,11 @@
         </div>
         <p class="proof-line">
           <span class="ja"
-            >// この挙動は <strong>1054 本のテスト</strong>と <strong>100% カバレッジ</strong>(statements / branches /
+            >// この挙動は <strong>1072 本のテスト</strong>と <strong>100% カバレッジ</strong>(statements / branches /
             functions / lines)で固定しています</span
           >
           <span class="en"
-            >// pinned by <strong>1054 tests</strong> at <strong>100% coverage</strong> — statements, branches,
+            >// pinned by <strong>1072 tests</strong> at <strong>100% coverage</strong> — statements, branches,
             functions and lines</span
           >
         </p>

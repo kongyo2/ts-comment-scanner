@@ -94,13 +94,6 @@ export async function run(argv: string[], io: CliIO): Promise<number> {
     throw error;
   }
 
-  // A -h/--help the early scan above could not see (e.g. consumed-looking
-  // spots like `--ignore -- --help`) still means help once parsed as a flag.
-  if (options.help) {
-    io.out(HELP_TEXT);
-    return 0;
-  }
-
   try {
     if (options.version) {
       io.out(`${await getVersion()}\n`);

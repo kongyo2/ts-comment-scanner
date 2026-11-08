@@ -8,7 +8,7 @@ import {
 } from "./directives.js";
 import type { ImportGroupGap } from "./imports.js";
 import type { JsxContainer } from "./jsx.js";
-import { LINE_TERMINATOR, isBlank, isHorizontalSpace, lineIndexAt, lineStartOffsets } from "./lines.js";
+import { LINE_TERMINATOR, isBlank, isHorizontalSpace, lastLine, lineIndexAt, lineStartOffsets } from "./lines.js";
 import { byStart, firstIndexAtOrAfter, rangesWithin, type Range } from "./ranges.js";
 import { analyzeSource } from "./scanner.js";
 import { applyEdits, blankLineEdits, type Edit } from "./splice.js";
@@ -40,12 +40,12 @@ export interface RemoveResult {
    * comments the `keep` predicate claims, comments whose removal would
    * change what an ast-grep suppression covers (the ones in front of it on
    * its row decide which node it trails), comments whose removal would shift
-   * code under a next-line directive or join another line to one a directive
-   * covers, or that sit between a directive and the code it reaches past
-   * them for (or the JSX sibling it applies to), and comments whose removal
-   * would move a position-dependent directive
-   * (prettier's first-comment pragma, Deno's coverage file pragma, Bun's
-   * file-start marker) into effect.
+   * code under a next-line directive, JSX comment containers whose removal
+   * would join another line to one a directive covers, comments that sit
+   * between a directive and the code it reaches past them for (or the JSX
+   * sibling it applies to), and comments whose removal would move a
+   * position-dependent directive (prettier's first-comment pragma, Deno's
+   * coverage file pragma, Bun's file-start marker) into effect.
    */
   kept: Comment[];
   /** Comments excluded from removal by the `shouldRemove` predicate. */
@@ -117,6 +117,7 @@ export function removeComments(source: string, options: RemoveOptions = {}): Rem
     containerOf,
     skippable: skippableRanges(comments, containerOf, new Set(removed)),
     preceding: analysis.preceding,
+    directives: analysis.directives,
   };
   const search = containerSearch(containers);
   // Collapsing blank lines can only move a surviving comment to the very
@@ -139,7 +140,7 @@ export function removeComments(source: string, options: RemoveOptions = {}): Rem
 
     const removing = new Set(removed);
     search.track(new Set(containers.filter((container) => emptiedBy(container, removing))));
-    const edits = removalEdits(removed, containerOf, search.droppable, holders);
+    const edits = removalEdits(removed, containerOf, search.droppable, holders, shielding.lineBreaks);
     const deletions = edits.filter((edit) => edit.replacement === undefined);
     const blankEdits = tidyBlankLines ? blankLineEdits(source, deletions, comments, shielding.lines, analysis.jsx) : [];
     const code = editKeepingBom(source, [...edits, ...blankEdits].sort(byStart));
@@ -419,13 +420,16 @@ function emptiedBy(container: Container, comments: ReadonlySet<Comment>): boolea
 /**
  * The edits that remove the comments: one per comment, or one per container
  * going with its braces. A holder of a gap around the imports (see
- * gapHolders) leaves an empty line in its place.
+ * gapHolders) leaves an empty line in its place, and a comment that would
+ * otherwise join or split the lines a directive covers one of its own line
+ * breaks (see Shielding.lineBreaks).
  */
 function removalEdits(
   removed: readonly Comment[],
   containerOf: ReadonlyMap<Comment, Container>,
   droppable: ReadonlySet<Container>,
   holders: ReadonlySet<Comment>,
+  lineBreaks: ReadonlySet<Comment>,
 ): Edit[] {
   const units = mergeContainers(
     removed,
@@ -433,7 +437,9 @@ function removalEdits(
     (container) => droppable.has(container) && container.mode !== "keep",
   );
   return units.map((unit): Edit => {
-    if (!("comments" in unit)) return { start: unit.start, end: unit.end, blankLine: holders.has(unit) };
+    if (!("comments" in unit)) {
+      return { start: unit.start, end: unit.end, blankLine: holders.has(unit), lineBreak: lineBreaks.has(unit) };
+    }
     return unit.mode === "drop"
       ? { start: unit.start, end: unit.end, jsx: true }
       : { ...(unit.spaceRange as Range), replacement: '{" "}' };
@@ -542,15 +548,25 @@ interface ShieldContext {
   skippable: readonly Range[];
   /** What stands in front of each comment carrying an ast-grep suppression (see SourceAnalysis). */
   preceding: ReadonlyMap<Comment, PrecedingNode>;
+  /** Every directive each directive comment carries (see SourceAnalysis). */
+  directives: ReadonlyMap<Comment, readonly string[]>;
 }
 
 interface Shielding {
   removed: Comment[];
   /**
    * Lines (1-based) that a surviving directive reaches: the ones below a
-   * next-line directive, and the one a line directive stands on.
+   * next-line directive, and the ones a line directive stands on.
    */
   lines: Set<number>;
+  /**
+   * Comments with code on both sides whose deletion would join one of those
+   * lines to another, where no line break would take their place, or split
+   * one, where a line feed would stand in for line breaks the tools that only
+   * count line feeds do not count. One of the comment's own line breaks takes
+   * its place (see Edit.lineBreak).
+   */
+  lineBreaks: Set<Comment>;
 }
 
 /**
@@ -559,6 +575,8 @@ interface Shielding {
  */
 interface RemovalUnit extends Range {
   comments: readonly Comment[];
+  /** The unit is a container's braces, which go with the comments in them. */
+  braces: boolean;
 }
 
 /**
@@ -567,15 +585,19 @@ interface RemovalUnit extends Range {
  * `eslint-disable-next-line`, ...). Dropping such a line would shift the
  * following code up, silently changing which line the directive applies to —
  * and with it the compiler or linter behaviour. Nor may a removal join
- * another line to one a directive covers, the line a line directive
- * (`eslint-disable-line`, ...) stands on included. Directives whose tools
- * reach further get more: below a tsc suppression the first line each
- * compiler cannot step over stays, oxlint's line-feed rows add the lines they
- * run over, between a directive that only counts as the last comment before
- * its target (`@deno-types`, ...) or a coverage hint that ast-v8-to-istanbul
- * only applies to the node right after it and that target every comment
- * stays, and a JSX comment container right after a directive in a container
+ * another line to one a directive covers, the lines a line directive
+ * (`eslint-disable-line`, `nosemgrep` after code, ...) stands on included:
+ * a comment that would leaves one of its line breaks in its place (see
+ * Shielding.lineBreaks). Directives whose tools reach further get more:
+ * below a tsc suppression the first line each compiler cannot step over
+ * stays, oxlint's line-feed rows add the lines they run over, between a
+ * directive that only counts as the last comment before its target
+ * (`@deno-types`, ...) or a coverage hint that ast-v8-to-istanbul only
+ * applies to the node right after it and that target every comment stays,
+ * and a JSX comment container right after a directive in a container
  * (`{/* prettier-ignore *​/}`, which applies to the next sibling) stays too.
+ * Each directive a comment carries shields what it reaches, whichever one
+ * names the comment.
  *
  * The line checks work on whole lines, not single comments: a line holding
  * several removable comments (`/* one *​/ /* two *​/`) vanishes just the same,
@@ -594,6 +616,7 @@ function shieldNextLineDirectives(
   const lineOffsets = lineStartOffsets(source);
   const totalLines = lineOffsets.length;
   const shieldedLines = new Set<number>();
+  const lineBreaks = new Set<Comment>();
   const blockingLines = new Set<number>();
   const shieldedGaps: Array<readonly [number, number]> = [];
   const siblingTargets = new Set<Container>();
@@ -605,6 +628,25 @@ function shieldNextLineDirectives(
   let rows: number[] | undefined;
   /** The (1-based) line holding the offset. */
   const lineOf = (offset: number): number => lineIndexAt(lineOffsets, offset) + 1;
+  /**
+   * Whether Semgrep can read the `nosemgrep` comment as a suppression of the
+   * line below it (see SEMGREP_PREVIOUS_LINE): the line the comment ends on,
+   * with the comments in front of it cut out as the removal may cut them,
+   * opens with the marker.
+   */
+  const readsAsSemgrepPreviousLine = (comment: Comment): boolean => {
+    let cursor = lineOffsets[comment.endLine - 1] as number;
+    let before = "";
+    const ranges = context.skippable;
+    for (let index = firstIndexAtOrAfter(ranges, cursor + 1, (range) => range.end); index < ranges.length; index += 1) {
+      const range = ranges[index] as Range;
+      if (range.start >= comment.start) break;
+      before += source.slice(cursor, Math.max(cursor, range.start));
+      cursor = range.end;
+    }
+    if (cursor < comment.start) before += source.slice(cursor, comment.start);
+    return SEMGREP_PREVIOUS_LINE.test(before + lastLine(comment.text));
+  };
   /** The given (1-based) line, which the shields only name when the source has it, and the units on it. */
   const unitsOnLine = (line: number): LineUnits => {
     const start = lineOffsets[line - 1] as number;
@@ -621,24 +663,8 @@ function shieldNextLineDirectives(
         added = true;
       }
     };
-    for (const comment of [...kept, ...skipped]) {
-      if (processed.has(comment)) continue;
-      processed.add(comment);
-      const directive = comment.directive;
-      if (directive === undefined) continue;
-      if (carriesAstGrepSuppression(comment.text)) {
-        const reach = astGrepReach(
-          source,
-          (rows ??= rowStartOffsets(source)),
-          comment,
-          context.preceding.get(comment) as PrecedingNode,
-        );
-        astGrepReaches.push(reach);
-        if (reach.nextRow !== undefined && reach.nextRow.end > reach.nextRow.start) {
-          shieldLines(lineOf(reach.nextRow.start), lineOf(reach.nextRow.end - 1));
-        }
-        added = true;
-      }
+    /** Collects what one of the directives the comment carries reaches. */
+    const shieldReach = (comment: Comment, directive: string): void => {
       const lastComment = LAST_COMMENT_DIRECTIVES.has(directive);
       if (lastComment || NEXT_TOKEN_DIRECTIVES.has(directive)) {
         const codeStart = codeStartAfter(source, comment.end, context.skippable);
@@ -646,7 +672,7 @@ function shieldNextLineDirectives(
           shieldedGaps.push([comment.end, codeStart]);
           added = true;
         }
-        if (lastComment) continue;
+        if (lastComment) return;
       }
       if (TSC_SUPPRESSIONS.has(directive)) {
         for (const line of firstBlockingLines(source, comment, lineOffsets, context.skippable)) {
@@ -660,10 +686,10 @@ function shieldNextLineDirectives(
         const reach = oxlintReachLines(source, (rows ??= rowStartOffsets(source)), lineOf, comment, directive);
         if (reach !== undefined) shieldLines(reach.from, reach.to);
       }
-      // A line directive covers the line it stands on, which no removal may
-      // join to another (see joiningLineGroup).
-      if (isOwnLineDirective(directive)) shieldLines(comment.line, comment.line);
-      if (!isNextLineDirective(directive)) continue;
+      // A line directive covers the lines it stands on, which no removal may
+      // join to another (see joiningUnits).
+      if (coversOwnLine(directive)) shieldLines(comment.line, comment.endLine);
+      if (!isNextLineDirective(directive)) return;
       // In JSX, such a directive in braces applies to the sibling after it,
       // whatever line that is on (prettier leaves the element after
       // `{/* prettier-ignore */}` as is): a comment-only container standing
@@ -674,12 +700,33 @@ function shieldNextLineDirectives(
         added = true;
       }
       // A trailing formatter or scanner suppression (`a = [1]; // oxfmt-ignore`,
-      // `secret(); // nosemgrep`) targets its own line, so it shields nothing
-      // below it. In JSX, the container holding the comment is what has to
-      // stand on lines of its own.
-      if (TRAILING_TARGETS_OWN_LINE.has(directive) && !occupiesWholeLines(source, holder ?? comment)) continue;
+      // `secret(); // skipcq`) targets what it trails, not the line below it.
+      // In JSX, the container holding the comment is what has to stand on
+      // lines of its own. Semgrep's reach is a matter of what precedes the
+      // marker on its line.
+      if (TRAILING_TARGETS_OWN_LINE.has(directive) && !occupiesWholeLines(source, holder ?? comment)) return;
+      if (directive === "nosemgrep" && !readsAsSemgrepPreviousLine(comment)) return;
       // Counted pragmas like `c8 ignore next 3` cover several lines.
-      shieldLines(comment.endLine + 1, comment.endLine + shieldedLineCount(comment));
+      shieldLines(comment.endLine + 1, comment.endLine + shieldedLineCount(comment, directive));
+    };
+    for (const comment of [...kept, ...skipped]) {
+      if (processed.has(comment)) continue;
+      processed.add(comment);
+      if (comment.directive === undefined) continue;
+      if (carriesAstGrepSuppression(comment.text)) {
+        const reach = astGrepReach(
+          source,
+          (rows ??= rowStartOffsets(source)),
+          comment,
+          context.preceding.get(comment) as PrecedingNode,
+        );
+        astGrepReaches.push(reach);
+        if (reach.nextRow !== undefined && reach.nextRow.end > reach.nextRow.start) {
+          shieldLines(lineOf(reach.nextRow.start), lineOf(reach.nextRow.end - 1));
+        }
+        added = true;
+      }
+      for (const directive of context.directives.get(comment) as readonly string[]) shieldReach(comment, directive);
     }
     return added;
   };
@@ -697,9 +744,14 @@ function shieldNextLineDirectives(
   const protectShields = (): boolean => {
     const removing = stillRemoved.length;
     for (const line of shieldedLines) {
-      // A shielded line may neither vanish nor be joined to another.
+      // A shielded line may neither vanish nor be joined to another. A
+      // comment leaves a line break behind instead; a container's braces have
+      // none to leave without changing what the element renders, so they stay.
       protect(vanishingLineGroup(source, unitsOnLine(line)));
-      protect(joiningLineGroup(source, unitsOnLine(line)));
+      for (const unit of joiningUnits(source, unitsOnLine(line))) {
+        if (unit.braces) protect(unit.comments);
+        else lineBreaks.add(unit.comments[0] as Comment);
+      }
     }
     for (const line of blockingLines) protect(lineOpeningGroup(source, unitsOnLine(line)));
     for (const [from, to] of shieldedGaps) {
@@ -717,7 +769,7 @@ function shieldNextLineDirectives(
   if (stillRemoved.length !== removed.length) {
     kept.sort(byStart);
   }
-  return { removed: stillRemoved, lines: shieldedLines };
+  return { removed: stillRemoved, lines: shieldedLines, lineBreaks };
 }
 
 /**
@@ -732,7 +784,11 @@ function removalUnits(removals: readonly Comment[], containerOf: ReadonlyMap<Com
     containerOf,
     (container) => container.mode === "drop" && emptiedBy(container, removing),
   );
-  return units.map((unit) => ("comments" in unit ? unit : { start: unit.start, end: unit.end, comments: [unit] }));
+  return units.map((unit) => ({
+    start: unit.start,
+    end: unit.end,
+    ...("comments" in unit ? { comments: unit.comments, braces: true } : { comments: [unit], braces: false }),
+  }));
 }
 
 /** The comments the units delete. */
@@ -833,22 +889,20 @@ function vanishingLineGroup(source: string, line: LineUnits): Comment[] {
 }
 
 /**
- * The removals that would join the given line to another: they reach past
- * one of its ends, with something other than whitespace beyond them on the
- * line they run into. Deleting such a comment takes its line breaks along —
- * with nothing in their place right after an opening bracket or before
- * closing punctuation (see applyEdits) — so what stands beyond it can land on
- * the line, or what stands on the line move off it, and a directive covering
- * the line would cover other code. (With only whitespace beyond, the lines
- * the comment held vanish, which vanishingLineGroup weighs.)
+ * The removal units that would join the given line to another: they reach
+ * past one of its ends, with something other than whitespace beyond them on
+ * the line they run into. Deleting such a comment takes its line breaks
+ * along — with nothing in their place right after an opening bracket or
+ * before closing punctuation, and a line feed elsewhere (see applyEdits) — so
+ * what stands beyond it can land on the line, or what stands on the line move
+ * off it, and a directive covering the line would cover other code. (With
+ * only whitespace beyond, the lines the comment held vanish, which
+ * vanishingLineGroup weighs.)
  */
-function joiningLineGroup(source: string, line: LineUnits): Comment[] {
-  return commentsOf(
-    line.units.filter(
-      (unit) =>
-        (unit.end > line.end && !closesItsLine(source, unit)) ||
-        (unit.start < line.start && !opensItsLine(source, unit)),
-    ),
+function joiningUnits(source: string, line: LineUnits): RemovalUnit[] {
+  return line.units.filter(
+    (unit) =>
+      (unit.end > line.end && !closesItsLine(source, unit)) || (unit.start < line.start && !opensItsLine(source, unit)),
   );
 }
 
@@ -890,12 +944,40 @@ function oxlintReachLines(
 }
 
 /**
- * Whether the directive covers the line it stands on: the `-line` forms of
- * the suppressions (`eslint-disable-line`, `tslint:disable-line`, ...).
+ * Whether the directive covers the lines it stands on: the `-line` forms of
+ * the suppressions (`eslint-disable-line`, `tslint:disable-line`, ...), the
+ * ones that cover the line holding them (see OWN_LINE_DIRECTIVES), and the
+ * `ignore next` hints c8 counts lines for (see COUNTED_NEXT_LINE): it
+ * ignores the line holding one along with the lines below it.
  */
-function isOwnLineDirective(name: string): boolean {
-  return name.endsWith("-line") && !name.endsWith("-next-line");
+function coversOwnLine(name: string): boolean {
+  return (
+    (name.endsWith("-line") && !name.endsWith("-next-line")) ||
+    OWN_LINE_DIRECTIVES.has(name) ||
+    COUNTED_NEXT_LINE.has(name)
+  );
 }
+
+// Suppressions that apply to the line holding them: Semgrep's to findings
+// that start on it, CodeQL's `lgtm` to its alerts up to the comment,
+// DeepSource's, SonarQube's, gitleaks', TruffleHog's and detect-secrets' to
+// the line, and codespell's to its words.
+const OWN_LINE_DIRECTIVES = new Set([
+  "nosemgrep",
+  "lgtm",
+  "skipcq",
+  "NOSONAR",
+  "gitleaks:allow",
+  "trufflehog:ignore",
+  "pragma-allowlist-secret",
+  "codespell:ignore",
+]);
+
+// Semgrep applies a `nosemgrep` to the line below where nothing but
+// non-alphanumerics precede it on its line (`nosem_previous_line_re` in its
+// Nosemgrep.ml): `// nosemgrep: rule-id` and `}); // nosemgrep` cover the next
+// line, `// TODO nosemgrep` and `foo(); // nosemgrep` only their own.
+const SEMGREP_PREVIOUS_LINE = /^[^a-zA-Z0-9]* *nosem(?:grep)?/i;
 
 // These suppressions only apply to the following node/line when they stand on
 // their own line — trailing after code they target (at most) their own line.
@@ -908,7 +990,6 @@ const TRAILING_TARGETS_OWN_LINE = new Set([
   "lgtm",
   "codeql",
   "skipcq",
-  "nosemgrep",
 ]);
 
 // The suppressions tsc looks past blank and `//` lines for (see
@@ -1031,12 +1112,13 @@ function isNextLineDirective(name: string): boolean {
 const COUNTED_NEXT_LINE = new Set(["c8-ignore-next", "v8-ignore-next", "node:coverage-ignore"]);
 
 /**
- * Number of following lines a next-line pragma covers (`c8 ignore next 3` →
- * 3). monocart reads the count past any whitespace or none, and c8 and
- * monocart stop at the last digit, so `next3` and `next 3x` count 3 as well.
+ * Number of following lines a next-line pragma the comment carries covers
+ * (`c8 ignore next 3` → 3). monocart reads the count past any whitespace or
+ * none, and c8 and monocart stop at the last digit, so `next3` and `next 3x`
+ * count 3 as well.
  */
-function shieldedLineCount(comment: Comment): number {
-  if (comment.directive === undefined || !COUNTED_NEXT_LINE.has(comment.directive)) return 1;
+function shieldedLineCount(comment: Comment, directive: string): number {
+  if (!COUNTED_NEXT_LINE.has(directive)) return 1;
   const match = /\bignore\s*next\s*(\d+)/.exec(comment.text);
   return match ? Math.max(1, Number(match[1])) : 1;
 }

@@ -141,6 +141,15 @@ describe("removeComments keeps JSX containers that directives reach", () => {
     expect(strip(source).code).toBe("const e = <div>{/* c8 ignore start */}<A />{/* c8 ignore stop */}</div>;\n");
   });
 
+  it("keeps a multi-line container whose removal would join another line to a line directive's own", () => {
+    // A comment leaves a line break in its place there, but between JSX
+    // children a line break would change the text around the braces: the
+    // space after `<B />` renders now, and would not next to a line break.
+    const source = tsx("<div>", "  <B /> {/* note", "  */}<A /> {/* eslint-disable-line */}", "</div>");
+
+    expect(strip(source).changed).toBe(false);
+  });
+
   it("keeps the container after a trailing {/* prettier-ignore */}, which still applies to the next sibling", () => {
     const source = tsx("<div>", "  <B /> {/* prettier-ignore */}{/* note */}", "  <A   b />", "</div>");
 
