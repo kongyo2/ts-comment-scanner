@@ -647,10 +647,9 @@ td code {
     display: none;
   }
 
-  html.js .ticker-track {
-    animation: none;
-    flex-wrap: wrap;
-    width: auto;
+  /* The tickers wrap, as without JS, so their copies go. */
+  .ticker-track > [data-clone] {
+    display: none;
   }
 }
 
@@ -878,30 +877,33 @@ h2 {
   overflow: hidden;
 }
 
-html.js .ticker {
-  -webkit-mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
-  mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
-}
-
-/* Without JS the chips simply wrap; with it they become a marquee. */
+/* Without JS, or with reduced motion, the chips simply wrap; otherwise they
+   become a marquee. */
 .ticker-track {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
 }
 
-html.js .ticker-track {
-  flex-wrap: nowrap;
-  width: max-content;
-  animation: ticker-left 80s linear infinite;
-}
+@media (prefers-reduced-motion: no-preference) {
+  html.js .ticker {
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
+    mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
+  }
 
-html.js .ticker-track.reverse {
-  animation-name: ticker-right;
-}
+  html.js .ticker-track {
+    flex-wrap: nowrap;
+    width: max-content;
+    animation: ticker-left 80s linear infinite;
+  }
 
-.ticker:hover .ticker-track {
-  animation-play-state: paused;
+  html.js .ticker-track.reverse {
+    animation-name: ticker-right;
+  }
+
+  .ticker:hover .ticker-track {
+    animation-play-state: paused;
+  }
 }
 
 @keyframes ticker-left {
