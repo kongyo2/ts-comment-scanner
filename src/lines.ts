@@ -1,4 +1,4 @@
-import { firstIndexAtOrAfter } from "./ranges.js";
+import { firstIndexAtOrAfter, type Range } from "./ranges.js";
 
 /**
  * Line handling shared by the scanner's consumers. Unless given another line
@@ -49,4 +49,36 @@ export function lineStartOffsets(source: string, lineBreak: RegExp = LINE_BREAK)
 /** Index of the line holding the offset, given every line's start offset (see lineStartOffsets). */
 export function lineIndexAt(lineStarts: readonly number[], offset: number): number {
   return firstIndexAtOrAfter(lineStarts, offset + 1, (start) => start) - 1;
+}
+
+/**
+ * True when nothing but whitespace shares the range's first and last lines.
+ * Lines are delimited by any ECMAScript line terminator, matching how the
+ * scanner numbers them (a lone `\r`, U+2028 and U+2029 count too).
+ */
+export function occupiesWholeLines(source: string, range: Range): boolean {
+  return opensItsLine(source, range) && closesItsLine(source, range);
+}
+
+/** True when nothing but whitespace follows the range on its last line. */
+export function closesItsLine(source: string, range: Range): boolean {
+  return blankToLineEdge(source, range.end, 1);
+}
+
+/** True when nothing but whitespace precedes the range on its first line. */
+export function opensItsLine(source: string, range: Range): boolean {
+  return blankToLineEdge(source, range.start - 1, -1);
+}
+
+/**
+ * True when nothing but whitespace lies from the offset on, in the direction
+ * of `step`, up to the line break or the edge of the source.
+ */
+function blankToLineEdge(source: string, from: number, step: 1 | -1): boolean {
+  for (let index = from; index >= 0 && index < source.length; index += step) {
+    const char = source[index] as string;
+    if (LINE_TERMINATOR.test(char)) return true;
+    if (!isBlank(char)) return false;
+  }
+  return true;
 }

@@ -764,6 +764,16 @@ export interface DirectivePlacement {
    * `case`, `default` or `}`. Left out too, any position is assumed.
    */
   nextToken?: string;
+  /**
+   * The JSDoc tags tsc reads in the comment (`@typedef`, `@param`, `@returns`,
+   * `@template`, ...), which it does in a JavaScript file where the comment
+   * is the JSDoc of a node: with `checkJs` they are the file's type
+   * annotations, and deleting one changes what the file means to the
+   * compiler. Each is a directive under its own name. Left out, the comment
+   * is assumed to hold none: in a TypeScript file tsc reads no types from
+   * JSDoc.
+   */
+  jsDoc?: readonly string[];
 }
 
 const ANY_PLACEMENT: DirectivePlacement = { header: true, firstComment: true, fileStart: true };
@@ -905,9 +915,9 @@ const FLOW_BLOCK_SUPPRESSION = /^\/\*[ \t\r\n*]*@ts-(ignore|expect-error)(?![\w-
  * `// @bun`) are skipped elsewhere — and the remaining rules still run, so a
  * live directive later in the same comment (`// deno-lint-ignore-file
  * nosemgrep` in mid-file) is not masked by a positionally dead one. A comment
- * no rule names is still `empty-block` where the placement puts it inside an
- * empty block, and a `///` line comment `empty-file` in a file that holds no
- * code.
+ * no rule names is still named for the type tags tsc reads from it in a
+ * JavaScript file, `empty-block` where the placement puts it inside an empty
+ * block, and a `///` line comment `empty-file` in a file that holds no code.
  */
 export function detectDirective(kind: CommentKind, text: string, placement?: DirectivePlacement): string | undefined {
   return directiveNames(kind, text, placement)[0];
@@ -941,12 +951,13 @@ export function directiveNames(kind: CommentKind, text: string, placement?: Dire
   // A directive that opens the comment names it, however the comment goes on
   // to mention other tools' markers (`// nosemgrep: ... @jsx h` stays a
   // Semgrep suppression); only without one does a marker found after other
-  // text name the comment.
+  // text name the comment. The type tags of a JSDoc comment come before such
+  // mentions too.
   const mentions: string[] = [];
   for (const match of ruleMatches(kind, text)) {
     if (isMatchActiveAt(match, at)) (match.opening ? names : mentions).push(match.name);
   }
-  names.push(...mentions);
+  names.push(...(at.jsDoc ?? []), ...mentions);
   if (names.length > 0) return [...new Set(names)];
   if (at.emptyBlock === true) return [EMPTY_BLOCK];
   return at.emptyFile === true && kind === "line" && text.startsWith("///") ? [EMPTY_FILE] : [];

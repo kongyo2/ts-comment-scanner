@@ -8,6 +8,7 @@ describe("public API", () => {
     expect(typeof api.scanFile).toBe("function");
     expect(typeof api.scanPaths).toBe("function");
     expect(typeof api.isJsxFile).toBe("function");
+    expect(typeof api.isJavaScriptFile).toBe("function");
     expect(typeof api.removeComments).toBe("function");
     expect(typeof api.detectDirective).toBe("function");
     expect(typeof api.isLegalComment).toBe("function");

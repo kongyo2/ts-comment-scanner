@@ -6,10 +6,10 @@ import {
   collectFiles,
   encodeFileText,
   foldPathCase,
-  isJsxFile,
   mapFiles,
   readFileText,
   scanFile,
+  scanOptionsFor,
   writeFileAtomic,
 } from "./files.js";
 import { changedFiles } from "./git.js";
@@ -56,9 +56,10 @@ General:
 Paths default to the current directory. Directories are scanned recursively,
 skipping node_modules and .git. Ignore globs without a slash match file names,
 and a trailing slash (dist/) restricts a glob to directories. JavaScript files
-(.js, .jsx, .mjs, .cjs) added with --ext are parsed with JSX enabled. Removal
-keeps directives and license headers unless explicitly requested, so builds
-and linters keep working; --keep protects the markers only a project's own
+(.js, .jsx, .mjs, .cjs) added with --ext are parsed as JavaScript, and the
+JSDoc comments tsc reads types from count as directives there. Removal keeps
+directives and license headers unless explicitly requested, so builds and
+linters keep working; --keep protects the markers only a project's own
 tooling reads, e.g. --keep "@skipMangle" or --keep "^// INJECT".
 
 --diff narrows any scan or removal to files changed in git: a single revision
@@ -216,7 +217,7 @@ async function runRemove(files: readonly string[], options: CliOptions, io: CliI
     try {
       const { text, encoding, bom, lossless } = await readFileText(file);
       const result = removeComments(text, {
-        jsx: isJsxFile(file),
+        ...scanOptionsFor(file),
         removeDirectives: options.removeDirectives,
         removeLegal: options.removeLegal,
         keep: (comment) => options.keep.some((pattern) => pattern.test(comment.text)),

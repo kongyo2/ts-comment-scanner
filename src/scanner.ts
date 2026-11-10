@@ -8,6 +8,13 @@ import type { Comment, CommentKind } from "./types.js";
 
 export interface ScanOptions {
   jsx?: boolean;
+  /**
+   * The source is JavaScript. It is parsed the way tsc parses a `.js` file —
+   * with JSX, and with `a < b > (c)` a comparison, as JavaScript has no type
+   * arguments — and the JSDoc tags tsc takes its types from are directives
+   * (see DirectivePlacement.jsDoc).
+   */
+  javascript?: boolean;
 }
 
 export function scanComments(source: string, options: ScanOptions = {}): Comment[] {
@@ -26,6 +33,28 @@ export interface SourceAnalysis {
   /** What stands in front of each comment carrying an ast-grep suppression (see precedingNode). */
   preceding: ReadonlyMap<Comment, PrecedingNode>;
   /**
+   * In JavaScript, the tags tsc reads from each JSDoc comment it takes types
+   * from (see typeTags). The names are among the comment's directives; they
+   * are listed apart because a `@type` docblock is a directive wherever it
+   * stands, to prettier, and only where tsc attaches it to a node here.
+   */
+  typed: ReadonlyMap<Comment, readonly string[]>;
+  /**
+   * In JavaScript, for each JSDoc comment whose tags tsc does not apply to
+   * their node because a later JSDoc comment belongs to the same node, that
+   * later comment: tsc takes a node's `@type`, `@param` and the like from
+   * its last JSDoc comment alone, so deleting that one would bring the
+   * earlier comment's tags to bear on the node.
+   */
+  shadows: ReadonlyMap<Comment, Comment>;
+  /**
+   * The JSDoc comments prettier reads as type casts (`@type`, `@satisfies`)
+   * that a parenthesized expression follows, past any further comments.
+   * Prettier keeps the parentheses only while nothing but whitespace stands
+   * between the comment and them (see CAST_DIRECTIVES in shields.ts).
+   */
+  casts: ReadonlySet<Comment>;
+  /**
    * The gaps in front of the import and export declarations the import
    * sorters group, and in front of the statements after the imports, where
    * the linters want an empty line (see importGroupGaps).
@@ -34,9 +63,16 @@ export interface SourceAnalysis {
 }
 
 export function analyzeSource(source: string, options: ScanOptions = {}): SourceAnalysis {
-  const jsx = options.jsx === true;
-  const fileName = jsx ? "module.tsx" : "module.ts";
-  const scriptKind = jsx ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  const javascript = options.javascript === true;
+  // tsc reads JavaScript with JSX whatever the extension, and takes
+  // `f < a > (b)` for a comparison there, where TypeScript reads type
+  // arguments: parsed as TypeScript, a regular expression after such a `>`
+  // would be a division, and a `//` or `/*` inside it a comment.
+  const [fileName, scriptKind] = javascript
+    ? ["module.js", ts.ScriptKind.JS]
+    : options.jsx === true
+      ? ["module.tsx", ts.ScriptKind.TSX]
+      : ["module.ts", ts.ScriptKind.TS];
   const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, scriptKind);
 
   const jsxTextSpans: Range[] = [];
@@ -53,6 +89,8 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
    * block, so no two of them overlap.
    */
   const emptyBlocks: Range[] = [];
+  /** The JSDoc comments of every node tsc attaches some to, in document order. */
+  const jsDocs: ts.JSDoc[][] = [];
 
   const collect = (found: readonly ts.CommentRange[] | undefined): void => {
     if (!found) return;
@@ -84,14 +122,24 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
     // JSDoc nodes start inside the comment text itself; descending into them
     // would hide the comment (e.g. a trailing JSDoc attached to the
     // end-of-file token). Treat them as trivia like any other comment.
-    const children = node.getChildren(sourceFile).filter((child) => !ts.isJSDoc(child));
+    const children: ts.Node[] = [];
+    const docs: ts.JSDoc[] = [];
+    for (const child of node.getChildren(sourceFile)) {
+      if (ts.isJSDoc(child)) docs.push(child);
+      else children.push(child);
+    }
+    if (docs.length > 0) jsDocs.push(docs);
     if (children.length === 0) {
       tokens.push(node);
       if (node.kind === ts.SyntaxKind.JsxText) {
         jsxTextSpans.push({ start: node.getFullStart(), end: node.getEnd() });
       }
       collect(ts.getLeadingCommentRanges(source, node.getFullStart()));
-      collect(ts.getTrailingCommentRanges(source, node.getEnd()));
+      // A JSX closing tag opens with the one token `</`, which getChildren
+      // splits into `<` and `/` — and reads that slash as the start of a
+      // comment where another slash follows it (`<//* note *​/div>`). The
+      // comments after the token start past its slash.
+      collect(ts.getTrailingCommentRanges(source, opensClosingTag(node) ? node.end + 1 : node.getEnd()));
       continue;
     }
     for (let index = children.length - 1; index >= 0; index -= 1) {
@@ -109,6 +157,7 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
   // placement; a shebang does not count as content before the first comment,
   // matching jest-docblock.
   const firstTokenStart = sourceFile.getStart(sourceFile);
+  const tags = javascript ? typeTags(jsDocs) : NO_TYPE_TAGS;
   const shebangEnd = ts.getShebang(source)?.length ?? 0;
   const firstCommentPos = sorted.length > 0 ? (sorted[0] as ts.CommentRange).pos : -1;
   const bunMarkerPos = bunMarkerOffset(source);
@@ -126,6 +175,7 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
     let slots: ReturnType<typeof switchSlots> | undefined;
     const slotsOf = (): ReturnType<typeof switchSlots> => (slots ??= switchSlots(tokenAfter(range.end)));
     const firstComment = range.pos === firstCommentPos;
+    const jsDoc = tags.read.get(range.pos);
     return {
       header: range.pos < firstTokenStart,
       firstComment: firstComment && /^\s*$/.test(source.slice(shebangEnd, range.pos)),
@@ -135,6 +185,7 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
       fileWide: firstComment && isFileWidePosition(source, range.pos, range.end),
       emptyBlock: rangeAt(emptyBlocks, range.pos) !== undefined,
       emptyFile,
+      ...(jsDoc === undefined ? {} : { jsDoc }),
       get fallthroughSlot() {
         return slotsOf().fallthroughSlot;
       },
@@ -168,9 +219,22 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
   });
 
   const preceding = new Map<Comment, PrecedingNode>();
+  const typed = new Map<Comment, readonly string[]>();
+  const shadows = new Map<Comment, Comment>();
+  const casts = new Set<Comment>();
+  const commentAt = (offset: number): Comment =>
+    comments[firstIndexAtOrAfter(comments, offset, (comment) => comment.start)] as Comment;
   for (const [index, comment] of comments.entries()) {
     if (carriesAstGrepSuppression(comment.text)) {
       preceding.set(comment, precedingNode(sourceFile, tokens, comments[index - 1], comment.start));
+    }
+    const read = tags.read.get(comment.start);
+    if (read !== undefined) typed.set(comment, read);
+    const shadow = tags.shadows.get(comment.start);
+    if (shadow !== undefined) shadows.set(comment, commentAt(shadow));
+    if (directives.get(comment)?.some((name) => CAST_TAGS.has(name)) === true) {
+      const next = tokenAfter(comment.end);
+      if (next.kind === ts.SyntaxKind.OpenParenToken && ts.isParenthesizedExpression(next.parent)) casts.add(comment);
     }
   }
 
@@ -179,8 +243,99 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
     directives,
     jsx: jsxLayout(source, sourceFile, jsxParents, comments),
     preceding,
+    typed,
+    shadows,
+    casts,
     importGroups: importGroupGaps(source, sourceFile, comments),
   };
+}
+
+/** Whether the token is the `<` that getChildren makes of the `</` opening a JSX closing tag. */
+function opensClosingTag(token: ts.Node): boolean {
+  return (
+    token.kind === ts.SyntaxKind.LessThanToken &&
+    (ts.isJsxClosingElement(token.parent) || ts.isJsxClosingFragment(token.parent))
+  );
+}
+
+// The tags prettier's isTypeCastComment looks for (see the JSDoc type cast rule in directives.ts).
+const CAST_TAGS: ReadonlySet<string> = new Set(["@type", "@satisfies"]);
+
+// The JSDoc tags tsc reads types from in a JavaScript file, by the name a
+// comment holding one is given. Aliases share a name: `@arg` and `@argument`
+// are `@param`, `@return` is `@returns`, `@augments` is `@extends` and
+// `@constructor` is `@class`. The tags tsc parses and reads nothing from
+// (`@author`, `@deprecated`, `@see`, `@throws`) and the ones it does not know
+// (`@example`, `@default`, ...) are absent: a comment holding only those is
+// documentation.
+const TYPE_TAGS: ReadonlyMap<ts.SyntaxKind, string> = new Map([
+  [ts.SyntaxKind.JSDocTypedefTag, "@typedef"],
+  [ts.SyntaxKind.JSDocCallbackTag, "@callback"],
+  [ts.SyntaxKind.JSDocEnumTag, "@enum"],
+  [ts.SyntaxKind.JSDocImportTag, "@import"],
+  [ts.SyntaxKind.JSDocOverloadTag, "@overload"],
+  [ts.SyntaxKind.JSDocTypeTag, "@type"],
+  [ts.SyntaxKind.JSDocSatisfiesTag, "@satisfies"],
+  [ts.SyntaxKind.JSDocParameterTag, "@param"],
+  [ts.SyntaxKind.JSDocReturnTag, "@returns"],
+  [ts.SyntaxKind.JSDocTemplateTag, "@template"],
+  [ts.SyntaxKind.JSDocThisTag, "@this"],
+  [ts.SyntaxKind.JSDocAugmentsTag, "@extends"],
+  [ts.SyntaxKind.JSDocImplementsTag, "@implements"],
+  [ts.SyntaxKind.JSDocClassTag, "@class"],
+  [ts.SyntaxKind.JSDocPublicTag, "@public"],
+  [ts.SyntaxKind.JSDocPrivateTag, "@private"],
+  [ts.SyntaxKind.JSDocProtectedTag, "@protected"],
+  [ts.SyntaxKind.JSDocReadonlyTag, "@readonly"],
+  [ts.SyntaxKind.JSDocOverrideTag, "@override"],
+]);
+
+// The tags that declare something of their own — a type, an import, a
+// signature — which tsc binds from every JSDoc comment of a node. The other
+// tags describe the node, and tsc applies those from the node's last JSDoc
+// comment alone (`filterOwnedJSDocTags` in its utilities.ts), though it
+// checks the types of every one, and counts what they refer to as used.
+const DECLARING_TAGS: ReadonlySet<string> = new Set(["@typedef", "@callback", "@enum", "@import", "@overload"]);
+
+/** The type tags of JSDoc comments, by the offset the comment starts at. */
+interface TypeTags {
+  /** The names of the tags tsc reads from the comment (see TYPE_TAGS). */
+  read: ReadonlyMap<number, readonly string[]>;
+  /** For a comment holding tags a later one of its node keeps off the node, where that later comment starts. */
+  shadows: ReadonlyMap<number, number>;
+}
+
+const NO_TYPE_TAGS: TypeTags = { read: new Map(), shadows: new Map() };
+
+/**
+ * What tsc reads from the JSDoc comments of a JavaScript file, given the
+ * comments of every node it attaches some to. A comment no node holds — one
+ * in front of a closing brace, or sharing the line of the token before it —
+ * is not among them, and tsc reads nothing from it.
+ */
+function typeTags(jsDocs: readonly (readonly ts.JSDoc[])[]): TypeTags {
+  const read = new Map<number, readonly string[]>();
+  const shadows = new Map<number, number>();
+  for (const docs of jsDocs) {
+    const last = docs.at(-1) as ts.JSDoc;
+    for (const doc of docs) {
+      const names = (doc.tags ?? []).flatMap((tag) => typeTagName(tag) ?? []);
+      if (names.length > 0) read.set(doc.pos, [...new Set(names)]);
+      if (doc !== last && names.some((name) => !DECLARING_TAGS.has(name))) shadows.set(doc.pos, last.pos);
+    }
+  }
+  return { read, shadows };
+}
+
+/**
+ * The name of the tag when tsc reads it. A `@returns` without a type says
+ * nothing. A `@param` without one still does: a function with any `@param`
+ * tag has the parameters it declares, each required unless its tag says
+ * otherwise, where one without takes any number of arguments.
+ */
+function typeTagName(tag: ts.JSDocTag): string | undefined {
+  if (ts.isJSDocReturnTag(tag) && tag.typeExpression === undefined) return undefined;
+  return TYPE_TAGS.get(tag.kind);
 }
 
 /**

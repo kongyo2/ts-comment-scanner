@@ -135,6 +135,12 @@ describe("removeComments keeps JSX containers that directives reach", () => {
     expect(strip(source).changed).toBe(false);
   });
 
+  it("does not keep a container after a coverage hint that applies to a node, which a comment in braces is not", () => {
+    const source = tsx("<div>", "  {/* istanbul ignore next */}", "  {/* note */}", "  <A />", "</div>");
+
+    expect(strip(source).code).toBe(tsx("<div>", "  {/* istanbul ignore next */}", "  <A />", "</div>"));
+  });
+
   it("does not keep a container after a range or file pragma, which targets no sibling", () => {
     const source = "const e = <div>{/* c8 ignore start */}{/* note */}<A />{/* c8 ignore stop */}</div>;\n";
 
@@ -148,6 +154,34 @@ describe("removeComments keeps JSX containers that directives reach", () => {
     const source = tsx("<div>", "  <B /> {/* note", "  */}<A /> {/* eslint-disable-line */}", "</div>");
 
     expect(strip(source).changed).toBe(false);
+  });
+
+  it("keeps one that runs on from a line directive's line with text after it", () => {
+    const source = tsx("<div>", "  <A /> {/* eslint-disable-line */}{/* note", "  */} text", "</div>");
+
+    expect(strip(source).changed).toBe(false);
+  });
+
+  it("removes a multi-line container that only opens or closes the lines it shares with nothing", () => {
+    // Nothing stands in front of the first on the line it starts on, nor after
+    // the second on the line it ends on: no line is joined to the directive's.
+    const opening = tsx("<div>", "  {/* note", "  */}<A /> {/* eslint-disable-line */}", "</div>");
+    const closing = tsx("<div>", "  <A /> {/* eslint-disable-line */}{/* note", "  */}", "</div>");
+
+    expect(strip(opening).code).toBe(tsx("<div>", "  <A /> {/* eslint-disable-line */}", "</div>"));
+    expect(strip(closing).code).toBe(tsx("<div>", "  <A /> {/* eslint-disable-line */}", "</div>"));
+  });
+
+  it("leaves the line break of a plain comment that would join a directive's line, next to a container that goes", () => {
+    const source = "// eslint-disable-next-line\nfoo(/* a\n*/); const v = <div>{/* x */}</div>;\n";
+
+    expect(strip(source).code).toBe("// eslint-disable-next-line\nfoo(\n); const v = <div></div>;\n");
+  });
+
+  it("removes a container on a directive's line that ends the file", () => {
+    const source = "// eslint-disable-next-line\nconst v = <div>{/* note */}</div>;";
+
+    expect(strip(source).code).toBe("// eslint-disable-next-line\nconst v = <div></div>;");
   });
 
   it("keeps the container after a trailing {/* prettier-ignore */}, which still applies to the next sibling", () => {

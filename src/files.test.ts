@@ -7,6 +7,7 @@ import {
   collectFiles,
   decodeFileText,
   encodeFileText,
+  isJavaScriptFile,
   isJsxFile,
   scanFile,
   scanPaths,
@@ -62,6 +63,19 @@ describe("scanFile", () => {
     expect(result.comments[0]).toMatchObject({ start: 0, line: 1, column: 1 });
   });
 
+  it("reads a JavaScript file's JSDoc types as tsc does, and a TypeScript file's as documentation", async () => {
+    const source = "/** @type {number} */\nexport const n = 1;\n/** @typedef {string} S */\n";
+    await writeFile(join(dir, "types.js"), source);
+    await writeFile(join(dir, "types.ts"), source);
+
+    const javascript = await scanFile(join(dir, "types.js"));
+    const typescript = await scanFile(join(dir, "types.ts"));
+
+    expect(javascript.comments.map((comment) => comment.directive)).toEqual(["@type", "@typedef"]);
+    // (`@type` is prettier's cast comment in any file.)
+    expect(typescript.comments.map((comment) => comment.directive)).toEqual(["@type", undefined]);
+  });
+
   it("parses plain JavaScript with JSX enabled, like TypeScript itself does", async () => {
     // Read as TS instead, `<div>` would be a type assertion and the URL's
     // `//example.com</div>;` a phantom line comment.
@@ -87,6 +101,22 @@ describe("isJsxFile", () => {
     expect(isJsxFile("a.js")).toBe(true);
     expect(isJsxFile("a.mjs")).toBe(true);
     expect(isJsxFile("a.CJS")).toBe(true);
+  });
+});
+
+describe("isJavaScriptFile", () => {
+  it("recognises the extensions tsc reads as JavaScript, in any casing", () => {
+    expect(isJavaScriptFile("a.js")).toBe(true);
+    expect(isJavaScriptFile("a.jsx")).toBe(true);
+    expect(isJavaScriptFile("a.MJS")).toBe(true);
+    expect(isJavaScriptFile("a.cjs")).toBe(true);
+  });
+
+  it("leaves TypeScript files out, `.tsx` included", () => {
+    expect(isJavaScriptFile("a.ts")).toBe(false);
+    expect(isJavaScriptFile("a.tsx")).toBe(false);
+    expect(isJavaScriptFile("a.d.ts")).toBe(false);
+    expect(isJavaScriptFile("a.mts")).toBe(false);
   });
 });
 

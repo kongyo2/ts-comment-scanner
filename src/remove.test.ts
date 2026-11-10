@@ -198,23 +198,35 @@ describe("removeComments", () => {
     expect(removeComments(source).code).toBe("#!/usr/bin/env node\nconst x = 1;\n");
   });
 
-  it("keeps a comment sitting between a next-line directive and its code", () => {
-    const source = "// eslint-disable-next-line no-console\n// shielded\nconsole.log(1);\n// gone\n";
+  it("leaves an empty line where a comment line sat between a next-line directive and its code", () => {
+    // The directive covers the line below it, whatever that line holds: with
+    // the line gone, it would cover `console.log(1)`.
+    const source = "// eslint-disable-next-line no-console\n// note\nconsole.log(1);\n// gone\n";
     const result = removeComments(source);
 
-    expect(result.code).toBe("// eslint-disable-next-line no-console\n// shielded\nconsole.log(1);\n");
-    expect(result.kept.map((comment) => comment.text)).toEqual([
-      "// eslint-disable-next-line no-console",
-      "// shielded",
-    ]);
+    expect(result.code).toBe("// eslint-disable-next-line no-console\n\nconsole.log(1);\n");
+    expect(result.kept.map((comment) => comment.text)).toEqual(["// eslint-disable-next-line no-console"]);
+    expect(result.removed.map((comment) => comment.text)).toEqual(["// note", "// gone"]);
   });
 
-  it("shields comments below @ts-expect-error the same way", () => {
-    const source = "// @ts-expect-error\n// shielded\nconst x: number = null;\n";
-    const result = removeComments(source);
+  it("leaves the line below @ts-expect-error the same way", () => {
+    const source = "// @ts-expect-error\n// note\nconst x: number = null;\n";
 
-    expect(result.code).toBe(source);
-    expect(result.removed).toEqual([]);
+    expect(removeComments(source).code).toBe("// @ts-expect-error\n\nconst x: number = null;\n");
+  });
+
+  it("leaves no empty line where nothing follows the comment line", () => {
+    // Nothing can move up into the directive's reach.
+    expect(removeComments("// eslint-disable-next-line\n// note\n").code).toBe("// eslint-disable-next-line\n");
+    expect(removeComments("foo();\n// @ts-expect-error\n// note\n\n// more\n").code).toBe(
+      "foo();\n// @ts-expect-error\n",
+    );
+  });
+
+  it("counts the empty line among the blank lines it leaves around a removed comment", () => {
+    const source = "foo();\n\n// eslint-disable-next-line no-console\n// note\n\n// more\n\nconsole.log(1);\n";
+
+    expect(removeComments(source).code).toBe("foo();\n\n// eslint-disable-next-line no-console\n\nconsole.log(1);\n");
   });
 
   it("still removes a trailing comment on the line after a next-line directive", () => {
@@ -245,31 +257,35 @@ describe("removeComments", () => {
     expect(result.code).toBe("/* c8 ignore start */\nconst x = 1;\n/* c8 ignore stop */\n");
   });
 
-  it("shields comments below next-statement coverage pragmas", () => {
-    const source = "/* istanbul ignore next */\n// shielded\nfunction f() {}\n";
+  it("keeps the comment between a next-statement coverage pragma and its statement", () => {
+    // ast-v8-to-istanbul applies the hint to the node right after it only.
+    const source = "/* istanbul ignore next */\n// stays\nfunction f() {}\n";
     const result = removeComments(source);
 
     expect(result.code).toBe(source);
   });
 
-  it("shields every line covered by a counted ignore-next pragma", () => {
-    const source = "/* c8 ignore next 2 */\n// shielded one\n// shielded two\nconst x = 1;\n// gone\n";
+  it("leaves every line a counted ignore-next pragma covers in place", () => {
+    // The first comment keeps the hint without a target for
+    // ast-v8-to-istanbul; the second goes, and its line stays one of the two
+    // c8 ignores.
+    const source = "/* c8 ignore next 2 */\n// stays\n// note\nconst x = 1;\n// gone\n";
     const result = removeComments(source);
 
-    expect(result.code).toBe("/* c8 ignore next 2 */\n// shielded one\n// shielded two\nconst x = 1;\n");
-    expect(result.kept).toHaveLength(3);
+    expect(result.code).toBe("/* c8 ignore next 2 */\n// stays\n\nconst x = 1;\n");
+    expect(result.kept).toHaveLength(2);
   });
 
-  it("shields below a bare deno-coverage-ignore", () => {
-    const source = "// deno-coverage-ignore\n// shielded\nconst x = 1;\n";
+  it("leaves the line below a bare deno-coverage-ignore", () => {
+    const source = "// deno-coverage-ignore\n// note\nconst x = 1;\n";
 
-    expect(removeComments(source).code).toBe(source);
+    expect(removeComments(source).code).toBe("// deno-coverage-ignore\n\nconst x = 1;\n");
   });
 
-  it("shields below formatter suppressions targeting the next node", () => {
-    const source = "// oxfmt-ignore\n// shielded\nconst matrix = [1, 2, 3];\n";
+  it("leaves the line below formatter suppressions targeting the next node", () => {
+    const source = "// oxfmt-ignore\n// note\nconst matrix = [1, 2, 3];\n";
 
-    expect(removeComments(source).code).toBe(source);
+    expect(removeComments(source).code).toBe("// oxfmt-ignore\n\nconst matrix = [1, 2, 3];\n");
   });
 
   it("does not shield below a trailing formatter suppression", () => {
@@ -280,34 +296,24 @@ describe("removeComments", () => {
     expect(removeComments(prettier).code).toBe("const c = [4, 5]; // prettier-ignore\nconst d = 6;\n");
   });
 
-  it("shields below the newly covered next-line directives", () => {
-    const dprint = "// dprint-ignore\n// shielded\nconst matrix = [1, 2, 3];\n";
-    expect(removeComments(dprint).code).toBe(dprint);
-
-    const denoTypes = '// @deno-types="./x.d.ts"\n// shielded\nimport y from "./y.js";\n';
-    expect(removeComments(denoTypes).code).toBe(denoTypes);
-
-    const flow = "// $FlowFixMe[incompatible-call]\n// shielded\ncall(1);\n";
-    expect(removeComments(flow).code).toBe(flow);
-
-    const nx = "// nx-ignore-next-line\n// shielded\nimport z from './z.js';\n";
-    expect(removeComments(nx).code).toBe(nx);
-
-    const semgrep = "// nosemgrep: rule-id\n// shielded\ndanger();\n";
-    expect(removeComments(semgrep).code).toBe(semgrep);
-  });
-
-  it("shields below stylelint-disable-next-line, which targets the line after the comment", () => {
-    const line = "// stylelint-disable-next-line declaration-no-important\n// shielded\nimportant();\n";
-    expect(removeComments(line).code).toBe(line);
-
-    const block = "/* stylelint-disable-next-line block-no-empty */\n// shielded\nconst empty = css``;\n";
-    expect(removeComments(block).code).toBe(block);
-
+  it.each([
+    ["// dprint-ignore", "const matrix = [1, 2, 3];"],
+    ["// $FlowFixMe[incompatible-call]", "call(1);"],
+    ["// nx-ignore-next-line", "import z from './z.js';"],
+    ["// nosemgrep: rule-id", "danger();"],
+    ["// stylelint-disable-next-line declaration-no-important", "important();"],
+    ["/* stylelint-disable-next-line block-no-empty */", "const empty = css``;"],
     // stylelint disables the line after the comment's end line, so the
     // trailing form still targets the next line rather than its own.
-    const trailing = "const a = 1; /* stylelint-disable-next-line */\n// shielded\nconst b = 2;\n";
-    expect(removeComments(trailing).code).toBe(trailing);
+    ["const a = 1; /* stylelint-disable-next-line */", "const b = 2;"],
+  ])("leaves the line below %s", (directive, code) => {
+    expect(removeComments(`${directive}\n// note\n${code}\n`).code).toBe(`${directive}\n\n${code}\n`);
+  });
+
+  it("keeps the comment below @deno-types, which deno_graph reads from the last comment before the import", () => {
+    const source = '// @deno-types="./x.d.ts"\n// stays\nimport y from "./y.js";\n';
+
+    expect(removeComments(source).code).toBe(source);
   });
 
   it("does not shield below stylelint-disable-line or the stylelint range commands", () => {
@@ -326,21 +332,16 @@ describe("removeComments", () => {
     expect(removeComments(dprint).code).toBe("const a = [1]; // dprint-ignore\nconst b = 2;\n");
   });
 
-  it("treats every JS line terminator as ending a suppression's line", () => {
-    // With U+2028 or a lone \r as the break, the suppression still stands on
-    // its own line and must shield the comment below it.
-    const lineSeparator = "// oxfmt-ignore\u2028// shielded\u2028const x = 1;\n";
-    expect(removeComments(lineSeparator).code).toBe(lineSeparator);
+  it.each(["\u2028", "\r", "\u2029", "\r\n"])(
+    "treats every JS line terminator as ending a suppression's line: %j",
+    (lineBreak) => {
+      // The suppression stands on its own line, and the line below it stays,
+      // ended by its own line break.
+      const source = ["// oxfmt-ignore", "// note", "const x = 1;", ""].join(lineBreak);
 
-    const bareCr = "// oxfmt-ignore\r// shielded\rconst x = 1;\r";
-    expect(removeComments(bareCr).code).toBe(bareCr);
-
-    const paragraphSeparator = "// oxfmt-ignore\u2029// shielded\u2029const x = 1;\n";
-    expect(removeComments(paragraphSeparator).code).toBe(paragraphSeparator);
-
-    const crlf = "// oxfmt-ignore\r\n// shielded\r\nconst x = 1;\r\n";
-    expect(removeComments(crlf).code).toBe(crlf);
-  });
+      expect(removeComments(source).code).toBe(["// oxfmt-ignore", "", "const x = 1;", ""].join(lineBreak));
+    },
+  );
 
   it("tidies lines on exotic line terminators the same way as on LF", () => {
     // Lone-CR / U+2028 / U+2029 sources get the same treatment as \n and
@@ -352,8 +353,8 @@ describe("removeComments", () => {
     expect(removeComments("// gone\u2029const b = 2;\u2029").code).toBe("const b = 2;\u2029");
   });
 
-  it("shields below node:coverage ignore next but not below its range forms", () => {
-    const nextForm = "/* node:coverage ignore next */\n// shielded\nconst a = 1;\n";
+  it("keeps the comment below node:coverage ignore next but not below its range forms", () => {
+    const nextForm = "/* node:coverage ignore next */\n// stays\nconst a = 1;\n";
     expect(removeComments(nextForm).code).toBe(nextForm);
 
     const rangeForm = "/* node:coverage disable */\n// gone\nconst b = 1;\n";
@@ -368,8 +369,8 @@ describe("removeComments", () => {
     expect(result.kept.map((comment) => comment.directive)).toEqual(["istanbul-ignore-file", "v8-ignore-file"]);
   });
 
-  it("shields below line-comment coverage hints, which Vitest's v8 provider honours", () => {
-    const source = "// v8 ignore next\n// shielded\nfunction f() {}\n";
+  it("keeps the comment below line-comment coverage hints, which Vitest's v8 provider honours", () => {
+    const source = "// v8 ignore next\n// stays\nfunction f() {}\n";
 
     expect(removeComments(source).code).toBe(source);
   });
@@ -497,8 +498,9 @@ describe("removeComments next-line shielding by whole lines", () => {
   });
 
   it("chains shields through comments that were re-protected", () => {
-    // The skipped @ts-expect-error shields the @ts-ignore line; the kept
-    // @ts-ignore then shields the plain comment, so nothing may be removed.
+    // tsc stops at the `@ts-ignore` on its way up from `broken()`: without
+    // it, the skipped `@ts-expect-error` would take the diagnostic. So it
+    // stays, and then keeps the line below it in turn.
     const source = "// @ts-expect-error\n// @ts-ignore\n// plain\nbroken();\n";
 
     const result = removeComments(source, {
@@ -506,8 +508,20 @@ describe("removeComments next-line shielding by whole lines", () => {
       shouldRemove: (comment) => comment.directive !== "@ts-expect-error",
     });
 
-    expect(result.changed).toBe(false);
-    expect(result.code).toBe(source);
+    expect(result.code).toBe("// @ts-expect-error\n// @ts-ignore\n\nbroken();\n");
+    expect(result.kept.map((comment) => comment.text)).toEqual(["// @ts-ignore"]);
+  });
+
+  it("removes a suppression tsc does not stop at on its way up to one that stays", () => {
+    // `foo();` already stops tsc in front of the trailing `@ts-ignore`.
+    const source = "// @ts-expect-error\nfoo(); // @ts-ignore\nbroken();\n";
+
+    const result = removeComments(source, {
+      removeDirectives: true,
+      shouldRemove: (comment) => comment.directive !== "@ts-expect-error",
+    });
+
+    expect(result.code).toBe("// @ts-expect-error\nfoo();\nbroken();\n");
   });
 
   it("does not treat prose like 'ignore next 3' in a directive reason as a counted shield", () => {
@@ -520,12 +534,9 @@ describe("removeComments next-line shielding by whole lines", () => {
   });
 
   it("honours counted coverage pragmas with five or more digits", () => {
-    const source = "/* c8 ignore next 10000 */\nconst a = 1;\n// A\n// B\n";
+    const source = "/* c8 ignore next 10000 */\nconst a = 1;\n// A\n// B\nconst b = 2;\n";
 
-    const result = removeComments(source);
-
-    expect(result.changed).toBe(false);
-    expect(result.kept.map((comment) => comment.text)).toEqual(["/* c8 ignore next 10000 */", "// A", "// B"]);
+    expect(removeComments(source).code).toBe("/* c8 ignore next 10000 */\nconst a = 1;\n\n\nconst b = 2;\n");
   });
 
   it("shields a line targeted by two directives sharing the line above it only once", () => {
@@ -620,14 +631,14 @@ describe("removeComments on the rows oxlint reads its line directives on", () =>
   // oxlint ends a row at a line feed alone: a lone CR, U+2028 or U+2029 —
   // a line break to tsc and ESLint — leaves the row open. Verified against
   // oxlint 1.90.
-  it("keeps the comment-only row a next-line directive covers past a U+2028", () => {
+  it("leaves the comment-only row a next-line directive covers past a U+2028 in place", () => {
     const source = "/* eslint-disable-next-line no-debugger */\u2028foo();\n// note\ndebugger;\n";
-    const result = removeComments(source);
 
-    expect(result.changed).toBe(false);
-    expect(result.kept.map((comment) => comment.text)).toContain("// note");
-    // The row may be the file's last, with no line feed after it.
-    expect(removeComments("/* eslint-disable-next-line no-debugger */\u2028foo();\n// note").changed).toBe(false);
+    expect(removeComments(source).code).toBe("/* eslint-disable-next-line no-debugger */\u2028foo();\n\ndebugger;\n");
+    // With nothing below it, the row goes with its comment.
+    expect(removeComments("/* eslint-disable-next-line no-debugger */\u2028foo();\n// note").code).toBe(
+      "/* eslint-disable-next-line no-debugger */\u2028foo();\n",
+    );
   });
 
   it("leaves a comment's U+2028 where a line feed would split the row a next-line directive covers", () => {
@@ -817,12 +828,12 @@ describe("removeComments below tsc suppressions", () => {
     expect(result.changed).toBe(false);
   });
 
-  it("still removes the `//` lines tsc steps over, below the line Flow targets", () => {
+  it("removes the `//` lines tsc steps over, leaving the line Flow targets in place", () => {
     const source = "// @ts-ignore\n// note\n\n// gone\nfoo();\n";
 
     const result = removeComments(source);
 
-    expect(result.code).toBe("// @ts-ignore\n// note\n\nfoo();\n");
+    expect(result.code).toBe("// @ts-ignore\n\nfoo();\n");
   });
 
   it("treats a line tsc 7 does not step over as blocking, though tsc 6 would", () => {
@@ -872,7 +883,7 @@ describe("removeComments below tsc suppressions", () => {
 });
 
 describe("removeComments for directives that must stay the last comment before their target", () => {
-  it("keeps every comment between @deno-types and its import, trailing ones included", () => {
+  it("keeps the comment between @deno-types and its import, a trailing one included", () => {
     // deno_graph reads the directive from the import's last leading comment:
     // with another comment after it the directive is inert, and deleting
     // that comment would activate it.
@@ -909,6 +920,57 @@ describe("removeComments for directives that must stay the last comment before t
     expect(removeComments(source).changed).toBe(false);
   });
 
+  it.each([
+    [
+      '// @deno-types="./x.d.ts"\n// one\n\n// two\nimport y from "./y.js";\n',
+      '// @deno-types="./x.d.ts"\n\n// two\nimport y from "./y.js";\n',
+    ],
+    [
+      '// @deno-types="./x.d.ts"\n/* one */ /* two */ import y from "./y.js";\n',
+      '// @deno-types="./x.d.ts"\n/* two */ import y from "./y.js";\n',
+    ],
+    [
+      "const q = /* GraphQL */ /* one */ /* two */ `query { a }`;\n",
+      "const q = /* GraphQL */ /* two */ `query { a }`;\n",
+    ],
+    [
+      "// ts-prune-ignore-next\n// one\n// two\nexport const a = 1;\n",
+      "// ts-prune-ignore-next\n// two\nexport const a = 1;\n",
+    ],
+    [
+      "switch (x) {\n  case 1:\n    a();\n    // falls through\n\n    // one\n    // two\n  case 2:\n    b();\n    break;\n  // no default\n  // one\n  // two\n}\n",
+      "switch (x) {\n  case 1:\n    a();\n    // falls through\n\n    // two\n  case 2:\n    b();\n    break;\n  // no default\n  // two\n}\n",
+    ],
+  ])("keeps only the last of several comments there: %j", (source, expected) => {
+    // One comment after the directive leaves it inert, and the tools read
+    // the last one in front of the target.
+    expect(removeComments(source).code).toBe(expected);
+  });
+
+  it("keeps the last comment between a JetBrains suppression and its statement", () => {
+    // The IDE takes `noinspection` from the comment right in front of a
+    // statement, past whitespace alone.
+    const apart = "// noinspection JSUnusedLocalSymbols\n\n// one\n/* two */ foo();\n";
+    const adjacent = "// noinspection JSUnusedLocalSymbols\nfoo(); // gone\n";
+
+    expect(removeComments(apart).code).toBe("// noinspection JSUnusedLocalSymbols\n\n/* two */ foo();\n");
+    expect(removeComments(adjacent).code).toBe("// noinspection JSUnusedLocalSymbols\nfoo();\n");
+  });
+
+  it("removes every comment below a JetBrains suppression for the whole file", () => {
+    const source = "//file:noinspection JSUnusedGlobalSymbols\n// gone\nfoo();\n";
+
+    expect(removeComments(source).code).toBe("//file:noinspection JSUnusedGlobalSymbols\nfoo();\n");
+  });
+
+  it("keeps the last comment between a language injection and its literal", () => {
+    const inline = "const t = /* language=HTML */ /* one */ /* two */ `<b></b>`;\n";
+    const above = "// language=HTML\n// note\nconst t = `<b></b>`; // gone\n";
+
+    expect(removeComments(inline).code).toBe("const t = /* language=HTML */ /* two */ `<b></b>`;\n");
+    expect(removeComments(above).code).toBe("// language=HTML\n// note\nconst t = `<b></b>`;\n");
+  });
+
   it("removes ordinary comments after the target as usual", () => {
     const spaced = "const q = /* GraphQL */ `query { a }`; // gone\n";
     const tight = "const q = /* GraphQL */`query { a }`; // gone\n";
@@ -922,7 +984,9 @@ describe("removeComments shields from directives that mention another tool's mar
   it("keeps the next-line shield of a directive whose text mentions a JSX pragma", () => {
     const source = "// nosemgrep: react-dangerously-set-inner-html -- @jsx h below\n// note\nrender();\n";
 
-    expect(removeComments(source).changed).toBe(false);
+    expect(removeComments(source).code).toBe(
+      "// nosemgrep: react-dangerously-set-inner-html -- @jsx h below\n\nrender();\n",
+    );
   });
 
   it("shields what a directive another one names the comment for reaches", () => {
@@ -957,21 +1021,50 @@ describe("removeComments shields from directives that mention another tool's mar
     const firstLine = "/* nosemgrep\n   reason */\n// note\nsecret();\n";
     const trailing = "foo(); // nosemgrep\n// note\nsecret();\n";
 
-    expect(removeComments(opening).changed).toBe(false);
-    expect(removeComments(lastLine).changed).toBe(false);
-    expect(removeComments(punctuation).changed).toBe(false);
+    expect(removeComments(opening).code).toBe("// nosemgrep: secret-call\n\nsecret();\n");
+    expect(removeComments(lastLine).code).toBe("/* reason\nnosemgrep */\n\nsecret();\n");
+    expect(removeComments(punctuation).code).toBe("foo(() => {\n}); // nosemgrep\n\nsecret();\n");
     expect(removeComments(prose).code).toBe("// TODO nosemgrep\nsecret();\n");
     expect(removeComments(firstLine).code).toBe("/* nosemgrep\n   reason */\nsecret();\n");
     expect(removeComments(trailing).code).toBe("foo(); // nosemgrep\nsecret();\n");
   });
 
-  it("reads the line a nosemgrep stands on without the comments in front of it, which may go", () => {
-    expect(removeComments("/* x */ // nosemgrep\n// note\nsecret();\n").code).toBe(
-      "// nosemgrep\n// note\nsecret();\n",
-    );
-    expect(removeComments("/* a\nb */ // nosemgrep\n// note\nsecret();\n").code).toBe(
-      "// nosemgrep\n// note\nsecret();\n",
-    );
+  it("reads a nosemgrep on the row it ends on, which runs past a lone CR or a U+2028", () => {
+    // Semgrep ends a row at a line feed alone. Verified against Semgrep 1.184.
+    const lineBelow = "foo(); // nosemgrep\r// gone\nbar();\n";
+    const lastRow = "/* gone */ foo(); // nosemgrep";
+
+    // The line the comment stood on is part of the suppression's row: it stays a line.
+    expect(removeComments(lineBelow).code).toBe("foo(); // nosemgrep\n\rbar();\n");
+    expect(removeComments(lastRow).code).toBe("foo(); // nosemgrep");
+  });
+
+  it("keeps what follows the rule ids of a nosemgrep on its row", () => {
+    // Semgrep reads the ids up to the end of the row: a comment past a lone CR
+    // is part of what it reads.
+    const source = "foo(); // nosemgrep: rule-id\r// part of the ids\nbar(); // gone\n";
+    const lastRow = "foo(); // nosemgrep: rule-id\r// part of the ids";
+
+    expect(removeComments(source).code).toBe("foo(); // nosemgrep: rule-id\r// part of the ids\nbar();\n");
+    expect(removeComments(lastRow).changed).toBe(false);
+  });
+
+  it("lets the comments in front of a nosemgrep go where the line it then reaches holds no code", () => {
+    // With `/* x */` gone, Semgrep applies the marker to the line below too,
+    // which stays a line without code.
+    expect(removeComments("/* x */ // nosemgrep\n// note\nsecret();\n").code).toBe("// nosemgrep\n\nsecret();\n");
+    expect(removeComments("/* a\nb */ // nosemgrep\n// note\nsecret();\n").code).toBe("// nosemgrep\n\nsecret();\n");
+    expect(removeComments("/* x */ // nosemgrep\n\nsecret();\n").code).toBe("// nosemgrep\n\nsecret();\n");
+  });
+
+  it("keeps the comment in front of a nosemgrep that would otherwise reach the code below", () => {
+    const source = "/* x */ // nosemgrep\nsecret();\n";
+    // Only the comment that holds a letter or digit keeps the marker off the
+    // start of its line.
+    const several = "/* - */ /* x */ /* y */ // nosemgrep\nsecret();\n";
+
+    expect(removeComments(source).changed).toBe(false);
+    expect(removeComments(several).code).toBe("/* y */ // nosemgrep\nsecret();\n");
   });
 
   it("does not shield the line below a node:coverage range pragma", () => {
@@ -1042,7 +1135,9 @@ describe("removeComments keeps the shields of directives that open a comment", (
     // detect-secrets' next-line pragma, which keeps its name and shield.
     const source = '// pragma: allowlist nextline secret (gitleaks:allow too)\n// note\nconst key = "x";\n';
 
-    expect(removeComments(source).changed).toBe(false);
+    expect(removeComments(source).code).toBe(
+      '// pragma: allowlist nextline secret (gitleaks:allow too)\n\nconst key = "x";\n',
+    );
   });
 });
 
@@ -1085,19 +1180,27 @@ describe("removeComments keeps what tools read in large real-world codebases", (
     expect(removeComments(source).code).toBe('test("x", () => {});\n');
   });
 
-  it("shields the line below a standalone ast-grep suppression", () => {
-    const source = "// ast-grep-ignore: no-eval\n// why\neval(x);\n";
+  it("leaves the line below a standalone ast-grep suppression in place", () => {
+    const source = "x();\n// ast-grep-ignore: no-eval\n// why\neval(x);\n";
 
-    expect(removeComments(source).changed).toBe(false);
+    expect(removeComments(source).code).toBe("x();\n// ast-grep-ignore: no-eval\n\neval(x);\n");
   });
 
-  it("shields the line below an ast-grep block comment that code follows but nothing precedes", () => {
+  it("keeps the comment below an ast-grep suppression on the file's first line", () => {
+    // With `// why` gone, the next node would start two lines down, and the
+    // suppression would cover the whole file.
+    const source = "// ast-grep-ignore: no-eval\n// why\n// gone\neval(x);\n";
+
+    expect(removeComments(source).code).toBe("// ast-grep-ignore: no-eval\n// why\neval(x);\n");
+  });
+
+  it("leaves the line below an ast-grep block comment that code follows but nothing precedes", () => {
     // ast-grep only asks what precedes the comment on its line: nothing does,
-    // so it suppresses the next line, not `foo()`. Dropping `// filler` would
-    // move `bar()` onto that line.
+    // so it suppresses the next line, not `foo()`. Dropping the line of
+    // `// filler` would move `bar()` onto that line.
     const source = "/* ast-grep-ignore */ foo();\n// filler\nbar();\n";
 
-    expect(removeComments(source).changed).toBe(false);
+    expect(removeComments(source).code).toBe("/* ast-grep-ignore */ foo();\n\nbar();\n");
   });
 
   it("shields nothing below an ast-grep suppression that trails code", () => {
@@ -1161,11 +1264,11 @@ describe("removeComments keeps what tools read in large real-world codebases", (
     expect(removeComments(tsc).changed).toBe(false);
   });
 
-  it("shields the row below a suppression trailing a statement that starts rows up, as releases up to 0.43 read it", () => {
+  it("leaves the row below a suppression trailing a statement that starts rows up, as releases up to 0.43 read it", () => {
     // From 0.44.0 it suppresses `foo(...)`; up to 0.43 it suppresses the next row.
-    const source = "foo(\n  1,\n); // ast-grep-ignore\n// shielded\neval(y);\n";
+    const source = "foo(\n  1,\n); // ast-grep-ignore\n// note\neval(y);\n";
 
-    expect(removeComments(source).changed).toBe(false);
+    expect(removeComments(source).code).toBe("foo(\n  1,\n); // ast-grep-ignore\n\neval(y);\n");
   });
 
   it("keeps the comments whose removal would join the rows an ast-grep suppression covers", () => {
@@ -1195,13 +1298,13 @@ describe("removeComments keeps what tools read in large real-world codebases", (
 
   it("counts ast-grep's rows by line feeds, which a lone CR or U+2028 does not end", () => {
     // `foo();` shares the comment's row, so the row it covers is the next one.
-    const bareCr = "x();\n// ast-grep-ignore\rfoo();\n// shielded\neval(y);\n";
-    const separator = "x();\n// ast-grep-ignore\u2028foo();\n// shielded\neval(y);\n";
+    const bareCr = "x();\n// ast-grep-ignore\rfoo();\n// note\neval(y);\n";
+    const separator = "x();\n// ast-grep-ignore\u2028foo();\n// note\neval(y);\n";
     // `x();` shares the comment's row, so the comment trails it and covers no row below.
     const trailing = "x();\r// ast-grep-ignore\n// gone\neval(y);\n";
 
-    expect(removeComments(bareCr).changed).toBe(false);
-    expect(removeComments(separator).changed).toBe(false);
+    expect(removeComments(bareCr).code).toBe("x();\n// ast-grep-ignore\rfoo();\n\neval(y);\n");
+    expect(removeComments(separator).code).toBe("x();\n// ast-grep-ignore\u2028foo();\n\neval(y);\n");
     expect(removeComments(trailing).code).toBe("x();\r// ast-grep-ignore\neval(y);\n");
   });
 
@@ -1339,6 +1442,33 @@ describe("removeComments around the coverage hints Vitest's providers read", () 
     ]);
   });
 
+  it("keeps the first of several comments there, on the hint's own line where one stands on it", () => {
+    // Any comment after the hint leaves ast-v8-to-istanbul's without a target;
+    // one on the hint's line also keeps monocart from counting the line below.
+    expect(removeComments("/* v8 ignore next */\n// one\n// two\nfoo();\n").code).toBe(
+      "/* v8 ignore next */\n// one\nfoo();\n",
+    );
+    expect(removeComments("/* v8 ignore next */ /* one */ /* two */\n// three\nfoo();\n").code).toBe(
+      "/* v8 ignore next */ /* one */\n\nfoo();\n",
+    );
+  });
+
+  it("keeps none where a comment that stays already stands there", () => {
+    const below = "/* c8 ignore next */\n// eslint-disable-next-line no-console\n// gone\nconsole.log(1);\n";
+    const sameLine = "/* c8 ignore next */ /* eslint-disable-line */\n// gone\na();\n";
+
+    expect(removeComments(below).code).toBe(
+      "/* c8 ignore next */\n// eslint-disable-next-line no-console\n\nconsole.log(1);\n",
+    );
+    expect(removeComments(sameLine).code).toBe("/* c8 ignore next */ /* eslint-disable-line */\n\na();\n");
+  });
+
+  it("keeps the one on the hint's line even where a comment stays below it", () => {
+    const source = "/* c8 ignore next */ /* note */\n// eslint-disable-next-line no-console\nconsole.log(1);\n";
+
+    expect(removeComments(source).changed).toBe(false);
+  });
+
   it("still removes the comments past the start of the node, and those after a hint no code follows", () => {
     const inside = "/* c8 ignore else */\nif (x) {\n  f(); // gone\n} else {\n  g();\n}\n";
 
@@ -1350,16 +1480,28 @@ describe("removeComments around the coverage hints Vitest's providers read", () 
     expect(removeComments("/* v8 ignore file */\n\n// gone\nf();\n").code).toBe("/* v8 ignore file */\n\nf();\n");
   });
 
-  it("shields one line below a counted istanbul hint, which only istanbul and ast-v8-to-istanbul read", () => {
-    expect(removeComments("/* istanbul ignore next 2 */\nf();\n// gone\ng();\n").code).toBe(
-      "/* istanbul ignore next 2 */\nf();\ng();\n",
+  it("holds no line below the hints that apply to a node, which no tool counts lines for", () => {
+    // istanbul and ast-v8-to-istanbul alone read the `istanbul` hints and the
+    // `if` and `else` forms, and apply them to a node wherever its line is.
+    const inBlock = "/* istanbul ignore if */ if (!scope) {\n  // never happens\n  return;\n}\n";
+    const elseForm = "/* v8 ignore else */ if (x) {\n  // note\n  a();\n} else {\n  b();\n}\n";
+    const counted = "/* istanbul ignore next 2 */\nf();\n// gone\ng();\n";
+    const trailing = "/* istanbul ignore next */ // why\n// gone\nfoo();\n";
+
+    expect(removeComments(inBlock).code).toBe("/* istanbul ignore if */ if (!scope) {\n  return;\n}\n");
+    expect(removeComments(elseForm).code).toBe("/* v8 ignore else */ if (x) {\n  a();\n} else {\n  b();\n}\n");
+    expect(removeComments(counted).code).toBe("/* istanbul ignore next 2 */\nf();\ng();\n");
+    expect(removeComments(trailing).code).toBe("/* istanbul ignore next */ // why\nfoo();\n");
+    // c8 and monocart count the line below an `ignore next` of theirs.
+    expect(removeComments("/* v8 ignore next */ if (x) {\n  // note\n  a();\n}\n").code).toBe(
+      "/* v8 ignore next */ if (x) {\n\n  a();\n}\n",
     );
   });
 
   it("counts the lines monocart reads from digits glued to `next`", () => {
-    const source = "// v8 ignore next3\nf();\n// kept\ng();\n// gone\nh();\n";
+    const source = "// v8 ignore next3\nf();\n// note\ng();\n// gone\nh();\n";
 
-    expect(removeComments(source).code).toBe("// v8 ignore next3\nf();\n// kept\ng();\nh();\n");
+    expect(removeComments(source).code).toBe("// v8 ignore next3\nf();\n\ng();\nh();\n");
   });
 
   it("keeps a comment mentioning import.meta.vitest, which makes Vitest run an includeSource file", () => {
@@ -1565,12 +1707,12 @@ describe("removeComments between the imports and the code after them", () => {
     expect(removeComments(`${a}\n// gone\n`).code).toBe(`${a}\n`);
   });
 
-  it("lets a removal go that gives a linter an empty line it did not find before", () => {
-    // The multi-line comment goes for a line feed, which oxlint counts where
-    // it counted none in the comment's lone CR.
+  it("leaves the line break of a multi-line comment in the gap, so each linter counts what it counted", () => {
+    // The comment's lone CR stays: eslint-plugin-import still finds its
+    // empty line, and oxlint, which counts line feeds, finds none as before.
     const source = `${a} /* note\r more */ /*! legal */\nf(a);\n`;
 
-    expect(removeComments(source).code).toBe(`${a}\n /*! legal */\nf(a);\n`);
+    expect(removeComments(source).code).toBe(`${a}\r /*! legal */\nf(a);\n`);
   });
 
   it("lets a kept directive hold the line, so no empty line goes in", () => {

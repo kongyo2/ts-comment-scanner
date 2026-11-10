@@ -444,11 +444,34 @@
             </div>
             <div class="fix">
               <span class="ja"
-                >次行指示子の直下にあるコメント行は削除しない。消すとその行や行指示子の行を隣の行とつなげる複数行コメントは、削除して改行を残す</span
+                >コメントは削除し、その行を空行として残す。複数行コメントは改行を残すので、指示子やカバレッジのヒントが数える行は動かない。コメントを残すのは、ツールが指示子と前後のコメントを併せて読む位置だけ</span
               >
               <span class="en"
-                >comment lines shielded by next-line directives are kept, and a multi-line comment whose removal would
-                join that line, or a line directive's own, to another goes with a line break left in its place</span
+                >the comment goes and its line stays, empty; a multi-line comment leaves its line breaks, so the lines a
+                directive or a coverage hint counts never move. A comment stays only where a tool reads the directive
+                together with the comments around it</span
+              >
+            </div>
+          </div>
+          <div class="guard">
+            <div class="danger">
+              <span class="ja"
+                ><code>.js</code> の <code>/** @type {…} */</code> や <code>@typedef</code> を消すと、tsc
+                の型チェック(<code>checkJs</code>)の結果が変わる</span
+              >
+              <span class="en"
+                >deleting a <code>/** @type {…} */</code> or a <code>@typedef</code> from a <code>.js</code> file
+                changes what tsc reports under <code>checkJs</code></span
+              >
+            </div>
+            <div class="fix">
+              <span class="ja"
+                >JavaScript では、tsc が読む JSDoc タグ(<code>@type</code>・<code>@param</code>・<code>@typedef</code>
+                など)を持つコメントをディレクティブとして保持。説明だけの JSDoc は削除</span
+              >
+              <span class="en"
+                >in JavaScript, a JSDoc comment holding a tag tsc reads (<code>@type</code>, <code>@param</code>,
+                <code>@typedef</code>, …) is kept as a directive; one that only documents goes</span
               >
             </div>
           </div>
@@ -485,11 +508,11 @@
         </div>
         <p class="proof-line">
           <span class="ja"
-            >// この挙動は <strong>1072 本のテスト</strong>と <strong>100% カバレッジ</strong>(statements / branches /
+            >// この挙動は <strong>1377 本のテスト</strong>と <strong>100% カバレッジ</strong>(statements / branches /
             functions / lines)で固定しています</span
           >
           <span class="en"
-            >// pinned by <strong>1072 tests</strong> at <strong>100% coverage</strong> — statements, branches,
+            >// pinned by <strong>1377 tests</strong> at <strong>100% coverage</strong> — statements, branches,
             functions and lines</span
           >
         </p>

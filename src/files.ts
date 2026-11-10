@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, open, readFile, readdir, realpath, rename, rm, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import picomatch from "picomatch";
-import { scanComments } from "./scanner.js";
+import { scanComments, type ScanOptions } from "./scanner.js";
 import type { FileScanResult } from "./types.js";
 
 const DEFAULT_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"];
@@ -332,14 +332,27 @@ function toPosix(path: string): string {
   return sep === "/" ? path : path.split(sep).join("/");
 }
 
+// The extensions tsc reads as JavaScript, with types in JSDoc.
+const JAVASCRIPT_EXTENSIONS = [".js", ".jsx", ".mjs", ".cjs"];
+
 // TypeScript parses plain JavaScript with the JSX language variant, so `.js`
 // belongs here: read as TS instead, `<div>http://x</div>` in a React file
 // becomes a type assertion followed by a phantom `//x` comment.
-const JSX_EXTENSIONS = [".tsx", ".jsx", ".js", ".mjs", ".cjs"];
+const JSX_EXTENSIONS = [".tsx", ...JAVASCRIPT_EXTENSIONS];
 
 /** True for files whose syntax admits JSX (`.tsx`, `.jsx` and plain JavaScript), case-insensitively. */
 export function isJsxFile(file: string): boolean {
   return hasExtension(file, JSX_EXTENSIONS);
+}
+
+/** True for JavaScript files (`.js`, `.jsx`, `.mjs`, `.cjs`), case-insensitively. */
+export function isJavaScriptFile(file: string): boolean {
+  return hasExtension(file, JAVASCRIPT_EXTENSIONS);
+}
+
+/** The scan options a file's extension calls for. */
+export function scanOptionsFor(file: string): ScanOptions {
+  return { jsx: isJsxFile(file), javascript: isJavaScriptFile(file) };
 }
 
 export type FileEncoding = "utf8" | "utf16le" | "utf16be";
@@ -441,7 +454,7 @@ export async function writeFileAtomic(file: string, data: Buffer): Promise<void>
 
 export async function scanFile(file: string): Promise<FileScanResult> {
   const { text } = await readFileText(file);
-  return { file, comments: scanComments(text, { jsx: isJsxFile(file) }) };
+  return { file, comments: scanComments(text, scanOptionsFor(file)) };
 }
 
 export async function scanPaths(inputs: string[], options: CollectOptions = {}): Promise<FileScanResult[]> {

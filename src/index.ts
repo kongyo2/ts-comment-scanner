@@ -3,6 +3,7 @@ export {
   collectFiles,
   decodeFileText,
   encodeFileText,
+  isJavaScriptFile,
   isJsxFile,
   readFileText,
   scanFile,

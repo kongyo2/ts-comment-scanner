@@ -1,4 +1,4 @@
-import { LINE_BREAK, LINE_TERMINATOR, isBlank, isHorizontalSpace, lineStartOffsets } from "./lines.js";
+import { LINE_BREAK, LINE_TERMINATOR, isBlank, isHorizontalSpace, lineIndexAt, lineStartOffsets } from "./lines.js";
 import { firstIndexAtOrAfter, rangeAt, type Range } from "./ranges.js";
 
 /** One change to the source: a range to delete (tidying its line) or to replace verbatim. */
@@ -18,12 +18,26 @@ export interface Edit extends Range {
    * the empty line.
    */
   blankLine?: boolean;
+}
+
+/**
+ * The lines (1-based, numbered as lineStartOffsets numbers them) that
+ * deleting ranges has to leave in place, each a line of its own, because a
+ * directive that stays covers them.
+ */
+export interface ShieldedLines {
   /**
-   * With code on both sides of a range that spans lines, one of its own line
-   * breaks takes its place, wherever the range stands (see ownLineBreak), so
-   * the code on either side stays on lines and rows apart.
+   * The lines a directive covers. None is joined to another: with code on
+   * both sides of a deleted range that spans lines, one of them shielded, a
+   * line break of the range stays between them, wherever the range stands.
    */
-  lineBreak?: boolean;
+  shielded: ReadonlySet<number>;
+  /**
+   * Those of them the deletions empty that still have something below them
+   * (see heldLines). Each stays, as an empty line, so that what is below it
+   * moves up no line.
+   */
+  held: ReadonlySet<number>;
 }
 
 // Brackets never merge with what follows them, nor punctuation with what
@@ -38,19 +52,29 @@ function needsSpace(before: string, after: string): boolean {
   return !OPENING_BRACKETS.includes(before) && !CLOSING_PUNCTUATION.includes(after);
 }
 
+// Every line break of a text, CRLF as one.
+const ALL_LINE_BREAKS = new RegExp(LINE_BREAK.source, "g");
+
 /**
- * The line break that keeps the code on both sides of a deleted range apart
- * as the range did: a line feed, with the CR in front of it when the range
- * has a CRLF, for a range holding one, which ends a line for every tool, and
- * otherwise the range's first line terminator, which ends one for tsc and
- * ESLint but none for the tools that only count line feeds (tree-sitter,
- * oxlint, Semgrep, c8).
+ * The `count` line breaks that stay of those a deletion could take along —
+ * the ones inside the deleted range, and the ones around the lines it
+ * empties. Those ending in a line feed stay first: they end a line for
+ * every tool, where a lone CR, U+2028 or U+2029 ends one for tsc and ESLint
+ * but none for the tools that only count line feeds (tree-sitter, oxlint,
+ * Semgrep, c8), so the code on both sides stays on rows apart wherever a
+ * line feed held it apart. They stay in the order the source has them.
  */
-function ownLineBreak(deleted: string): string {
-  if (deleted.includes("\r\n")) return "\r\n";
-  if (deleted.includes("\n")) return "\n";
-  return (LINE_TERMINATOR.exec(deleted) as RegExpExecArray)[0];
+function stayingBreaks(breaks: readonly string[], count: number): string[] {
+  const staying = new Set<number>();
+  for (const lineFeed of [true, false]) {
+    for (const [index, lineBreak] of breaks.entries()) {
+      if (staying.size < count && lineBreak.endsWith("\n") === lineFeed) staying.add(index);
+    }
+  }
+  return breaks.filter((_, index) => staying.has(index));
 }
+
+const NO_SHIELDED_LINES: ShieldedLines = { shielded: new Set(), held: new Set() };
 
 // A global copy of the line-break matcher, so exec() can resume from a removal's end offset.
 const NEXT_LINE_BREAK = new RegExp(LINE_BREAK.source, "g");
@@ -65,19 +89,39 @@ function lastLineBreakEnd(chunk: string): number {
 
 /**
  * Applies sorted, non-overlapping edits to the source, tidying the lines of
- * deleted ranges. Output is accumulated as segments with incremental
- * line-state tracking, so the work stays linear in the source size even for
- * comment-dense files.
+ * deleted ranges and leaving the shielded lines in place. Output is
+ * accumulated as segments with incremental line-state tracking, so the work
+ * stays linear in the source size even for comment-dense files.
+ *
+ * A deleted range takes line breaks along: its own, and where it empties
+ * lines, the ones around them. As many of them stay as there are lines left
+ * to end — the line of the code before the range, a line break that kept two
+ * tokens apart, the held lines — and which ones is stayingBreaks' choice.
  */
-export function applyEdits(source: string, edits: readonly Edit[]): string {
+export function applyEdits(source: string, edits: readonly Edit[], lines: ShieldedLines = NO_SHIELDED_LINES): string {
   const segments: string[] = [];
   let cursor = 0;
+  const lineStarts = lines.shielded.size > 0 ? lineStartOffsets(source) : [];
+  /** The (1-based) line holding the offset; 0 where no line is shielded. */
+  const lineOf = (offset: number): number => (lineStarts.length === 0 ? 0 : lineIndexAt(lineStarts, offset) + 1);
+  /** How many of the lines `from` to `to` (inclusive) are held. */
+  const heldAmong = (from: number, to: number): number => {
+    let held = 0;
+    for (let line = from; line <= to; line += 1) {
+      if (lines.held.has(line)) held += 1;
+    }
+    return held;
+  };
   /** Whether the output's current (unterminated) line is all whitespace so far. */
   let lineIsBlank = true;
   /** Last character of the output so far ("" while empty). */
   let lastChar = "";
 
-  const push = (chunk: string): void => {
+  /** The character the output ends in ("" while empty), read off the segments where some were taken off its end. */
+  const outputEnd = (): string => segments.at(-1)?.slice(-1) ?? "";
+
+  /** Appends the chunk as it is. */
+  const append = (chunk: string): void => {
     if (chunk === "") return;
     segments.push(chunk);
     const breakEnd = lastLineBreakEnd(chunk);
@@ -86,27 +130,59 @@ export function applyEdits(source: string, edits: readonly Edit[]): string {
   };
 
   /**
-   * Deletes everything the output holds after its last line break, and that
-   * break too when `takeBreak` asks for it and the break holds no line feed;
-   * returns whether it went.
+   * Appends the chunk, keeping the line breaks on both sides of the seam
+   * apart: a lone CR that a deletion leaves right in front of a line feed
+   * would read as one CRLF with it, a line break short, so the line feeds
+   * go in front of the CRs the output ends in.
    */
-  const dropCurrentLine = (takeBreak: boolean): boolean => {
+  const push = (chunk: string): void => {
+    let loneReturns = "";
+    while (lastChar === "\r" && chunk.startsWith("\n")) {
+      const last = segments.pop() as string;
+      if (last.length > 1) segments.push(last.slice(0, -1));
+      lastChar = outputEnd();
+      loneReturns += "\r";
+    }
+    const rest = loneReturns === "" ? chunk : chunk.replace(/^\n+/, "");
+    append(chunk.slice(0, chunk.length - rest.length) + loneReturns + rest);
+  };
+
+  /** Takes everything the output holds after its last line break out of it, and returns it. */
+  const takeCurrentLine = (): string => {
+    let taken = "";
     while (segments.length > 0) {
       const last = segments[segments.length - 1] as string;
       const breakEnd = lastLineBreakEnd(last);
-      if (breakEnd === -1) {
-        segments.pop();
-        continue;
+      taken = last.slice(breakEnd === -1 ? 0 : breakEnd) + taken;
+      if (breakEnd !== -1) {
+        segments[segments.length - 1] = last.slice(0, breakEnd);
+        break;
       }
-      const tookBreak = takeBreak && last.charAt(breakEnd - 1) !== "\n";
-      segments[segments.length - 1] = last.slice(0, tookBreak ? breakEnd - 1 : breakEnd);
-      lineIsBlank = !tookBreak;
-      lastChar = last.charAt(breakEnd - (tookBreak ? 2 : 1));
-      return tookBreak;
+      segments.pop();
     }
     lineIsBlank = true;
-    lastChar = "";
-    return false;
+    lastChar = outputEnd();
+    return taken;
+  };
+
+  /**
+   * Takes the line break the output ends in out of it, and returns it — none
+   * at the start of the output. Only called right after takeCurrentLine, and
+   * followed by a line break going back in, which sets the line state again.
+   */
+  const takeBreak = (): string[] => {
+    const last = segments.pop();
+    if (last === undefined) return [];
+    const lineBreak = last.endsWith("\r\n") ? "\r\n" : last.slice(-1);
+    const rest = last.slice(0, -lineBreak.length);
+    if (rest !== "") segments.push(rest);
+    lastChar = outputEnd();
+    return [lineBreak];
+  };
+
+  /** Puts `count` of the line breaks back in (see stayingBreaks). */
+  const keep = (breaks: readonly string[], count: number): void => {
+    for (const lineBreak of stayingBreaks(breaks, count)) push(lineBreak);
   };
 
   /**
@@ -155,44 +231,54 @@ export function applyEdits(source: string, edits: readonly Edit[]): string {
       // goes in.
       const lineFeed = source.slice(edit.start, lineEnd).includes("\r\n") ? "\r\n" : "\n";
       if (lineIsBlank) {
-        dropCurrentLine(false);
-        if (lastChar !== "\n") push(lineFeed);
+        takeCurrentLine();
+        if (lastChar !== "\n") append(lineFeed);
       } else {
         trimLineEnd();
-        push(lineFeed);
+        append(lineFeed);
       }
-      push(lineFeed);
+      append(lineFeed);
       cursor = isBlank(restContent) ? lineEnd : skipSpaces(cursor);
       continue;
     }
 
+    // The line breaks the range holds, the one after its last line, and the
+    // lines it starts and ends on.
+    const own: readonly string[] = deleted.match(ALL_LINE_BREAKS) ?? [];
+    const after = lineBreak === null ? [] : [lineBreak[0]];
+    const first = lineOf(edit.start);
+    const last = lineOf(Math.max(edit.start, edit.end - 1));
+
     if (lineIsBlank && isBlank(restContent)) {
-      // The range occupied whole line(s): drop them entirely, with the
-      // break that ends them — or, when that one is a line feed and the
-      // break in front of them is not, with that one instead. tree-sitter
-      // (and so ast-grep) starts a row at a line feed alone, so the rows
-      // around the dropped lines stay apart, while tsc sees one break either
-      // way.
-      cursor = dropCurrentLine(lineBreak?.[0].endsWith("\n") === true) ? contentEnd : lineEnd;
+      // The range occupied whole line(s): they go, with their line breaks,
+      // but for the held ones, which stay as empty lines. One line break
+      // still ends the line in front of them.
+      takeCurrentLine();
+      const before = takeBreak();
+      keep([...before, ...own, ...after], before.length + heldAmong(first, last));
+      cursor = lineEnd;
     } else if (isBlank(restContent)) {
-      // Trailing after code: trim the gap, keep the line break.
+      // Trailing after code: trim the gap; one line break ends the code's
+      // line. The lines the range empties below the code go, but for the
+      // held ones.
       trimLineEnd();
-      push(source.slice(contentEnd, lineEnd));
+      keep([...own, ...after], after.length + heldAmong(first + 1, last));
       cursor = lineEnd;
     } else if (
       !lineIsBlank &&
-      LINE_TERMINATOR.test(deleted) &&
-      (edit.lineBreak === true || needsSpace(lastChar, source.charAt(cursor)))
+      own.length > 0 &&
+      (isApart(first, last) || needsSpace(lastChar, source.charAt(cursor)))
     ) {
       // Code on both sides of a range that spans lines. Per ECMA-262 a
       // multi-line comment acts as a line terminator for semicolon
-      // insertion, so a real line break (matching the file's style) takes
-      // its place instead of merging the lines. (Right after an opening
-      // bracket or before closing punctuation a line terminator changes
-      // nothing, so a multi-line comment there goes without one, unless the
-      // lines are to stay apart.)
+      // insertion, so one of its line breaks takes its place instead of
+      // merging the lines. (Right after an opening bracket or before closing
+      // punctuation a line terminator changes nothing, so a multi-line
+      // comment there goes without one.) Where one of the two lines is
+      // shielded, a line break stays between them wherever the range stands,
+      // and the held lines between them stay as well.
       trimLineEnd();
-      push(edit.lineBreak === true ? ownLineBreak(deleted) : deleted.includes("\r\n") ? "\r\n" : "\n");
+      keep(own, heldAmong(first + 1, last - 1) + 1);
     } else if (lastChar !== "" && !isBlank(lastChar)) {
       // Code right before the range, more on the same line after it.
       if (edit.jsx === true) continue;
@@ -206,7 +292,15 @@ export function applyEdits(source: string, edits: readonly Edit[]): string {
       }
     } else {
       // Whitespace (or the line start) right before the range: the
-      // whitespace after it collapses into that.
+      // whitespace after it collapses into that. Where the range opened its
+      // line, the lines it empties above the code after it go, but for the
+      // held ones, and one line break still ends the line in front of them.
+      if (lineIsBlank && own.length > 0) {
+        const indentation = takeCurrentLine();
+        const before = takeBreak();
+        keep([...before, ...own], before.length + heldAmong(first, last - 1));
+        push(indentation);
+      }
       cursor = skipSpaces(cursor);
       if (edit.jsx !== true && !lineIsBlank && CLOSING_PUNCTUATION.includes(source.charAt(cursor))) {
         // `a /* x *​/)` — the space before only held the comment off the code.
@@ -217,6 +311,11 @@ export function applyEdits(source: string, edits: readonly Edit[]): string {
 
   segments.push(source.slice(cursor));
   return segments.join("");
+
+  /** Whether the lines a range starts and ends on have to stay apart: one is shielded, or held lines lie between. */
+  function isApart(first: number, last: number): boolean {
+    return lines.shielded.has(first) || lines.shielded.has(last) || heldAmong(first + 1, last - 1) > 0;
+  }
 }
 
 /** Where blocks open and close besides brackets: JSX tags, whose children are laid out like a block's. */
@@ -228,6 +327,56 @@ export interface BlockTags {
 }
 
 type LineKind = "vanishing" | "blank" | "code";
+
+/** Start offset and kind of every line of the source, a final line break ending the last line. */
+interface LineKinds {
+  offsets: number[];
+  kinds: LineKind[];
+}
+
+/**
+ * What becomes of each line once the (sorted) `deletions` are made: a line
+ * vanishes when every non-whitespace character on it is deleted; a blank
+ * line holds nothing but spaces and tabs (a lone vertical tab or no-break
+ * space is content to tsc 7) and lies outside every comment; any other line
+ * holds code.
+ */
+function lineKinds(source: string, deletions: readonly Range[], comments: readonly Range[]): LineKinds {
+  const offsets = lineStartOffsets(source);
+  // A final line break ends the last line rather than opening an empty one.
+  const lineCount =
+    offsets.length > 1 && offsets[offsets.length - 1] === source.length ? offsets.length - 1 : offsets.length;
+  const kinds: LineKind[] = [];
+  for (let line = 0; line < lineCount; line += 1) {
+    const start = offsets[line] as number;
+    const end = offsets[line + 1] ?? source.length;
+    kinds.push(lineKind(source, start, end, endOfContent(source, start, end), deletions, comments));
+  }
+  return { offsets, kinds };
+}
+
+/**
+ * The shielded lines (1-based) that the deletions empty and that still have
+ * code, or a comment that stays, somewhere below them. Dropping such a line
+ * would move what is below it up into the directive's reach, so it stays, as
+ * an empty line (see ShieldedLines.held); below the last line that keeps
+ * anything there is nothing to move.
+ */
+export function heldLines(
+  source: string,
+  deletions: readonly Range[],
+  comments: readonly Range[],
+  shieldedLines: ReadonlySet<number>,
+): Set<number> {
+  const held = new Set<number>();
+  if (shieldedLines.size === 0) return held;
+  const { kinds } = lineKinds(source, deletions, comments);
+  const lastKept = kinds.lastIndexOf("code");
+  for (const line of shieldedLines) {
+    if (line <= lastKept && kinds[line - 1] === "vanishing") held.add(line);
+  }
+  return held;
+}
 
 /**
  * Deletions of the blank lines that removing whole comment lines would pile
@@ -242,34 +391,24 @@ type LineKind = "vanishing" | "blank" | "code";
  * against that edge stay: the ones on the far side of the comment merely
  * separated the comment from the code.
  *
- * `deletions` are the ranges about to be deleted, sorted; a line vanishes
- * when every non-whitespace character on it is deleted. Blank lines hold
- * nothing but spaces and tabs (a lone vertical tab or no-break space is
- * content to tsc 7) and lie outside every comment. `shieldedLines` are
- * lines a surviving next-line directive reaches (1-based): the blank lines
- * among them stay, so no code moves into the directive's reach.
+ * `deletions` are the ranges about to be deleted, sorted. `shieldedLines`
+ * are the lines a surviving directive reaches (1-based): the blank lines
+ * among them stay, so no code moves into the directive's reach, and so do
+ * the `held` ones, which the deletions leave empty (see heldLines) — a held
+ * line counts among the blank lines its run is trimmed to.
  */
 export function blankLineEdits(
   source: string,
   deletions: readonly Range[],
   comments: readonly Range[],
-  shieldedLines: ReadonlySet<number>,
+  { shielded, held }: ShieldedLines,
   tags: BlockTags,
 ): Edit[] {
-  const offsets = lineStartOffsets(source);
-  // A final line break ends the last line rather than opening an empty one.
-  const lineCount =
-    offsets.length > 1 && offsets[offsets.length - 1] === source.length ? offsets.length - 1 : offsets.length;
+  const { offsets, kinds } = lineKinds(source, deletions, comments);
+  const lineCount = kinds.length;
   const lineStart = (line: number): number => offsets[line] as number;
   const lineContentEnd = (line: number): number =>
     endOfContent(source, lineStart(line), offsets[line + 1] ?? source.length);
-
-  const kinds: LineKind[] = [];
-  for (let line = 0; line < lineCount; line += 1) {
-    kinds.push(
-      lineKind(source, lineStart(line), offsets[line + 1] ?? source.length, lineContentEnd(line), deletions, comments),
-    );
-  }
 
   /** Offset of the first (or last) character on the line that survives the deletions and is not whitespace. */
   const survivingEdge = (line: number, fromEnd: boolean): number | undefined => {
@@ -304,12 +443,14 @@ export function blankLineEdits(
       continue;
     }
     const first = line;
+    // The lines of the run that are blank once the deletions are made.
     const blanks: number[] = [];
     // Blank lines between consecutive vanishing lines, from before the first to after the last.
     const gaps = [0];
     for (; line < lineCount && kinds[line] !== "code"; line += 1) {
       if (kinds[line] === "vanishing") {
         gaps.push(0);
+        if (held.has(line + 1)) blanks.push(line);
       } else {
         blanks.push(line);
         gaps[gaps.length - 1] = (gaps[gaps.length - 1] as number) + 1;
@@ -333,7 +474,7 @@ export function blankLineEdits(
       else keep = gaps.reduce((widest, gap) => Math.max(widest, gap));
     }
     for (const [position, blank] of blanks.entries()) {
-      if (shieldedLines.has(blank + 1)) keep = Math.max(keep, position + 1);
+      if (shielded.has(blank + 1)) keep = Math.max(keep, position + 1);
     }
     for (const blank of blanks.slice(keep)) {
       edits.push({ start: lineStart(blank), end: lineContentEnd(blank) });
