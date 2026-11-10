@@ -70,11 +70,11 @@ cleaning up only the files a coding agent just touched.
 Exit codes: 0 success, 1 comments reported with --fail-on-comment, 2 error.
 
 Examples:
-  ts-comment-scanner src
-  ts-comment-scanner --format github --fail-on-comment src
-  ts-comment-scanner --ignore "**/*.test.ts" --skip-directives src
-  ts-comment-scanner --remove --dry-run src
-  ts-comment-scanner --remove --diff main..HEAD
+  npx @kongyo2/ts-comment-scanner src
+  npx @kongyo2/ts-comment-scanner --format github --fail-on-comment src
+  npx @kongyo2/ts-comment-scanner --ignore "**/*.test.ts" --skip-directives src
+  npx @kongyo2/ts-comment-scanner --remove --dry-run --diff HEAD
+  npx @kongyo2/ts-comment-scanner --remove --diff main..HEAD
 `;
 
 export async function run(argv: string[], io: CliIO): Promise<number> {
