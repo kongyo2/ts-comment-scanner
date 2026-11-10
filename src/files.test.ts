@@ -457,6 +457,73 @@ describe("collectFiles with symlinks", () => {
   });
 });
 
+describe("collectFiles with several paths to one directory", () => {
+  let target: string;
+  let scan: string;
+
+  /** `scan/a-link` and `scan/b-link`, both leading to `target`, which holds `x.ts`. */
+  beforeEach(async () => {
+    target = join(dir, "target");
+    scan = join(dir, "scan");
+    await mkdir(target);
+    await mkdir(scan);
+    await writeFile(join(target, "x.ts"), "// ordinary\n");
+    await symlink(target, join(scan, "a-link"));
+    await symlink(target, join(scan, "b-link"));
+  });
+
+  it("finds a file under the path an ignore pattern leaves in scope", async () => {
+    expect(await collectFiles([scan], { ignore: ["a-link/*.ts"] })).toEqual([join(scan, "b-link", "x.ts")]);
+    expect(await collectFiles([scan], { ignore: ["b-link/*.ts"] })).toEqual([join(scan, "a-link", "x.ts")]);
+  });
+
+  it("walks the path a directory pattern leaves in scope", async () => {
+    expect(await collectFiles([scan], { ignore: ["a-link/"] })).toEqual([join(scan, "b-link", "x.ts")]);
+    expect(await collectFiles([scan], { ignore: ["**/b-link/**"] })).toEqual([join(scan, "a-link", "x.ts")]);
+  });
+
+  it("finds nothing where the patterns exclude the file under every path", async () => {
+    expect(await collectFiles([scan], { ignore: ["a-link/*.ts", "b-link/*.ts"] })).toEqual([]);
+  });
+
+  it("reports the file once, under the first of its paths by name", async () => {
+    const first = [join(scan, "a-link", "x.ts")];
+
+    expect(await collectFiles([scan])).toEqual(first);
+    expect(await collectFiles([scan], { ignore: ["*.md"] })).toEqual(first);
+  });
+
+  it("reports it under the same path on every run", async () => {
+    await mkdir(join(target, "deep"));
+    await writeFile(join(target, "deep", "y.ts"), "// deeper\n");
+    const runs = await Promise.all(Array.from({ length: 20 }, () => collectFiles([scan], { ignore: ["a-link/*.ts"] })));
+
+    // `x.ts` is in scope under `b-link` alone; `deep/y.ts` under both, and `a-link` comes first.
+    expect(new Set(runs.map((files) => JSON.stringify(files)))).toEqual(
+      new Set([JSON.stringify([join(scan, "a-link", "deep", "y.ts"), join(scan, "b-link", "x.ts")])]),
+    );
+  });
+
+  it("reports a file under the root given first, whatever the roots hold", async () => {
+    const first = join(scan, "b-link");
+    const second = join(scan, "a-link");
+
+    expect(await collectFiles([first, second])).toEqual([join(first, "x.ts")]);
+    expect(await collectFiles([first, second], { ignore: ["*.md"] })).toEqual([join(first, "x.ts")]);
+  });
+
+  it("ends a cycle of links under every path, with patterns as without", async () => {
+    await symlink(scan, join(target, "back"));
+    await symlink(target, join(target, "self"));
+
+    expect(await collectFiles([scan])).toEqual([join(scan, "a-link", "x.ts")]);
+    expect(await collectFiles([scan], { ignore: ["a-link/*.ts"] })).toEqual([join(scan, "b-link", "x.ts")]);
+    // A path that re-enters a directory it came down through is not walked,
+    // so it puts no file back in scope either.
+    expect(await collectFiles([scan], { ignore: ["a-link/x.ts", "b-link/x.ts"] })).toEqual([]);
+  });
+});
+
 describe("collectFiles path identity", () => {
   it("collapses relative and absolute spellings of the same file", async () => {
     const file = join(dir, "a.ts");

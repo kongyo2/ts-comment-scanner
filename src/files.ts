@@ -29,23 +29,28 @@ export interface CollectOptions {
 type IgnoreMatcher = (path: string, root: string, isDirectory: boolean) => boolean;
 
 export async function collectFiles(inputs: string[], options: CollectOptions = {}): Promise<string[]> {
-  const extensions = normalizeExtensions(options.extensions ?? DEFAULT_EXTENSIONS);
-  const ignoreDirs = new Set((options.ignoreDirs ?? DEFAULT_IGNORE_DIRS).map(foldPathCase));
-  const isIgnored = buildIgnoreMatcher(options.ignore ?? []);
+  const patterns = options.ignore ?? [];
+  const context: WalkContext = {
+    extensions: normalizeExtensions(options.extensions ?? DEFAULT_EXTENSIONS),
+    ignoreDirs: new Set((options.ignoreDirs ?? DEFAULT_IGNORE_DIRS).map(foldPathCase)),
+    isIgnored: buildIgnoreMatcher(patterns),
+    pathBlind: patterns.length === 0,
+  };
   // Keyed by the real path so different spellings of one file (relative vs
   // absolute, `.` segments, case on Windows, symlink aliases) collapse into a
   // single entry; the first spelling seen is the one reported.
   const found = new Map<string, string>();
-  const remember = (path: string, realPath: string): void => {
-    const key = canonicalKey(realPath);
-    if (!found.has(key)) found.set(key, path);
+  const remember = (file: FoundFile): void => {
+    const key = canonicalKey(file.real);
+    if (!found.has(key)) found.set(key, file.path);
   };
 
-  // Walks remember their discoveries mid-traversal; explicitly listed files
-  // are resolved concurrently but remembered afterwards in input order, so
-  // which spelling of an aliased file gets reported never depends on
-  // filesystem timing.
-  const explicitFiles = new Array<{ path: string; real: string } | undefined>(inputs.length);
+  // The inputs are looked up concurrently, and the walks and the explicitly
+  // listed files are then remembered in a fixed order — the walks' finds
+  // first, the listed files after them in input order — so which spelling of
+  // an aliased file gets reported never depends on filesystem timing.
+  const roots = new Array<Directory | undefined>(inputs.length);
+  const explicitFiles = new Array<FoundFile | undefined>(inputs.length);
   await Promise.all(
     inputs.map(async (rawInput, index) => {
       if (rawInput === "") {
@@ -58,15 +63,21 @@ export async function collectFiles(inputs: string[], options: CollectOptions = {
         // Directory inputs are themselves subject to the ignored directory
         // names and the ignore patterns; only explicitly listed files bypass
         // them.
-        const context: WalkContext = { extensions, ignoreDirs, isIgnored, root: input, visited: new Set() };
-        if (entersDirectory(context, input, basename(input))) await walk(input, context, remember);
+        if (entersDirectory(context, input, basename(input), input)) {
+          roots[index] = { path: input, root: input, above: undefined };
+        }
       } else {
         explicitFiles[index] = { path: input, real: await withFriendlyNotFound(input, () => realpath(input)) };
       }
     }),
   );
+  await walk(
+    roots.filter((root) => root !== undefined),
+    context,
+    remember,
+  );
   for (const file of explicitFiles) {
-    if (file !== undefined) remember(file.path, file.real);
+    if (file !== undefined) remember(file);
   }
 
   return [...found.values()].sort();
@@ -119,58 +130,128 @@ interface WalkContext {
   extensions: string[];
   ignoreDirs: Set<string>;
   isIgnored: IgnoreMatcher;
+  /**
+   * No ignore pattern is set, so what a walk finds in a directory is the same
+   * whatever path led to it: the extensions and the ignored directory names
+   * go by the entries' own names. With patterns, a file one spelling excludes
+   * can be in scope under another (`--ignore "a-link/*.ts"` and a second link
+   * to the same directory).
+   */
+  pathBlind: boolean;
+}
+
+/** A directory a walk is to list, under the path the walk reached it by. */
+interface Directory {
+  path: string;
   /** Top-level directory this walk started from; ignore globs also match relative to it. */
   root: string;
-  /** Real paths of directories already walked, so symlink cycles and diamonds terminate. */
-  visited: Set<string>;
+  /** The real paths of the directories the walk came down through. */
+  above: Ancestors | undefined;
+}
+
+interface Ancestors {
+  real: string;
+  above: Ancestors | undefined;
+}
+
+/** A file in scope, under the path a walk or an input spelled it with, and its real path. */
+interface FoundFile {
+  path: string;
+  real: string;
 }
 
 /** Whether a walk enters the directory: neither its name nor an ignore pattern excludes it. */
-function entersDirectory(context: WalkContext, path: string, name: string): boolean {
-  return !context.ignoreDirs.has(foldPathCase(name)) && !context.isIgnored(path, context.root, true);
+function entersDirectory(context: WalkContext, path: string, name: string, root: string): boolean {
+  return !context.ignoreDirs.has(foldPathCase(name)) && !context.isIgnored(path, root, true);
 }
 
+/**
+ * Walks the directories level by level, handing every file in scope to
+ * `remember`. A level's lookups run concurrently, but what they find is taken
+ * in the order of the level — the roots in input order, the entries below
+ * them by name — so the result, and the spelling a file reached by several
+ * paths is remembered under, are the same on every run.
+ *
+ * Symlinks are followed. A directory a walk came down through is not entered
+ * again, which ends the cycles. Where no path can change what a directory
+ * holds (see WalkContext.pathBlind), a directory already listed under another
+ * path is not listed again either; with ignore patterns, every path to it is
+ * walked, and the files found twice collapse in `remember`.
+ */
 async function walk(
-  dir: string,
+  level: readonly Directory[],
   context: WalkContext,
-  remember: (path: string, realPath: string) => void,
+  remember: (file: FoundFile) => void,
+  listed: Set<string> = new Set(),
 ): Promise<void> {
-  const real = await unlessSkippable(() => realpath(dir));
-  if (real === undefined) return; // the directory vanished mid-walk
-  if (context.visited.has(real)) return;
-  context.visited.add(real);
+  if (level.length === 0) return;
+  const reals = await Promise.all(level.map((directory) => unlessSkippable(() => realpath(directory.path))));
+  const entered: Array<[Directory, string]> = [];
+  for (const [index, directory] of level.entries()) {
+    const real = reals[index];
+    if (real === undefined) continue; // the directory vanished mid-walk
+    if (context.pathBlind ? listed.has(real) : isAbove(directory.above, real)) continue;
+    listed.add(real);
+    entered.push([directory, real]);
+  }
+  const listings = await Promise.all(entered.map(([directory, real]) => list(directory, real, context)));
+  const next: Directory[] = [];
+  for (const listing of listings) {
+    for (const entry of listing) {
+      if ("real" in entry) remember(entry);
+      else next.push(entry);
+    }
+  }
+  await walk(next, context, remember, listed);
+}
 
-  const entries = await unlessSkippable(() => readdir(dir, { withFileTypes: true }));
-  if (entries === undefined) return; // the directory vanished after it resolved
+/** Whether the real path is among those of the directories a walk came down through. */
+function isAbove(ancestors: Ancestors | undefined, real: string): boolean {
+  for (let ancestor = ancestors; ancestor !== undefined; ancestor = ancestor.above) {
+    if (ancestor.real === real) return true;
+  }
+  return false;
+}
 
-  await Promise.all(
-    entries.map(async (entry) => {
-      const full = join(dir, entry.name);
-      let isDirectory = entry.isDirectory();
-      let isFile = entry.isFile();
-      if (entry.isSymbolicLink()) {
-        // Symlinks are followed, matching how explicitly listed inputs are
-        // stat()ed; the visited set above keeps cycles from recursing forever.
-        const info = await unlessSkippable(() => stat(full));
-        if (info === undefined) return; // broken symlink
-        isDirectory = info.isDirectory();
-        isFile = info.isFile();
-      }
-      if (isDirectory) {
-        if (entersDirectory(context, full, entry.name)) await walk(full, context, remember);
-      } else if (
-        isFile &&
-        hasExtension(entry.name, context.extensions) &&
-        !context.isIgnored(full, context.root, false)
-      ) {
+/** The files in scope and the directories to enter among the directory's entries, by name. */
+async function list(directory: Directory, real: string, context: WalkContext): Promise<Array<FoundFile | Directory>> {
+  const entries = await unlessSkippable(() => readdir(directory.path, { withFileTypes: true }));
+  if (entries === undefined) return []; // the directory vanished after it resolved
+  const above = { real, above: directory.above };
+  const listing = await Promise.all(
+    entries
+      .sort((a, b) => (a.name < b.name ? -1 : 1))
+      .map(async (entry): Promise<FoundFile | Directory | undefined> => {
+        const full = join(directory.path, entry.name);
+        let isDirectory = entry.isDirectory();
+        let isFile = entry.isFile();
+        if (entry.isSymbolicLink()) {
+          // Symlinks are followed, matching how explicitly listed inputs are
+          // stat()ed.
+          const info = await unlessSkippable(() => stat(full));
+          if (info === undefined) return undefined; // broken symlink
+          isDirectory = info.isDirectory();
+          isFile = info.isFile();
+        }
+        if (isDirectory) {
+          return entersDirectory(context, full, entry.name, directory.root)
+            ? { path: full, root: directory.root, above }
+            : undefined;
+        }
+        if (
+          !isFile ||
+          !hasExtension(entry.name, context.extensions) ||
+          context.isIgnored(full, directory.root, false)
+        ) {
+          return undefined;
+        }
         // Remembered under its real path, so several symlinks to one target
         // (or a link plus the target itself) count — and get rewritten — once.
         const realFile = await unlessSkippable(() => realpath(full));
-        if (realFile === undefined) return; // the file vanished mid-walk
-        remember(full, realFile);
-      }
-    }),
+        return realFile === undefined ? undefined : { path: full, real: realFile }; // the file vanished mid-walk
+      }),
   );
+  return listing.filter((entry) => entry !== undefined);
 }
 
 function normalizeExtensions(extensions: string[]): string[] {
