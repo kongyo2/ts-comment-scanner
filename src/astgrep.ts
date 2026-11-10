@@ -74,8 +74,10 @@ export interface AstGrepReach {
  * when deleted, so those ending on its row in front of it stay, as do those
  * after it on its row and those touching the row its node starts on; when a
  * release covers the next row, so do those starting there, and that row's
- * lines stay (see nextRow). On the first row, the units after it on the row
- * it ends on stay as well: the next node decides whether it covers the file.
+ * lines stay (see nextRow). On the first row, the node after the comment
+ * decides whether it covers the file: where that node starts less than two
+ * rows down, the unit it is stays, since whatever follows it could start
+ * further down.
  * The releases this follows parse with tree-sitter 0.24 or later (ast-grep
  * 0.31.1 on); before, comments in JSX braces read as standing alone.
  */
@@ -99,12 +101,12 @@ export function astGrepReach(
   if (precedingRow !== undefined && precedingRow < row) {
     breaking.push({ start: rowStart(precedingRow), end: rowStart(precedingRow + 1) });
   }
-  const nextNode =
-    endRow < 2 && opensFirstRow(text, comment.start) ? { start: comment.end, end: rowStart(endRow + 1) } : undefined;
+  const next = comment.end + text.slice(comment.end).search(TREE_SITTER_CONTENT);
+  const nextNode = opensFirstRow(text, comment.start) && next >= comment.end && next < rowStart(2) ? next : undefined;
   return {
     holds: (unit) =>
       (unit.end > ownRow && unit.end <= comment.start && (unit.start >= preceding.tokenEnd || breaks(unit))) ||
-      (nextNode !== undefined && unit.start >= nextNode.start && unit.start < nextNode.end) ||
+      unit.start === nextNode ||
       (breaking.some((span) => unit.start < span.end && unit.end >= span.start) && breaks(unit)),
     nextRow: coversNextRow ? { start: comment.end, end: rowStart(row + 2) } : undefined,
   };

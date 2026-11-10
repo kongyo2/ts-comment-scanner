@@ -6,10 +6,10 @@ import {
   collectFiles,
   encodeFileText,
   foldPathCase,
-  isJsxFile,
   mapFiles,
   readFileText,
   scanFile,
+  scanOptionsFor,
   writeFileAtomic,
 } from "./files.js";
 import { changedFiles } from "./git.js";
@@ -56,9 +56,10 @@ General:
 Paths default to the current directory. Directories are scanned recursively,
 skipping node_modules and .git. Ignore globs without a slash match file names,
 and a trailing slash (dist/) restricts a glob to directories. JavaScript files
-(.js, .jsx, .mjs, .cjs) added with --ext are parsed with JSX enabled. Removal
-keeps directives and license headers unless explicitly requested, so builds
-and linters keep working; --keep protects the markers only a project's own
+(.js, .jsx, .mjs, .cjs) added with --ext are parsed as JavaScript, and the
+JSDoc comments tsc reads types from count as directives there. Removal keeps
+directives and license headers unless explicitly requested, so builds and
+linters keep working; --keep protects the markers only a project's own
 tooling reads, e.g. --keep "@skipMangle" or --keep "^// INJECT".
 
 --diff narrows any scan or removal to files changed in git: a single revision
@@ -69,11 +70,11 @@ cleaning up only the files a coding agent just touched.
 Exit codes: 0 success, 1 comments reported with --fail-on-comment, 2 error.
 
 Examples:
-  ts-comment-scanner src
-  ts-comment-scanner --format github --fail-on-comment src
-  ts-comment-scanner --ignore "**/*.test.ts" --skip-directives src
-  ts-comment-scanner --remove --dry-run src
-  ts-comment-scanner --remove --diff main..HEAD
+  npx @kongyo2/ts-comment-scanner src
+  npx @kongyo2/ts-comment-scanner --format github --fail-on-comment src
+  npx @kongyo2/ts-comment-scanner --ignore "**/*.test.ts" --skip-directives src
+  npx @kongyo2/ts-comment-scanner --remove --dry-run --diff HEAD
+  npx @kongyo2/ts-comment-scanner --remove --diff main..HEAD
 `;
 
 export async function run(argv: string[], io: CliIO): Promise<number> {
@@ -216,7 +217,7 @@ async function runRemove(files: readonly string[], options: CliOptions, io: CliI
     try {
       const { text, encoding, bom, lossless } = await readFileText(file);
       const result = removeComments(text, {
-        jsx: isJsxFile(file),
+        ...scanOptionsFor(file),
         removeDirectives: options.removeDirectives,
         removeLegal: options.removeLegal,
         keep: (comment) => options.keep.some((pattern) => pattern.test(comment.text)),

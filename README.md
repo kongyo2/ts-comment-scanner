@@ -18,20 +18,21 @@
 
 ## 日本語
 
-TypeScript のコメントを一覧し、不要なものを安全に削除する CLI とライブラリです。コーディングエージェントがコードに書き足した「レビューの指摘に従い修正」のような経緯のコメントを、エージェントが触ったファイルから取り除く用途を想定しています。
+TypeScript と JavaScript のコメントを一覧し、不要なものを安全に削除する CLI です。インストールせずに `npx` で実行します。コーディングエージェントがコードに書き足した「レビューの指摘に従い修正」のような経緯のコメントを、エージェントが触ったファイルから取り除く用途を想定しています。
+
+```bash
+# 未コミットの変更があるファイルで、削除されるコメントを確かめる
+npx @kongyo2/ts-comment-scanner --remove --dry-run --diff HEAD
+
+# 削除する
+npx @kongyo2/ts-comment-scanner --remove --diff HEAD
+```
 
 - コメントは TypeScript のパーサーで取り出すので、文字列・テンプレートリテラル・正規表現・JSX テキストの中の `//` や `/*` をコメントと取り違えません。
 - `@ts-expect-error`・`eslint-disable`・`webpackChunkName:` のように、消すとビルドやリントの結果が変わるコメント(ディレクティブ)と、ライセンス表記は残します。
+- 残したディレクティブは、削除の前後で同じコードに適用されます。`eslint-disable-next-line` や `/* c8 ignore next 3 */` が数える行は動かしません。
 - `--diff` を付けると、git で変更があったファイルだけを対象にします。
 - 結果はテキスト・JSON・GitHub Actions のアノテーションで出力します。`--fail-on-comment` を付けると、コメントがあるときに CI を失敗させられます。
-
-### インストール
-
-```bash
-npm install --save-dev @kongyo2/ts-comment-scanner
-```
-
-インストールすると、npm scripts や `npx` から `ts-comment-scanner` コマンドを実行できます。インストールせずに `npx @kongyo2/ts-comment-scanner` で実行することもできます。
 
 ### 使い方
 
@@ -50,10 +51,10 @@ export function resolveRange(input: string) {
 }
 ```
 
-パスを渡すと、コメントを `ファイル:行:桁` の位置つきで一覧します。ディレクティブには `[@ts-expect-error]` のように名前が付きます。
+パスを渡すと、コメントを `ファイル:行:桁` の位置つきで一覧します。ディレクティブには `[@ts-expect-error]` のように名前が付きます。パスを省略すると、カレントディレクトリが対象です。
 
 ```console
-$ ts-comment-scanner src
+$ npx @kongyo2/ts-comment-scanner src
 src/range.ts:3:1 [line] // レビューの指摘に従い、空の範囲では HEAD を返すようにした
 src/range.ts:5:36 [line] // 指摘どおり修正
 src/range.ts:6:3 [line] [@ts-expect-error] // @ts-expect-error 上流から null が渡ることがある
@@ -66,7 +67,7 @@ src/range.ts:6:3 [line] [@ts-expect-error] // @ts-expect-error 上流から null
 `--remove --dry-run` で、ファイルを変えずに削除対象を確かめます。
 
 ```console
-$ ts-comment-scanner --remove --dry-run src
+$ npx @kongyo2/ts-comment-scanner --remove --dry-run src
 src/range.ts: would remove 2 (kept 1)
 
 Would remove 2 comments across 1 file. Kept 1 protected comment.
@@ -87,7 +88,7 @@ export function resolveRange(input: string) {
 ディレクティブも消すときは `--remove-directives`、ライセンス表記も消すときは `--remove-legal` を付けます。プロジェクト独自のツールが読む目印のように、ほかにも残したいコメントがあれば `--keep` に正規表現で指定します。
 
 ```bash
-ts-comment-scanner --remove --keep "@skipMangle" --keep "^// INJECT" src
+npx @kongyo2/ts-comment-scanner --remove --keep "@skipMangle" --keep "^// INJECT" src
 ```
 
 何を残し、削除後のコードをどう整えるかは[削除の動作](#削除の動作)にまとめています。
@@ -101,10 +102,10 @@ ts-comment-scanner --remove --keep "@skipMangle" --keep "^// INJECT" src
 
 ```bash
 # 未コミットの変更があるファイルで、削除対象を確かめる
-ts-comment-scanner --remove --dry-run --diff HEAD
+npx @kongyo2/ts-comment-scanner --remove --dry-run --diff HEAD
 
 # ブランチで変更したファイルからコメントを削除する
-ts-comment-scanner --remove --diff main...HEAD
+npx @kongyo2/ts-comment-scanner --remove --diff main...HEAD
 ```
 
 範囲内で削除されたファイルは対象外になり、名前を変えたファイルは新しいパスで扱います。`--diff` は、コマンドラインで直接指定したファイルにも適用します。git は、最初に指定したパスがあるリポジトリで実行します。
@@ -118,20 +119,62 @@ ts-comment-scanner --remove --diff main...HEAD
   run: npx @kongyo2/ts-comment-scanner --format github --skip-directives --fail-on-comment src
 ```
 
+#### バージョンを固定する
+
+`npx @kongyo2/ts-comment-scanner@<バージョン>` のようにバージョンを付けると、そのバージョンで実行します。プロジェクトの devDependencies に入れておくと、npm scripts と `npx ts-comment-scanner` が、入れたバージョンで動きます。
+
+```bash
+npm install --save-dev @kongyo2/ts-comment-scanner
+```
+
 ### 削除の動作
 
-`--remove` が削除するのは、TypeScript のパーサーがコメントと判定した範囲だけです。次のコメントは残します。
+`--remove` が削除するのは、TypeScript のパーサーがコメントと判定した範囲だけです。
+
+#### 残すコメント
 
 - **ディレクティブ**: 対象のツールは[ディレクティブの判定](#ディレクティブの判定)にまとめています。`/** @internal */` も、消すと `stripInternal` で除いていた宣言が `.d.ts` に出てしまうので残します。`--remove-directives` を付けると削除します。
 - **ライセンス表記**: `/*! … */`・`//! …` の形のコメント、`@license`・`@preserve`・`@copyright` や `SPDX-License-Identifier:` などの SPDX タグを含むコメント、`Copyright (c) …`・`© 2024 …`・`Licensed under …`・`All rights reserved` のような著作権表示、MIT・BSD・MPL・GPL の許諾文です。`--remove-legal` を付けると削除します。
 - **`--keep` の正規表現に一致するコメント**: `--remove-directives` や `--remove-legal` を付けても残ります。
-- **消すとディレクティブの効き方が変わるコメント**: たとえば `eslint-disable-next-line` の直下にあるコメント行を消すと、ディレクティブの適用先が次の行にずれます。ファイルの最初のコメントでだけ効く prettier の `@format` は、手前のコメントを消すと効き始めます。このように効き方が変わる削除はせず、そのコメントを残します。
+- **ディレクティブと合わせて読まれるコメント**: ツールがディレクティブを前後のコメントと合わせて読む位置では、ディレクティブの効き方を保つコメントを 1 つ残します。たとえば次の位置です。
+  - `@ts-expect-error`・`@ts-ignore` の下にある、ブロックコメントで始まる行。tsc は空行と `//` の行だけを飛ばして適用先の行を探します。この行があるあいだ抑制には適用先がなく、消すと下のコードに適用されます。
+  - `@deno-types`・`// falls through`・`/* GraphQL */`・JetBrains の `noinspection` と対象のコードの間にある、最後のコメント。これらは対象の直前のコメントとして読まれます。
+  - `/* v8 ignore next */` のようなカバレッジのヒントとコードの間にある、最初のコメント。Vitest の v8 プロバイダーは、ヒントの直後がコメントのときヒントを適用しません。
+  - `/* c8 ignore next */` や `// nosemgrep` と同じ行で、その手前にあるコメント。どちらも、同じ行の手前に英数字がないときだけ下の行にも適用されるので、手前のコメントを消すと適用範囲が広がります。
+  - JavaScript で、型のタグを持つ JSDoc の後ろに同じ宣言の JSDoc が続くときの、最後の JSDoc。tsc は宣言の最後の JSDoc のタグだけを宣言に適用するので、消すと手前の JSDoc のタグが効き始めます。
 
-削除した後のコードは次のように整えます。
+#### 削除後のコード
 
-- コメントだけの行は行ごと、行末のコメントは手前の空白ごと削除します。空行に挟まれたコメント行を消したときは空行を 1 行にまとめ、ファイルやブロックの先頭・末尾でコメントとコードを隔てていた空行は一緒に削除します。import・export のグループの間や、import・require とその次の文の間にあるコメントを消すと間の空行がなくなるときは、空行に置き換えて organizeImports や dprint のグループと、newline-after-import が求める空行を保ちます。
+- コメントだけの行は行ごと、行末のコメントは手前の空白ごと削除します。空行に挟まれたコメント行を消したときは空行を 1 行にまとめ、ファイルやブロックの先頭・末尾でコメントとコードを隔てていた空行は一緒に削除します。
+- ディレクティブが適用される行は動かしません。`eslint-disable-next-line` や `@ts-expect-error` の直下にあるコメント行と、`/* c8 ignore next 3 */` が数える範囲にあるコメント行は、コメントを削除して空行を残します。その範囲にかかる複数行のコメントは、コメントの改行を残します。下にコードが続かないときは、空行も残しません。
+
+  ```ts
+  /* c8 ignore next 4 */
+  if (input === "") {
+    // 呼び出し側で弾いているので、ここには来ない
+    throw new Error("empty input");
+  }
+  ```
+
+  c8 はヒントの下の 4 行を計測から外します。コメント行を詰めると 4 行目が `}` の次の行に変わるので、行を空行として残します。
+
+  ```ts
+  /* c8 ignore next 4 */
+  if (input === "") {
+
+    throw new Error("empty input");
+  }
+  ```
+
+  行の数え方はツールによって違います。c8・oxlint・Semgrep は LF だけを行の区切りとし、tsc と ESLint は CR・U+2028・U+2029 も区切りとします。どちらの数え方でも行が動かないように改行を残します。
+
+- import・export のグループの間や、import・require とその次の文の間にあるコメントを消すと間の空行がなくなるときは、空行に置き換えて、organizeImports や dprint のグループと、newline-after-import が求める空行を保ちます。
 - トークンがつながる位置には空白を入れます(`a/* x */b` → `a b`)。コードに挟まれた、改行を含むブロックコメントは改行に置き換え、自動セミコロン挿入による文の区切りを保ちます。
 - JSX の `{/* … */}` は波かっこごと削除します。波かっこを外すと表示されるテキストが変わる位置では、`{" "}` か `{}` を残します。
+
+tsc は JSDoc の `{@link X}` を `X` の使用として数えます。コメントの `{@link X}` だけが参照していた import・変数・引数は、削除後に参照がなくなり、`noUnusedLocals`・`noUnusedParameters` を有効にしていると tsc が未使用として報告します。
+
+#### 検証と書き込み
 
 書き込む前に削除後のソースを解析し直し、残したコメントの内容とディレクティブとしての意味、JSX の表示内容が変わっていないことを確かめます。一致しないファイルは書き換えず、エラーとして報告します。書き込みは一時ファイルを経由した置き換えなので、途中で失敗しても元のファイルは壊れません。
 
@@ -139,10 +182,50 @@ ts-comment-scanner --remove --diff main...HEAD
 
 ### 対象ファイルの指定
 
-パスを省略するとカレントディレクトリが対象です。ディレクトリは再帰的にたどり、`node_modules` と `.git` は除外します。シンボリックリンクもたどります。
+パスを省略するとカレントディレクトリが対象です。ディレクトリは再帰的にたどり、`node_modules` と `.git` は除外します。シンボリックリンクもたどり、複数のパスから届く同じファイルは 1 回だけ扱います。
 
-- `--ext` は対象の拡張子をカンマ区切りで指定します(既定: `.ts,.tsx,.mts,.cts`)。指定した一覧が既定の一覧に置き換わるので、JavaScript も対象にするなら `--ext .ts,.tsx,.js,.jsx` のようにすべて並べます。`.js`・`.jsx`・`.mjs`・`.cjs` は JSX を有効にして解析します。
-- `--ignore` は Glob に一致するファイルとディレクトリを除外します。スラッシュを含まないパターン(`*.test.ts`)はファイル名に、含むパターン(`src/legacy/**`)はパスに一致します。`dist/` のように末尾をスラッシュにすると、ディレクトリだけに一致します。コマンドラインで直接指定したファイルには適用しません。
+- `--ext` は対象の拡張子をカンマ区切りで指定します(既定: `.ts,.tsx,.mts,.cts`)。指定した一覧が既定の一覧に置き換わるので、JavaScript も対象にするなら `--ext .ts,.tsx,.js,.jsx` のようにすべて並べます。
+- `--ignore` は Glob に一致するファイルとディレクトリを除外します。スラッシュを含まないパターン(`*.test.ts`)はファイル名に、含むパターン(`src/legacy/**`)はパスに一致します。`dist/` のように末尾をスラッシュにすると、ディレクトリだけに一致します。シンボリックリンクで同じファイルに届くパスが複数あるときは、パスごとに判定します。コマンドラインで直接指定したファイルには適用しません。
+
+#### JavaScript
+
+`.js`・`.jsx`・`.mjs`・`.cjs` は、tsc と同じように JavaScript として解析します。JSX は常に有効です。
+
+tsc は JavaScript の型を JSDoc から読むので、tsc が読むタグを持つ JSDoc コメントはディレクティブとして扱い、`--remove` では残します。対象は `@type`・`@param`・型の付いた `@returns`・`@typedef`・`@callback`・`@template`・`@enum`・`@import`・`@overload`・`@satisfies`・`@this`・`@extends`・`@implements`・`@class`・`@public`・`@private`・`@protected`・`@readonly`・`@override` です。説明文だけの JSDoc と、`@deprecated`・`@example`・`@see` のようなタグだけを持つ JSDoc は削除します。
+
+```js
+// レビューの指摘に従い、引数の型を JSDoc に書いた
+/**
+ * 2 つの数を足す。
+ * @param {number} a
+ * @param {number} b
+ */
+export function add(a, b) {
+  return a + b; // 指摘どおり修正
+}
+
+/** 結果を表示する。 */
+export function show(value) {
+  console.log(value);
+}
+```
+
+`npx @kongyo2/ts-comment-scanner --remove --ext .js src` で削除すると、`@param` を持つ JSDoc が残ります。
+
+```js
+/**
+ * 2 つの数を足す。
+ * @param {number} a
+ * @param {number} b
+ */
+export function add(a, b) {
+  return a + b;
+}
+
+export function show(value) {
+  console.log(value);
+}
+```
 
 ### 出力形式
 
@@ -182,6 +265,10 @@ ts-comment-scanner --remove --diff main...HEAD
 
 ### オプション
 
+```text
+npx @kongyo2/ts-comment-scanner [オプション] [パス...]
+```
+
 | オプション | 説明 |
 | --- | --- |
 | `--format <fmt>` | 出力形式。`text`・`json`・`github`(既定: `text`) |
@@ -206,7 +293,7 @@ ts-comment-scanner --remove --diff main...HEAD
 
 次のツールが読むコメントを、ディレクティブとして判定します。
 
-- **コンパイラ・型**: TypeScript(`@ts-ignore`・`@ts-expect-error`・`@ts-nocheck`・`@ts-check`・`/// <reference>`・`@internal`)、Deno(`@deno-types=`・`@ts-types=`・`@ts-self-types=`)、typescript-strict-plugin(`@ts-strict`・`@ts-strict-ignore`)、Flow(`@flow`・`@noflow`・`$FlowFixMe` 系・`flowlint`)
+- **コンパイラ・型**: TypeScript(`@ts-ignore`・`@ts-expect-error`・`@ts-nocheck`・`@ts-check`・`/// <reference>`・`@internal`、JavaScript ファイルの JSDoc の型タグ)、Deno(`@deno-types=`・`@ts-types=`・`@ts-self-types=`)、typescript-strict-plugin(`@ts-strict`・`@ts-strict-ignore`)、Flow(`@flow`・`@noflow`・`$FlowFixMe` 系・`flowlint`)
 - **リンター**: ESLint(`eslint-disable` 系・`/* eslint … */`・`eslint-env`・`/* global */`・`/* exported */`・`// falls through`・`// no default`)、React Compiler(react-hooks のルールを止める `eslint-disable`・`$FlowFixMe[react-rule…]`)、oxlint(`oxlint-disable` 系)、Biome(`biome-ignore` 系・`rome-ignore`)、deno lint(`deno-lint-ignore` 系)、stylelint(`stylelint-disable` 系)、ast-grep(`ast-grep-ignore`)、TSLint・JSHint・JSCS・JSLint
 - **フォーマッタ**: prettier(`prettier-ignore`・`@format` などの pragma・`/** @type */` の型キャスト)、oxfmt(`oxfmt-ignore`)、dprint・deno fmt(`dprint-ignore`・`deno-fmt-ignore` とそれぞれの `-file` 版)、import の並べ替え(`organize-imports-ignore`・`sort-imports-ignore`)、js-beautify
 - **カバレッジ・テスト**: istanbul・c8・v8(`istanbul ignore` など)、Node.js(`node:coverage`)、Deno(`deno-coverage-ignore` 系)、Jest・Vitest(`@jest-environment`・`@vitest-environment`・`@module-tag`)、Stryker、type-coverage、ts-prune
@@ -218,6 +305,12 @@ ts-comment-scanner --remove --diff main...HEAD
 判定は、各ツールのパーサーと同じ規則で行います。ファイルの先頭や `switch` 文の特定の位置でだけ効くディレクティブは、その位置にあるときだけディレクティブとして扱います。ツールやバージョンによって解釈が分かれる書き方は、どれか 1 つでも有効とみなせばディレクティブとして扱うので、`--remove` では残ります。TypeScript のディレクティブは、tsc 6 と tsc 7 のどちらかが有効とみなすものが対象です。
 
 ### ライブラリとして使う
+
+同じ処理を関数として呼べます。パッケージを依存に追加して使います。
+
+```bash
+npm install @kongyo2/ts-comment-scanner
+```
 
 ```ts
 import { scanPaths, scanComments, removeComments, changedFiles, formatText } from "@kongyo2/ts-comment-scanner";
@@ -238,15 +331,16 @@ const changed = await changedFiles("main..HEAD");
 
 | 関数 | 説明 |
 | --- | --- |
-| `scanComments(source, options?)` | ソース文字列のコメントを返す。`options.jsx` で JSX を有効にする |
-| `scanFile(file)` | 1 ファイルをスキャンする |
+| `scanComments(source, options?)` | ソース文字列のコメントを返す。`options.jsx` で JSX を有効にし、`options.javascript` で JavaScript として解析する |
+| `scanFile(file)` | 1 ファイルをスキャンする。解析の方法は拡張子で決まる |
 | `scanPaths(inputs, options?)` | ファイルとディレクトリをまとめてスキャンする。`ignore`・`extensions`・`ignoreDirs` を指定できる |
 | `collectFiles(inputs, options?)` | スキャン対象のファイルパスを集める |
 | `changedFiles(range, cwd?)` | git のリビジョン範囲で変更されたファイルの絶対パスを返す |
-| `removeComments(source, options?)` | コメントを削除する。`removeDirectives`・`removeLegal`・`keep`・`shouldRemove` を指定できる |
+| `removeComments(source, options?)` | コメントを削除する。`jsx`・`javascript`・`removeDirectives`・`removeLegal`・`keep`・`shouldRemove` を指定できる |
 | `detectDirective(kind, text, placement?)` | ディレクティブなら正規化した名前を返す。`placement` を渡すと位置に依存する判定もする |
 | `isLegalComment(text)` | ライセンス表記かどうかを返す |
 | `isJsxFile(file)` | JSX を有効にして解析する拡張子かどうかを返す |
+| `isJavaScriptFile(file)` | JavaScript として解析する拡張子かどうかを返す |
 | `formatText(results)`・`formatJson(results)`・`formatGitHub(results)` | スキャン結果を各出力形式の文字列にする |
 | `readFileText(file)`・`decodeFileText(data)`・`encodeFileText(text, target)` | 文字コードと BOM を保ってファイルの内容を読み書きする |
 | `writeFileAtomic(file, data)` | 一時ファイルを経由してファイルを置き換える |
@@ -263,20 +357,21 @@ MIT
 
 ## English
 
-A CLI and library that lists the comments in a TypeScript project and safely removes the ones you don't want. It is built for sweeping the narration coding agents add to code ("fixed per the review feedback") out of the files the agent touched.
+A CLI that lists the comments in a TypeScript or JavaScript project and safely removes the ones you don't want. Run it with `npx`; there is nothing to install. It is built for sweeping the narration coding agents add to code ("fixed per the review feedback") out of the files the agent touched.
+
+```bash
+# Preview the removal in files with uncommitted changes
+npx @kongyo2/ts-comment-scanner --remove --dry-run --diff HEAD
+
+# Remove the comments
+npx @kongyo2/ts-comment-scanner --remove --diff HEAD
+```
 
 - Comments come from the TypeScript parser, so `//` and `/*` inside strings, template literals, regular expressions and JSX text are never mistaken for comments.
 - Directives such as `@ts-expect-error`, `eslint-disable` and `webpackChunkName:`, whose removal would change what your build or linter does, are kept, and so are license notices.
+- The directives that stay apply to the same code before and after a removal: the lines an `eslint-disable-next-line` or a `/* c8 ignore next 3 */` counts never move.
 - `--diff` limits the work to the files git reports as changed.
 - Results come out as text, JSON or GitHub Actions annotations, and `--fail-on-comment` fails a CI job when comments are found.
-
-### Installation
-
-```bash
-npm install --save-dev @kongyo2/ts-comment-scanner
-```
-
-Once it is installed, npm scripts and `npx` can run the `ts-comment-scanner` command. To run it without installing, use `npx @kongyo2/ts-comment-scanner`.
 
 ### Usage
 
@@ -295,10 +390,10 @@ export function resolveRange(input: string) {
 }
 ```
 
-Given a path, the command lists each comment with its `file:line:column` position. Directives are tagged with their name, such as `[@ts-expect-error]`.
+Given a path, the command lists each comment with its `file:line:column` position. Directives are tagged with their name, such as `[@ts-expect-error]`. With no path, the current directory is scanned.
 
 ```console
-$ ts-comment-scanner src
+$ npx @kongyo2/ts-comment-scanner src
 src/range.ts:3:1 [line] // Per the review feedback, return HEAD for an empty range
 src/range.ts:5:36 [line] // fixed as the reviewer asked
 src/range.ts:6:3 [line] [@ts-expect-error] // @ts-expect-error upstream may pass null
@@ -311,7 +406,7 @@ src/range.ts:6:3 [line] [@ts-expect-error] // @ts-expect-error upstream may pass
 `--remove --dry-run` shows what would be removed without changing any file.
 
 ```console
-$ ts-comment-scanner --remove --dry-run src
+$ npx @kongyo2/ts-comment-scanner --remove --dry-run src
 src/range.ts: would remove 2 (kept 1)
 
 Would remove 2 comments across 1 file. Kept 1 protected comment.
@@ -332,7 +427,7 @@ export function resolveRange(input: string) {
 Add `--remove-directives` to remove directives too, and `--remove-legal` to remove license notices too. To keep other comments, such as markers your project's own tooling reads, pass a regular expression to `--keep`:
 
 ```bash
-ts-comment-scanner --remove --keep "@skipMangle" --keep "^// INJECT" src
+npx @kongyo2/ts-comment-scanner --remove --keep "@skipMangle" --keep "^// INJECT" src
 ```
 
 [How removal works](#how-removal-works) covers what is kept and how the code is tidied up afterwards.
@@ -346,10 +441,10 @@ With `--diff <range>`, only the files git reports as changed are scanned or clea
 
 ```bash
 # Preview the removal in files with uncommitted changes
-ts-comment-scanner --remove --dry-run --diff HEAD
+npx @kongyo2/ts-comment-scanner --remove --dry-run --diff HEAD
 
 # Remove comments from the files changed on the branch
-ts-comment-scanner --remove --diff main...HEAD
+npx @kongyo2/ts-comment-scanner --remove --diff main...HEAD
 ```
 
 Files deleted within the range are skipped, and renamed files are handled at their new path. `--diff` also applies to files listed explicitly on the command line. git runs in the repository that contains the first path given.
@@ -363,20 +458,62 @@ Files deleted within the range are skipped, and renamed files are handled at the
   run: npx @kongyo2/ts-comment-scanner --format github --skip-directives --fail-on-comment src
 ```
 
+#### Pinning a version
+
+`npx @kongyo2/ts-comment-scanner@<version>` runs that version. With the package in a project's devDependencies, npm scripts and `npx ts-comment-scanner` run the installed version.
+
+```bash
+npm install --save-dev @kongyo2/ts-comment-scanner
+```
+
 ### How removal works
 
-`--remove` deletes only the ranges the TypeScript parser reports as comments. These comments stay:
+`--remove` deletes only the ranges the TypeScript parser reports as comments.
+
+#### Comments that stay
 
 - **Directives.** [Directive detection](#directive-detection) lists the tools covered. `/** @internal */` stays as well, because without it `stripInternal` would let the declaration into the `.d.ts`. `--remove-directives` removes them.
 - **License notices.** Comments shaped `/*! … */` or `//! …`; comments containing `@license`, `@preserve`, `@copyright` or an SPDX tag such as `SPDX-License-Identifier:`; copyright lines such as `Copyright (c) …`, `© 2024 …`, `Licensed under …` and `All rights reserved`; and the MIT, BSD, MPL and GPL grant texts. `--remove-legal` removes them.
 - **Comments matching a `--keep` pattern,** even with `--remove-directives` or `--remove-legal`.
-- **Comments whose removal would change how a directive applies.** Removing a comment line right below `eslint-disable-next-line`, for example, would move the directive onto the next line, and removing the comments in front of prettier's `@format`, which only counts in the file's first comment, would switch it on. Such comments are kept.
+- **Comments a directive is read with.** Where a tool reads a directive together with the comments around it, one comment stays to keep the directive applying as it did. For example:
+  - A line that opens with a block comment below `@ts-expect-error` or `@ts-ignore`. tsc steps over blank lines and `//` lines only on its way to the line a suppression applies to, so while that line is there the suppression has no target, and without it the suppression would reach the code below.
+  - The last comment between `@deno-types`, `// falls through`, `/* GraphQL */` or a JetBrains `noinspection` and the code it is for. These are read from the comment right in front of their target.
+  - The first comment between a coverage hint such as `/* v8 ignore next */` and the code. Vitest's v8 provider applies no hint that a comment follows.
+  - A comment in front of `/* c8 ignore next */` or `// nosemgrep` on the same line. Both reach the line below only where no letter or digit precedes them on their line, so removing the comment would widen what they cover.
+  - In JavaScript, the last JSDoc comment of a declaration where one holding type tags precedes it. tsc applies only the tags of a declaration's last JSDoc comment to it, so without that comment the tags of the earlier one would take effect.
 
-The code left behind is tidied up:
+#### The code left behind
 
-- Comment-only lines go entirely, and trailing comments go with the whitespace before them. Removing a comment line between two blank lines leaves one blank line, and at the start or end of the file or of a block, the blank lines that only separated the comment from the code go with it. Where removing the comments between two groups of imports or exports, or between an import or require and the statement after it, would leave no empty line between them, an empty line takes their place, so organizeImports and dprint keep the groups apart and newline-after-import keeps its empty line.
+- Comment-only lines go entirely, and trailing comments go with the whitespace before them. Removing a comment line between two blank lines leaves one blank line, and at the start or end of the file or of a block, the blank lines that only separated the comment from the code go with it.
+- The lines a directive applies to never move. A comment line right below `eslint-disable-next-line` or `@ts-expect-error`, or among the lines a `/* c8 ignore next 3 */` counts, is removed and its line stays, empty. A multi-line comment that reaches into those lines leaves its line breaks behind. With no code below, no empty line is left.
+
+  ```ts
+  /* c8 ignore next 4 */
+  if (input === "") {
+    // callers reject the empty string, so this never runs
+    throw new Error("empty input");
+  }
+  ```
+
+  c8 leaves the four lines below the hint out of the report. Closing the gap would make the fourth one the line after the `}`, so the line stays:
+
+  ```ts
+  /* c8 ignore next 4 */
+  if (input === "") {
+
+    throw new Error("empty input");
+  }
+  ```
+
+  Tools count lines differently: c8, oxlint and Semgrep end a line at a line feed only, while tsc and ESLint also end one at a CR, U+2028 or U+2029. The line breaks that stay keep the lines in place under both counts.
+
+- Where removing the comments between two groups of imports or exports, or between an import or require and the statement after it, would leave no empty line between them, an empty line takes their place, so organizeImports and dprint keep the groups apart and newline-after-import keeps its empty line.
 - A space is inserted where tokens would otherwise join (`a/* x */b` → `a b`). A multi-line block comment with code on both sides is replaced with a line break, so automatic semicolon insertion still splits the statements the same way.
 - A JSX `{/* … */}` goes with its braces. Where dropping the braces would change the rendered text, `{" "}` or `{}` takes their place.
+
+tsc counts a `{@link X}` in JSDoc as a use of `X`. An import, variable or parameter that only such a link referred to has no reference left once the comment is gone, and tsc reports it as unused under `noUnusedLocals` and `noUnusedParameters`.
+
+#### Verification and writing
 
 Before writing, the result is parsed again to confirm that the kept comments, their directive meaning and the rendered JSX are unchanged. A file that fails the check is left untouched and reported as an error. Files are replaced through a temporary file, so a failed write never truncates the original.
 
@@ -384,10 +521,50 @@ Files are read as UTF-8 (with or without a BOM) or as UTF-16 with a BOM, and wri
 
 ### Choosing files
 
-With no paths, the current directory is scanned. Directories are walked recursively, skipping `node_modules` and `.git`, and symlinks are followed.
+With no paths, the current directory is scanned. Directories are walked recursively, skipping `node_modules` and `.git`, and symlinks are followed; a file reached by several paths is handled once.
 
-- `--ext` sets the extensions to scan, comma-separated (default: `.ts,.tsx,.mts,.cts`). The list replaces the default, so to include JavaScript, list every extension: `--ext .ts,.tsx,.js,.jsx`. `.js`, `.jsx`, `.mjs` and `.cjs` files are parsed with JSX enabled.
-- `--ignore` excludes files and directories matching a glob. A pattern without a slash (`*.test.ts`) matches file names, and one with a slash (`src/legacy/**`) matches paths. A trailing slash, as in `dist/`, matches directories only. Files listed explicitly on the command line are not subject to `--ignore`.
+- `--ext` sets the extensions to scan, comma-separated (default: `.ts,.tsx,.mts,.cts`). The list replaces the default, so to include JavaScript, list every extension: `--ext .ts,.tsx,.js,.jsx`.
+- `--ignore` excludes files and directories matching a glob. A pattern without a slash (`*.test.ts`) matches file names, and one with a slash (`src/legacy/**`) matches paths. A trailing slash, as in `dist/`, matches directories only. Where symlinks give a file several paths, each path is matched on its own. Files listed explicitly on the command line are not subject to `--ignore`.
+
+#### JavaScript
+
+`.js`, `.jsx`, `.mjs` and `.cjs` files are parsed as JavaScript, the way tsc parses them. JSX is always enabled.
+
+tsc takes the types of a JavaScript file from JSDoc, so a JSDoc comment holding a tag tsc reads is a directive, and `--remove` keeps it. The tags are `@type`, `@param`, `@returns` with a type, `@typedef`, `@callback`, `@template`, `@enum`, `@import`, `@overload`, `@satisfies`, `@this`, `@extends`, `@implements`, `@class`, `@public`, `@private`, `@protected`, `@readonly` and `@override`. A JSDoc comment that only describes, or holds only tags such as `@deprecated`, `@example` and `@see`, is removed.
+
+```js
+// Per the review feedback, the argument types went into JSDoc
+/**
+ * Adds two numbers.
+ * @param {number} a
+ * @param {number} b
+ */
+export function add(a, b) {
+  return a + b; // fixed as the reviewer asked
+}
+
+/** Prints the result. */
+export function show(value) {
+  console.log(value);
+}
+```
+
+`npx @kongyo2/ts-comment-scanner --remove --ext .js src` leaves the JSDoc comment that holds the `@param` tags:
+
+```js
+/**
+ * Adds two numbers.
+ * @param {number} a
+ * @param {number} b
+ */
+export function add(a, b) {
+  return a + b;
+}
+
+export function show(value) {
+  console.log(value);
+}
+```
 
 ### Output formats
 
@@ -427,6 +604,10 @@ With `--remove`, each entry of `files` carries three arrays: `removed`, `kept` a
 
 ### Options
 
+```text
+npx @kongyo2/ts-comment-scanner [options] [paths...]
+```
+
 | Option | Description |
 | --- | --- |
 | `--format <fmt>` | Output format: `text`, `json` or `github` (default: `text`) |
@@ -451,7 +632,7 @@ Exit codes: `0` on success, `1` when `--fail-on-comment` is set and comments are
 
 Comments read by these tools are detected as directives:
 
-- **Compilers and types**: TypeScript (`@ts-ignore`, `@ts-expect-error`, `@ts-nocheck`, `@ts-check`, `/// <reference>`, `@internal`), Deno (`@deno-types=`, `@ts-types=`, `@ts-self-types=`), typescript-strict-plugin (`@ts-strict`, `@ts-strict-ignore`), Flow (`@flow`, `@noflow`, the `$FlowFixMe` family, `flowlint`)
+- **Compilers and types**: TypeScript (`@ts-ignore`, `@ts-expect-error`, `@ts-nocheck`, `@ts-check`, `/// <reference>`, `@internal`, the JSDoc type tags of a JavaScript file), Deno (`@deno-types=`, `@ts-types=`, `@ts-self-types=`), typescript-strict-plugin (`@ts-strict`, `@ts-strict-ignore`), Flow (`@flow`, `@noflow`, the `$FlowFixMe` family, `flowlint`)
 - **Linters**: ESLint (the `eslint-disable` family, `/* eslint … */`, `eslint-env`, `/* global */`, `/* exported */`, `// falls through`, `// no default`), React Compiler (`eslint-disable` of the react-hooks rules, `$FlowFixMe[react-rule…]`), oxlint (the `oxlint-disable` family), Biome (the `biome-ignore` family, `rome-ignore`), deno lint (the `deno-lint-ignore` family), stylelint (the `stylelint-disable` family), ast-grep (`ast-grep-ignore`), TSLint, JSHint, JSCS, JSLint
 - **Formatters**: prettier (`prettier-ignore`, pragmas such as `@format`, `/** @type */` type casts), oxfmt (`oxfmt-ignore`), dprint and deno fmt (`dprint-ignore`, `deno-fmt-ignore` and their `-file` forms), import sorting (`organize-imports-ignore`, `sort-imports-ignore`), js-beautify
 - **Coverage and testing**: istanbul, c8, v8 (`istanbul ignore` and the like), Node.js (`node:coverage`), Deno (the `deno-coverage-ignore` family), Jest and Vitest (`@jest-environment`, `@vitest-environment`, `@module-tag`), Stryker, type-coverage, ts-prune
@@ -463,6 +644,12 @@ Comments read by these tools are detected as directives:
 Each rule matches a comment the way the tool's own parser does. Directives that only work in certain positions, such as at the top of the file or at particular points in a `switch`, are detected only there. Where tools or versions read a comment differently, it counts as a directive if any of them honours it, so `--remove` keeps it. For TypeScript, a directive counts if either tsc 6 or tsc 7 honours it.
 
 ### Using it as a library
+
+The same operations are available as functions. Add the package as a dependency:
+
+```bash
+npm install @kongyo2/ts-comment-scanner
+```
 
 ```ts
 import { scanPaths, scanComments, removeComments, changedFiles, formatText } from "@kongyo2/ts-comment-scanner";
@@ -483,15 +670,16 @@ const changed = await changedFiles("main..HEAD");
 
 | Function | Description |
 | --- | --- |
-| `scanComments(source, options?)` | Returns the comments in a source string; `options.jsx` enables JSX |
-| `scanFile(file)` | Scans one file |
+| `scanComments(source, options?)` | Returns the comments in a source string; `options.jsx` enables JSX, and `options.javascript` parses the source as JavaScript |
+| `scanFile(file)` | Scans one file, parsed as its extension calls for |
 | `scanPaths(inputs, options?)` | Scans files and directories; accepts `ignore`, `extensions` and `ignoreDirs` |
 | `collectFiles(inputs, options?)` | Collects the paths of the files to scan |
 | `changedFiles(range, cwd?)` | Returns the absolute paths of the files changed in a git revision range |
-| `removeComments(source, options?)` | Removes comments; accepts `removeDirectives`, `removeLegal`, `keep` and `shouldRemove` |
+| `removeComments(source, options?)` | Removes comments; accepts `jsx`, `javascript`, `removeDirectives`, `removeLegal`, `keep` and `shouldRemove` |
 | `detectDirective(kind, text, placement?)` | Returns the normalized name if the comment is a directive; `placement` enables the position-dependent rules |
 | `isLegalComment(text)` | Returns whether the comment is a license notice |
 | `isJsxFile(file)` | Returns whether the file's extension is parsed with JSX enabled |
+| `isJavaScriptFile(file)` | Returns whether the file's extension is parsed as JavaScript |
 | `formatText(results)`, `formatJson(results)`, `formatGitHub(results)` | Formats scan results in each output format |
 | `readFileText(file)`, `decodeFileText(data)`, `encodeFileText(text, target)` | Reads and writes file contents, preserving the encoding and BOM |
 | `writeFileAtomic(file, data)` | Replaces a file through a temporary file |

@@ -7,6 +7,7 @@ import {
   collectFiles,
   decodeFileText,
   encodeFileText,
+  isJavaScriptFile,
   isJsxFile,
   scanFile,
   scanPaths,
@@ -62,6 +63,19 @@ describe("scanFile", () => {
     expect(result.comments[0]).toMatchObject({ start: 0, line: 1, column: 1 });
   });
 
+  it("reads a JavaScript file's JSDoc types as tsc does, and a TypeScript file's as documentation", async () => {
+    const source = "/** @type {number} */\nexport const n = 1;\n/** @typedef {string} S */\n";
+    await writeFile(join(dir, "types.js"), source);
+    await writeFile(join(dir, "types.ts"), source);
+
+    const javascript = await scanFile(join(dir, "types.js"));
+    const typescript = await scanFile(join(dir, "types.ts"));
+
+    expect(javascript.comments.map((comment) => comment.directive)).toEqual(["@type", "@typedef"]);
+    // (`@type` is prettier's cast comment in any file.)
+    expect(typescript.comments.map((comment) => comment.directive)).toEqual(["@type", undefined]);
+  });
+
   it("parses plain JavaScript with JSX enabled, like TypeScript itself does", async () => {
     // Read as TS instead, `<div>` would be a type assertion and the URL's
     // `//example.com</div>;` a phantom line comment.
@@ -87,6 +101,22 @@ describe("isJsxFile", () => {
     expect(isJsxFile("a.js")).toBe(true);
     expect(isJsxFile("a.mjs")).toBe(true);
     expect(isJsxFile("a.CJS")).toBe(true);
+  });
+});
+
+describe("isJavaScriptFile", () => {
+  it("recognises the extensions tsc reads as JavaScript, in any casing", () => {
+    expect(isJavaScriptFile("a.js")).toBe(true);
+    expect(isJavaScriptFile("a.jsx")).toBe(true);
+    expect(isJavaScriptFile("a.MJS")).toBe(true);
+    expect(isJavaScriptFile("a.cjs")).toBe(true);
+  });
+
+  it("leaves TypeScript files out, `.tsx` included", () => {
+    expect(isJavaScriptFile("a.ts")).toBe(false);
+    expect(isJavaScriptFile("a.tsx")).toBe(false);
+    expect(isJavaScriptFile("a.d.ts")).toBe(false);
+    expect(isJavaScriptFile("a.mts")).toBe(false);
   });
 });
 
@@ -454,6 +484,73 @@ describe("collectFiles with symlinks", () => {
     const files = await collectFiles([dir]);
 
     expect(files).toEqual([join(dir, "a.ts")]);
+  });
+});
+
+describe("collectFiles with several paths to one directory", () => {
+  let target: string;
+  let scan: string;
+
+  /** `scan/a-link` and `scan/b-link`, both leading to `target`, which holds `x.ts`. */
+  beforeEach(async () => {
+    target = join(dir, "target");
+    scan = join(dir, "scan");
+    await mkdir(target);
+    await mkdir(scan);
+    await writeFile(join(target, "x.ts"), "// ordinary\n");
+    await symlink(target, join(scan, "a-link"));
+    await symlink(target, join(scan, "b-link"));
+  });
+
+  it("finds a file under the path an ignore pattern leaves in scope", async () => {
+    expect(await collectFiles([scan], { ignore: ["a-link/*.ts"] })).toEqual([join(scan, "b-link", "x.ts")]);
+    expect(await collectFiles([scan], { ignore: ["b-link/*.ts"] })).toEqual([join(scan, "a-link", "x.ts")]);
+  });
+
+  it("walks the path a directory pattern leaves in scope", async () => {
+    expect(await collectFiles([scan], { ignore: ["a-link/"] })).toEqual([join(scan, "b-link", "x.ts")]);
+    expect(await collectFiles([scan], { ignore: ["**/b-link/**"] })).toEqual([join(scan, "a-link", "x.ts")]);
+  });
+
+  it("finds nothing where the patterns exclude the file under every path", async () => {
+    expect(await collectFiles([scan], { ignore: ["a-link/*.ts", "b-link/*.ts"] })).toEqual([]);
+  });
+
+  it("reports the file once, under the first of its paths by name", async () => {
+    const first = [join(scan, "a-link", "x.ts")];
+
+    expect(await collectFiles([scan])).toEqual(first);
+    expect(await collectFiles([scan], { ignore: ["*.md"] })).toEqual(first);
+  });
+
+  it("reports it under the same path on every run", async () => {
+    await mkdir(join(target, "deep"));
+    await writeFile(join(target, "deep", "y.ts"), "// deeper\n");
+    const runs = await Promise.all(Array.from({ length: 20 }, () => collectFiles([scan], { ignore: ["a-link/*.ts"] })));
+
+    // `x.ts` is in scope under `b-link` alone; `deep/y.ts` under both, and `a-link` comes first.
+    expect(new Set(runs.map((files) => JSON.stringify(files)))).toEqual(
+      new Set([JSON.stringify([join(scan, "a-link", "deep", "y.ts"), join(scan, "b-link", "x.ts")])]),
+    );
+  });
+
+  it("reports a file under the root given first, whatever the roots hold", async () => {
+    const first = join(scan, "b-link");
+    const second = join(scan, "a-link");
+
+    expect(await collectFiles([first, second])).toEqual([join(first, "x.ts")]);
+    expect(await collectFiles([first, second], { ignore: ["*.md"] })).toEqual([join(first, "x.ts")]);
+  });
+
+  it("ends a cycle of links under every path, with patterns as without", async () => {
+    await symlink(scan, join(target, "back"));
+    await symlink(target, join(target, "self"));
+
+    expect(await collectFiles([scan])).toEqual([join(scan, "a-link", "x.ts")]);
+    expect(await collectFiles([scan], { ignore: ["a-link/*.ts"] })).toEqual([join(scan, "b-link", "x.ts")]);
+    // A path that re-enters a directory it came down through is not walked,
+    // so it puts no file back in scope either.
+    expect(await collectFiles([scan], { ignore: ["a-link/x.ts", "b-link/x.ts"] })).toEqual([]);
   });
 });
 

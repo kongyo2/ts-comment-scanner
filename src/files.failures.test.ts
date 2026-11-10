@@ -67,6 +67,24 @@ describe("collectFiles when the filesystem races", () => {
   });
 });
 
+describe("collectFiles whatever order a directory is listed in", () => {
+  it("takes the entries by name, so a file reached by two links is reported under the first", async () => {
+    const { readdir: actualReaddir } = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    await writeFile(join(dir, "target.ts"), "// target\n");
+    await symlink(join(dir, "target.ts"), join(dir, "b.ts"));
+    await symlink(join(dir, "target.ts"), join(dir, "a.ts"));
+    await symlink(join(dir, "target.ts"), join(dir, "c.ts"));
+    const listed = await actualReaddir(dir, { withFileTypes: true });
+    const byName = (name: string): (typeof listed)[number] =>
+      listed.find((entry) => entry.name === name) as (typeof listed)[number];
+    vi.mocked(readdir).mockResolvedValueOnce(
+      ["c.ts", "target.ts", "a.ts", "b.ts"].map(byName) as unknown as Awaited<ReturnType<typeof readdir>>,
+    );
+
+    expect(await collectFiles([dir])).toEqual([join(dir, "a.ts")]);
+  });
+});
+
 describe("collectFiles when the filesystem fails", () => {
   it("propagates a permission error from resolving a walked directory", async () => {
     await writeFile(join(dir, "a.ts"), "// a\n");

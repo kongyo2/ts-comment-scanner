@@ -153,6 +153,30 @@ describe("run", () => {
     expect(out()).toContain("1 comment across 1 file");
   });
 
+  it("names the JSDoc comments tsc reads types from as directives in a .js file", async () => {
+    await writeFile(join(dir, "add.js"), "/** @param {number} a */\nexport const id = (a) => a; // note\n");
+    await writeFile(join(dir, "add.ts"), "/** @param {number} a */\nexport const id = (a: number) => a;\n");
+    const { io, out } = capture();
+
+    const code = await run(["--ext", "js,ts", dir], io);
+
+    expect(code).toBe(0);
+    expect(out()).toContain("add.js:1:1 [block] [@param] /** @param {number} a */");
+    expect(out()).toContain("add.ts:1:1 [block] /** @param {number} a */");
+  });
+
+  it("keeps those comments when removing from a .js file", async () => {
+    const file = join(dir, "add.js");
+    await writeFile(file, "// Adds one.\n/** @param {number} a */\nexport const next = (a) => a + 1; // note\n");
+    const { io, out } = capture();
+
+    const code = await run(["--remove", "--ext", "js", dir], io);
+
+    expect(code).toBe(0);
+    expect(await readFile(file, "utf8")).toBe("/** @param {number} a */\nexport const next = (a) => a + 1;\n");
+    expect(out()).toContain("Removed 2 comments across 1 file. Kept 1 protected comment.");
+  });
+
   it("prunes directories named by a trailing-slash ignore pattern", async () => {
     await mkdir(join(dir, "dist"));
     await writeFile(join(dir, "dist", "bundle.ts"), "// built\n");

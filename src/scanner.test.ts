@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { analyzeSource, scanComments } from "./scanner.js";
+import { analyzeSource, scanComments, type ScanOptions } from "./scanner.js";
 
 describe("scanComments", () => {
   it("detects a single-line comment", () => {
@@ -614,5 +614,197 @@ describe("analyzeSource, for ast-grep suppressions", () => {
 
   it("records only the comments that carry the marker", () => {
     expect(analyzeSource("x(); // note\n// ast-grep-ignore\n").preceding.size).toBe(1);
+  });
+});
+
+describe("scanComments in JSX closing tags", () => {
+  const texts = (source: string, options: ScanOptions = { jsx: true }): string[] =>
+    scanComments(source, options).map((comment) => comment.text);
+
+  it("finds a block comment right after the `</` of a closing tag", () => {
+    // `</` is one token to the parser; split into `<` and `/`, its slash would
+    // open a line comment with the one that follows.
+    const source = "const view = <div><//* note */div>;\n";
+
+    expect(scanComments(source, { jsx: true })).toMatchObject([
+      { kind: "block", text: "/* note */", start: 20, end: 30, line: 1, column: 21 },
+    ]);
+  });
+
+  it.each([
+    ["const view = <div></ /* note */ div>;\n", ["/* note */"]],
+    ["const view = <div><//* one *//* two */div>;\n", ["/* one */", "/* two */"]],
+    ["const view = <div><//* over\n lines */div>;\n", ["/* over\n lines */"]],
+    ["const view = <div></// note\ndiv>;\n", ["// note"]],
+    ["const view = <div></// note\r\ndiv>;\r\n", ["// note"]],
+    ["const view = <><//* note */>;\n", ["/* note */"]],
+    ["const view = <></// note\n>;\n", ["// note"]],
+    ["const view = <a.b></a./* note */b>;\n", ["/* note */"]],
+    ["const view = <div></div /* note */>;\n", ["/* note */"]],
+    ["const view = <div>{/* child */}<//* note */div>; // after\n", ["/* child */", "/* note */", "// after"]],
+  ])("finds the comments of %j", (source, expected) => {
+    expect(texts(source)).toEqual(expected);
+  });
+
+  it("finds them in a JavaScript file too", () => {
+    expect(texts("const view = <div><//* note */div>;\n", { jsx: false, javascript: true })).toEqual(["/* note */"]);
+  });
+
+  it("reads `<//` followed by text as the closing `</` and a division, as the parser does", () => {
+    expect(texts("const view = <div><// note\ndiv>;\n")).toEqual([]);
+  });
+});
+
+describe("scanComments of JavaScript", () => {
+  const javascript = { javascript: true };
+
+  it("reads a comparison where TypeScript reads type arguments, so a regular expression after it holds no comment", () => {
+    const source = "const r = a < b > /x\\/*y/.test(c); /* note */\n";
+
+    expect(scanComments(source, javascript).map((comment) => comment.text)).toEqual(["/* note */"]);
+    // Parsed as TSX, `a<b>` takes type arguments and the slash divides.
+    expect(scanComments(source, { jsx: true }).map((comment) => comment.text)).toEqual(["/*y/.test(c); /* note */"]);
+  });
+
+  it("parses JSX whatever else is set, as tsc does for a `.js` file", () => {
+    const source = "const view = <div>// text</div>; // note\n";
+
+    expect(scanComments(source, javascript).map((comment) => comment.text)).toEqual(["// note"]);
+    expect(scanComments(source, { javascript: true, jsx: false }).map((comment) => comment.text)).toEqual(["// note"]);
+  });
+
+  it.each([
+    ["/** @typedef {{x: number}} Point */\nconst p = 1;\n", ["@typedef"]],
+    ["/** @callback Cb @param {number} n */\nconst p = 1;\n", ["@callback"]],
+    ["/** @enum {number} */\nconst E = { A: 1 };\n", ["@enum"]],
+    ['/** @import { X } from "./x" */\nconst p = 1;\n', ["@import"]],
+    ["/** @overload @param {string} a @returns {string} */\nfunction f(a) { return a; }\n", ["@overload"]],
+    ["/** @type {number} */\nconst n = 1;\n", ["@type"]],
+    ["/** @satisfies {Config} */\nconst config = {};\n", ["@satisfies"]],
+    ["/** @param {number} a */\nfunction f(a) {}\n", ["@param"]],
+    ["/** @arg {number} a */\nfunction f(a) {}\n", ["@param"]],
+    ["/** @argument {number} a */\nfunction f(a) {}\n", ["@param"]],
+    ["/** @param [a] optional */\nfunction f(a) {}\n", ["@param"]],
+    // Without a type too: any `@param` makes the function's parameters required.
+    ["/** @param a the first */\nfunction f(a) {}\n", ["@param"]],
+    ["/** @returns {number} */\nfunction f() { return 1; }\n", ["@returns"]],
+    ["/** @return {number} */\nfunction f() { return 1; }\n", ["@returns"]],
+    ["/** @template T */\nfunction f() {}\n", ["@template"]],
+    ["/** @this {Window} */\nfunction f() {}\n", ["@this"]],
+    ["/** @extends {Base} */\nclass A extends Base {}\n", ["@extends"]],
+    ["/** @augments {Base} */\nclass A extends Base {}\n", ["@extends"]],
+    ["/** @implements {I} */\nclass A {}\n", ["@implements"]],
+    ["/** @class */\nfunction C() {}\n", ["@class"]],
+    ["/** @constructor */\nfunction C() {}\n", ["@class"]],
+    ["class A {\n  /** @public */\n  x = 1;\n}\n", ["@public"]],
+    ["class A {\n  /** @private */\n  x = 1;\n}\n", ["@private"]],
+    ["class A {\n  /** @protected */\n  x = 1;\n}\n", ["@protected"]],
+    ["class A {\n  /** @readonly */\n  x = 1;\n}\n", ["@readonly"]],
+    ["class A extends B {\n  /** @override */\n  m() {}\n}\n", ["@override"]],
+    [
+      "/**\n * Adds.\n * @param {number} a\n * @param {number} b\n * @returns {number}\n */\nfunction add(a, b) { return a + b; }\n",
+      ["@param", "@returns"],
+    ],
+  ])("names the tags tsc reads a type from in %j", (source, names) => {
+    const analysis = analyzeSource(source, javascript);
+    const [comment] = analysis.comments;
+
+    expect(comment?.directive).toBe(names[0]);
+    expect(analysis.typed.get(comment as (typeof analysis.comments)[number])).toEqual(names);
+  });
+
+  it.each([
+    "/** Adds two numbers. */\nfunction add(a, b) { return a + b; }\n",
+    // A `@returns` without a type says nothing to the compiler.
+    "/**\n * Adds.\n * @returns the sum\n */\nfunction add(a, b) { return a + b; }\n",
+    // tsc parses these tags and reads nothing from them, or does not know them.
+    "/**\n * @deprecated\n * @see add\n * @author someone\n * @throws {Error}\n * @example add(1, 2)\n * @default 1\n */\nfunction add(a, b) { return a + b; }\n",
+  ])("leaves a JSDoc comment tsc reads no type from ordinary: %j", (source) => {
+    const analysis = analyzeSource(source, javascript);
+
+    expect(analysis.comments.map((comment) => comment.directive)).toEqual([undefined]);
+    expect(analysis.typed.size).toBe(0);
+  });
+
+  it("reads no type from a JSDoc comment no node holds", () => {
+    // tsc attaches a JSDoc comment to the node it leads; one in front of a
+    // closing brace, or sharing the line of the token before a member, leads none.
+    const beforeBrace = "function f() {\n  return 1;\n  /** @typedef {number} N */\n}\n";
+    const sameLine = "class A { /** @private */ m() {} }\n";
+
+    expect(scanComments(beforeBrace, javascript).map((comment) => comment.directive)).toEqual([undefined]);
+    expect(scanComments(sameLine, javascript).map((comment) => comment.directive)).toEqual([undefined]);
+  });
+
+  it("names them in a JavaScript file alone", () => {
+    const source = "/** @typedef {{x: number}} Point */\n/** @param {Point} p */\nfunction f(p) {}\n";
+
+    expect(scanComments(source).map((comment) => comment.directive)).toEqual([undefined, undefined]);
+    expect(analyzeSource(source).typed.size).toBe(0);
+    expect(scanComments(source, javascript).map((comment) => comment.directive)).toEqual(["@typedef", "@param"]);
+  });
+
+  it("puts the type tags behind a directive that opens the comment, and in front of one it only mentions", () => {
+    const analysis = analyzeSource(
+      "/** istanbul ignore next\n * @param {number} a */\nfunction f(a) {}\n/** @param {number} a -- see /* c8 ignore next */\nfunction g(a) {}\n",
+      javascript,
+    );
+
+    expect(analysis.comments.map((comment) => analysis.directives.get(comment))).toEqual([
+      ["istanbul-ignore-next", "@param"],
+      ["@param", "c8-ignore-next"],
+    ]);
+  });
+});
+
+describe("analyzeSource, for the JSDoc comments of one node in JavaScript", () => {
+  /** The text of each comment a later one keeps off its node, with that later comment's. */
+  const shadows = (source: string): Array<[string, string]> => {
+    const analysis = analyzeSource(source, { javascript: true });
+    return [...analysis.shadows].map(([comment, shadow]) => [comment.text, shadow.text]);
+  };
+
+  it("records the node's last JSDoc comment for an earlier one whose tags describe the node", () => {
+    // tsc takes a node's `@type` from its last JSDoc comment alone.
+    expect(shadows("/** @type {string} */\n/** @type {number} */\nconst n = 1;\n")).toEqual([
+      ["/** @type {string} */", "/** @type {number} */"],
+    ]);
+    expect(shadows("/** @param {string} a */\n/** docs */\nfunction f(a) {}\n")).toEqual([
+      ["/** @param {string} a */", "/** docs */"],
+    ]);
+    expect(shadows("/** @private */\n/** one */\n/** two */\nfunction f() {}\n")).toEqual([
+      ["/** @private */", "/** two */"],
+    ]);
+  });
+
+  it("records none for the tags that declare something of their own, which tsc reads from every comment", () => {
+    expect(shadows("/** @typedef {number} N */\n/** @callback Cb */\n/** docs */\nconst n = 1;\n")).toEqual([]);
+    expect(shadows('/** @import { X } from "./x" */\n/** @type {X} */\nconst x = 1;\n')).toEqual([]);
+  });
+
+  it("records none for the last comment of a node, nor in TypeScript", () => {
+    expect(shadows("/** docs */\n/** @type {number} */\nconst n = 1;\n")).toEqual([]);
+    expect(analyzeSource("/** @type {string} */\n/** @type {number} */\nconst n = 1;\n").shadows.size).toBe(0);
+  });
+});
+
+describe("analyzeSource, for the type casts prettier reads", () => {
+  const casts = (source: string, options = {}): string[] =>
+    [...analyzeSource(source, options).casts].map((comment) => comment.text);
+
+  it("records a cast comment that a parenthesized expression follows, past further comments", () => {
+    expect(casts("const a = /** @type {number} */ (foo);\n")).toEqual(["/** @type {number} */"]);
+    expect(casts("const a = /** @type {number} */ /* note */ (foo);\n")).toEqual(["/** @type {number} */"]);
+    expect(casts("const a = /** @satisfies {X} */\n  // note\n  ({});\n", { javascript: true })).toEqual([
+      "/** @satisfies {X} */",
+    ]);
+  });
+
+  it("records none where no parenthesized expression follows", () => {
+    expect(casts("const a = /** @type {number} */ foo;\n")).toEqual([]);
+    expect(casts("/** @type {number} */\nconst a = 1;\n")).toEqual([]);
+    // The parenthesis of a call's arguments is no expression of its own.
+    expect(casts("foo /** @type {number} */ (bar);\n")).toEqual([]);
+    expect(casts("const a = /* note */ (foo);\n")).toEqual([]);
   });
 });
