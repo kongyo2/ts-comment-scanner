@@ -494,13 +494,14 @@ export function shieldDirectives(
     for (const reach of astGrepReaches) protect(commentsOf(currentUnits().filter((unit) => reach.holds(unit))));
     // Last, and until nothing more stays: what a removal would leave next to
     // a suppression depends on what else stays on its line.
-    for (let settling = stillRemoved.length + 1; settling > stillRemoved.length; ) {
+    let settling: number;
+    do {
       settling = stillRemoved.length;
       for (const comment of placed) {
         protect(lineBreakLeavers(comment));
         if (placedByNeighbours.has(comment)) protect(edgeMakers(comment));
       }
-    }
+    } while (stillRemoved.length < settling);
     return stillRemoved.length < removingBefore;
   };
 

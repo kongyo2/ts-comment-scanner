@@ -8,7 +8,8 @@
     "pedantic": "off"
   },
   "rules": {
-    "no-console": "off"
+    "no-console": "off",
+    "no-irregular-whitespace": ["error", { "skipComments": true }]
   },
   "ignorePatterns": ["node_modules", "dist", "build", "coverage", "*.min.js"]
 }
