@@ -100,8 +100,10 @@ interface Front {
  *   opens its row, one comment that keeps it from opening it, where those
  *   lines hold code (see Front);
  * - next to a suppression a formatter applies by where it stands on its
- *   line, a comment spanning lines that would leave a line break between the
- *   suppression and the code it trails or leads (see PLACED_BY_LINE);
+ *   line, a comment whose removal would change that: one spanning lines that
+ *   would leave a line break next to it (see PLACED_BY_LINE), or one right
+ *   beside it that keeps it from an end of its line (see
+ *   PLACED_BY_NEIGHBOURS);
  * - a JSX comment container right after a directive in a container
  *   (`{/* prettier-ignore *​/}`, which applies to the next sibling);
  * - the last JSDoc comment of a node in JavaScript, where an earlier one
@@ -716,8 +718,8 @@ const SAME_LINE_GAP = /^[^\S\n]*$/;
 // the code (`is_node_suppressed` in its formatter/comments.rs, for the `;`
 // that semicolon-less code opens the next line with), so the last comment
 // between a suppression and such a `;` stays as well: below
-// `a( 1,2 ) // oxfmt-ignore`, a comment line in front of `;[b].sort()` keeps
-// the call formatted.
+// `import { a,b } from "m" // oxfmt-ignore`, a comment in front of the `;`
+// on the next line keeps the import formatted.
 const PLACED_BY_NEIGHBOURS = new Set(["prettier-ignore", "oxfmt-ignore"]);
 
 // The suppressions tsc looks past blank and `//` lines for (see tscReach).
