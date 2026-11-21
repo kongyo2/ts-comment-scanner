@@ -1,16 +1,18 @@
 import ts from "typescript";
 import { LINE_BREAK } from "./lines.js";
-import { byStart, firstIndexAtOrAfter, type Range } from "./ranges.js";
+import { byStart, rangesWithin, type Range } from "./ranges.js";
 
 type ImportSorter = "typescript" | "dprint";
 
 /**
  * The linters whose newline-after-import rule wants an empty line between
  * the imports and the code after them: eslint-plugin-import ("eslint"),
- * whose rule eslint-plugin-import-x and eslint-plugin-import-lite carry
- * over, and oxlint, which ports it ("oxlint").
+ * whose rule eslint-plugin-import-lite carries over; eslint-plugin-import-x
+ * ("import-x"), which measures from the comments trailing the import since
+ * 4.18.1 and read the rule as eslint-plugin-import does before; and oxlint,
+ * which ports it ("oxlint").
  */
-type ImportLinter = "eslint" | "oxlint";
+type ImportLinter = "eslint" | "import-x" | "oxlint";
 
 /**
  * The gap in front of an import or export declaration that an import sorter
@@ -60,13 +62,18 @@ export interface ImportGroupGap extends Range {
  *   breaks its parsers number lines by, U+2028 and U+2029 included, and reads
  *   the imports in the bodies of modules and namespaces as well (see
  *   moduleBodies); oxlint counts line feeds alone, in the file's own
- *   statements.
+ *   statements. eslint-plugin-import-x 4.18.1 measures from the end of the
+ *   comments trailing the import instead (see trailingCommentsEnd), so a
+ *   comment that starts on the import's line and ends further down holds no
+ *   line for it.
  *
  * The sorters start a group at an empty line, and the linters find theirs
  * there, which is what removal leaves where it deletes the comments that held
  * a gap open. Biome's organizeImports starts a chunk only at a comment that
  * an empty line follows, never at the empty line alone, so no layout without
- * the comment keeps its chunks apart, and they are not read.
+ * the comment keeps its chunks apart, and they are not read. Neither are the
+ * runs dprint sorts with `module.importGroups` set (0.97.0 on), which end at
+ * such a comment alone as well.
  */
 export function importGroupGaps(
   source: string,
@@ -87,11 +94,12 @@ export function importGroupGaps(
     addReader(sorters, declaration, "dprint");
   }
   for (const statement of statementsAfterImports(sourceFile.statements, true)) {
-    addReader(linters, statement, "eslint");
-    addReader(linters, statement, "oxlint");
+    for (const linter of ["eslint", "import-x", "oxlint"] as const) addReader(linters, statement, linter);
   }
   for (const statements of moduleBodies(sourceFile.statements)) {
-    for (const statement of statementsAfterImports(statements, false)) addReader(linters, statement, "eslint");
+    for (const statement of statementsAfterImports(statements, false)) {
+      for (const linter of ["eslint", "import-x"] as const) addReader(linters, statement, linter);
+    }
   }
   return [...new Set([...sorters.keys(), ...linters.keys()])]
     .map((statement) => {
@@ -99,7 +107,9 @@ export function importGroupGaps(
       const splits = [...(sorters.get(statement) ?? [])].filter((sorter) =>
         STARTS_GROUP[sorter](source, gap, comments),
       );
-      const spaced = [...(linters.get(statement) ?? [])].filter((linter) => FINDS_EMPTY_LINE[linter](source, gap));
+      const spaced = [...(linters.get(statement) ?? [])].filter((linter) =>
+        FINDS_EMPTY_LINE[linter](source, gap, comments),
+      );
       return { ...gap, splits, spaced };
     })
     .sort(byStart);
@@ -121,10 +131,30 @@ const STARTS_GROUP: Readonly<
 };
 
 // Whether the linter finds its empty line in the gap.
-const FINDS_EMPTY_LINE: Readonly<Record<ImportLinter, (source: string, gap: Range) => boolean>> = {
+const FINDS_EMPTY_LINE: Readonly<
+  Record<ImportLinter, (source: string, gap: Range, comments: readonly Range[]) => boolean>
+> = {
   eslint: holdsTwoBreaks(LINE_BREAK),
+  "import-x": (source, gap, comments) =>
+    holdsTwoBreaks(LINE_BREAK)(source, { start: trailingCommentsEnd(source, gap, comments), end: gap.end }),
   oxlint: holdsTwoBreaks("\n"),
 };
+
+/**
+ * Where the comments trailing the statement in front of the gap end, as
+ * eslint-plugin-import-x reads them (`getTrailingComments` in its
+ * utils/trailing-comments.js): the comments after the statement that each
+ * start on the line the statement, or the comment before, ends on. The gap's
+ * start when none does.
+ */
+function trailingCommentsEnd(source: string, gap: Range, comments: readonly Range[]): number {
+  let end = gap.start;
+  for (const comment of rangesWithin(comments, gap)) {
+    if (LINE_BREAK.test(source.slice(end, comment.start))) break;
+    end = comment.end;
+  }
+  return end;
+}
 
 /**
  * Whether a gap holds two line breaks or more, those inside comments
@@ -347,12 +377,7 @@ function dprintKind(statement: ts.Statement): "imports" | "exports" | undefined 
 function newLineTrivia(source: string, gap: Range, comments: readonly Range[]): number {
   let count = 0;
   let from = gap.start;
-  for (
-    let index = firstIndexAtOrAfter(comments, gap.start, (comment) => comment.start);
-    (comments[index]?.start ?? gap.end) < gap.end;
-    index += 1
-  ) {
-    const comment = comments[index] as Range;
+  for (const comment of rangesWithin(comments, gap)) {
     count += lineBreaks(source.slice(from, comment.start));
     from = comment.end;
   }

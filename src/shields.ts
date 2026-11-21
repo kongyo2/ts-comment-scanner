@@ -2,7 +2,15 @@ import { astGrepReach, rowStartOffsets, type AstGrepReach, type PrecedingNode } 
 import { commentsOf, removalUnits, type Container, type RemovalUnit } from "./containers.js";
 import { hintsNextNode, monocartLines, opensRow, textHints } from "./coverage.js";
 import { carriesAstGrepSuppression } from "./directives.js";
-import { closesItsLine, isBlank, lineIndexAt, lineStartOffsets, occupiesWholeLines, opensItsLine } from "./lines.js";
+import {
+  LINE_TERMINATOR,
+  closesItsLine,
+  isBlank,
+  lineIndexAt,
+  lineStartOffsets,
+  occupiesWholeLines,
+  opensItsLine,
+} from "./lines.js";
 import { byStart, firstIndexAtOrAfter, rangeAt, type Range } from "./ranges.js";
 import type { Comment } from "./types.js";
 
@@ -91,6 +99,11 @@ interface Front {
  * - in front of a directive that reaches the lines below only where it
  *   opens its row, one comment that keeps it from opening it, where those
  *   lines hold code (see Front);
+ * - next to a suppression a formatter applies by where it stands on its
+ *   line, a comment whose removal would change that: one spanning lines that
+ *   would leave a line break next to it (see PLACED_BY_LINE), or one right
+ *   beside it that keeps it from an end of its line (see
+ *   PLACED_BY_NEIGHBOURS);
  * - a JSX comment container right after a directive in a container
  *   (`{/* prettier-ignore *​/}`, which applies to the next sibling);
  * - the last JSDoc comment of a node in JavaScript, where an earlier one
@@ -115,6 +128,10 @@ export function shieldDirectives(
   const gaps: Gap[] = [];
   const fronts: Front[] = [];
   const siblingTargets = new Set<Container>();
+  /** The suppressions that stay which a formatter places by their line (see PLACED_BY_LINE). */
+  const placed = new Set<Comment>();
+  /** Those of them one places by what stands right next to them (see PLACED_BY_NEIGHBOURS). */
+  const placedByNeighbours = new Set<Comment>();
   const rowTails: Range[] = [];
   const shadows = new Set<Comment>();
   const astGrepReaches: AstGrepReach[] = [];
@@ -137,6 +154,14 @@ export function shieldDirectives(
   const rowOffsets = (): number[] => (rows ??= rowStartOffsets(source));
   /** The (1-based) line holding the offset. */
   const lineOf = (offset: number): number => lineIndexAt(lineOffsets, offset) + 1;
+  /** Where the comment stands among the source's. */
+  const indexOf = (comment: Comment): number =>
+    firstIndexAtOrAfter(context.comments, comment.start, (other) => other.start);
+  /** The comment holding the offset, where it is still to be removed. */
+  const removalAt = (offset: number): Comment | undefined => {
+    const holder = rangeAt(context.comments, offset);
+    return holder !== undefined && removing.has(holder) ? holder : undefined;
+  };
   /** The given (1-based) line, which the shields only name when the source has it, and the units on it. */
   const unitsOnLine = (line: number): LineUnits => {
     const start = lineOffsets[line - 1] as number;
@@ -171,6 +196,21 @@ export function shieldDirectives(
 
   /** Collects what one of the directives the comment carries reaches. */
   const shieldReach = (comment: Comment, directive: string): void => {
+    if (PLACED_BY_LINE.has(directive)) {
+      placed.add(comment);
+      added = true;
+    }
+    if (PLACED_BY_NEIGHBOURS.has(directive)) {
+      placedByNeighbours.add(comment);
+      // oxfmt takes the last comment in front of the `;` that ends a statement
+      // for the statement's suppression: the comments from this one up to
+      // such a `;` keep it from being that one, and the last of them stays.
+      const codeStart = codeStartAfter(source, comment.end, context.skippable);
+      if (codeStart > comment.end && source[codeStart] === ";") {
+        gaps.push({ start: comment.end, end: codeStart, stays: "last", line: comment.endLine });
+        added = true;
+      }
+    }
     const lastComment = isLastCommentDirective(comment, directive);
     const cast = CAST_DIRECTIVES.has(directive) && context.casts.has(comment);
     if (lastComment || cast || (NEXT_TOKEN_DIRECTIVES.has(directive) && hintsNextNode(comment.text))) {
@@ -288,8 +328,7 @@ export function shieldDirectives(
     // runner ignores the rows below it wherever it stands. A hint in a
     // comment that goes, goes with it.
     pendingHints = pendingHints.filter((hint) => {
-      const holder = rangeAt(context.comments, hint.offset);
-      if (holder !== undefined && removing.has(holder)) return true;
+      if (removalAt(hint.offset) !== undefined) return true;
       const offsets = rowOffsets();
       const row = lineIndexAt(offsets, hint.offset);
       shieldRows(row, row);
@@ -375,6 +414,73 @@ export function shieldDirectives(
     }
   };
 
+  /**
+   * Whether something that stays shares a line with the comment, in front of
+   * it where `step` is -1 and behind it where it is 1. A removal on the way
+   * leaves nothing: what stands past a single-line one moves up to the
+   * comment, and one that spans lines, or runs to the end of its line, cuts
+   * the line off there.
+   */
+  const sharesLineWithWhatStays = (comment: Comment, step: 1 | -1): boolean => {
+    for (
+      let index = step === 1 ? comment.end : comment.start - 1;
+      index >= 0 && index < source.length && !LINE_TERMINATOR.test(source[index] as string);
+      index += step
+    ) {
+      const holder = removalAt(index);
+      if (holder !== undefined) {
+        if (holder.kind === "line" || LINE_TERMINATOR.test(holder.text)) return false;
+        index = step === 1 ? holder.end - 1 : holder.start;
+      } else if (!isBlank(source[index] as string)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  /**
+   * The removals in the run of comments around the given one (see
+   * PLACED_BY_LINE) that would leave a line break in their place: those
+   * spanning lines, with something that stays in front of them on their
+   * first line and something behind them on their last.
+   */
+  const lineBreakLeavers = (comment: Comment): Comment[] => {
+    const glued = (index: number): boolean =>
+      SAME_LINE_GAP.test(
+        source.slice((context.comments[index] as Comment).end, (context.comments[index + 1] as Comment).start),
+      );
+    const at = indexOf(comment);
+    let first = at;
+    while (first > 0 && glued(first - 1)) first -= 1;
+    let last = at;
+    while (last + 1 < context.comments.length && glued(last)) last += 1;
+    return context.comments
+      .slice(first, last + 1)
+      .filter(
+        (other) =>
+          removing.has(other) &&
+          LINE_TERMINATOR.test(other.text) &&
+          !closesItsLine(source, other) &&
+          sharesLineWithWhatStays(other, -1),
+      );
+  };
+
+  /**
+   * The removals right next to the given comment on its line (see
+   * PLACED_BY_NEIGHBOURS) that would leave it the first thing on that line,
+   * or the last, where it is not.
+   */
+  const edgeMakers = (comment: Comment): Comment[] => {
+    const at = indexOf(comment);
+    return [-1 as const, 1 as const].flatMap((step) => {
+      const neighbour = context.comments[at + step];
+      if (neighbour === undefined || !removing.has(neighbour)) return [];
+      const gap = step === 1 ? source.slice(comment.end, neighbour.start) : source.slice(neighbour.end, comment.start);
+      const onItsLine = isBlank(gap) && !LINE_TERMINATOR.test(gap);
+      return onItsLine && !sharesLineWithWhatStays(comment, step) ? [neighbour] : [];
+    });
+  };
+
   /** Protects what the shields collected so far hold in place; true when that kept anything. */
   const protectShields = (): boolean => {
     const removingBefore = stillRemoved.length;
@@ -395,6 +501,16 @@ export function shieldDirectives(
       protect(commentsOf(currentUnits().filter((unit) => unit.start >= tail.start && unit.start < tail.end)));
     }
     for (const reach of astGrepReaches) protect(commentsOf(currentUnits().filter((unit) => reach.holds(unit))));
+    // Last, and until nothing more stays: what a removal would leave next to
+    // a suppression depends on what else stays on its line.
+    let settling: number;
+    do {
+      settling = stillRemoved.length;
+      for (const comment of placed) {
+        protect(lineBreakLeavers(comment));
+        if (placedByNeighbours.has(comment)) protect(edgeMakers(comment));
+      }
+    } while (stillRemoved.length < settling);
     return stillRemoved.length < removingBefore;
   };
 
@@ -570,6 +686,41 @@ const TRAILING_TARGETS_OWN_LINE = new Set([
   "codeql",
   "skipcq",
 ]);
+
+// The suppressions a formatter applies by where the comment stands on its
+// line. Prettier attaches a comment that ends its line to the code in front
+// of it, where some stands on that line, and one that opens its line to the
+// code after it (`isOwnLineComment` and `isEndOfLineComment` in its
+// comments/attach.js), and a `prettier-ignore` attached that way keeps the
+// statement it trails, or the node it leads, as written; oxfmt and Biome
+// place their suppressions the same way. All three take the comments that
+// only blanks hold apart as one run, and look for the line break in front of
+// the run and behind it, so a line break inside a comment of the run counts
+// for nothing: in `a( 1,2 ); /* note\n*/ // prettier-ignore` the
+// suppression trails the call. Deleting the note for a line break would put
+// the suppression on a line of its own, where it applies to the statement
+// below instead, so a comment of the run that would leave a line break
+// stays. dprint goes by the comments in front of a node wherever they stand,
+// and is not among them. Checked against Prettier 3.8.4 and 3.10.1, oxfmt
+// 0.79.0 and Biome 2.6.8; Rome placed its suppressions as Biome does.
+const PLACED_BY_LINE = new Set(["prettier-ignore", "oxfmt-ignore", "biome-ignore", "rome-ignore"]);
+// What holds two comments of one run apart: blanks, and no line feed.
+const SAME_LINE_GAP = /^[^\S\n]*$/;
+// oxfmt, which honours `prettier-ignore` as well, goes by what stands right
+// next to the comment instead: oxc's parser notes for every comment whether a
+// line break precedes it and whether one follows it, another comment on its
+// line in between included. So a suppression has to stay the first thing on
+// its line, or the last, exactly where it is one, and a comment next to it
+// whose removal would make it one stays: after `break` on the line above,
+// `/* note */ /* oxfmt-ignore */ ;` ignores nothing, and `/* oxfmt-ignore */ ;`
+// alone on that line the statement below it. oxfmt also suppresses a
+// statement whose last comment in front of its `;` is a suppression trailing
+// the code (`is_node_suppressed` in its formatter/comments.rs, for the `;`
+// that semicolon-less code opens the next line with), so the last comment
+// between a suppression and such a `;` stays as well: below
+// `import { a,b } from "m" // oxfmt-ignore`, a comment in front of the `;`
+// on the next line keeps the import formatted.
+const PLACED_BY_NEIGHBOURS = new Set(["prettier-ignore", "oxfmt-ignore"]);
 
 // The suppressions tsc looks past blank and `//` lines for (see tscReach).
 // They stay next-line directives as well: Flow, which honours them in

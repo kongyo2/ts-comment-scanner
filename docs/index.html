@@ -456,6 +456,28 @@
           <div class="guard">
             <div class="danger">
               <span class="ja"
+                >行末の
+                <code>prettier-ignore</code>
+                の手前にある複数行コメントを消すと、抑制が次の行に移り、下の文に効いてしまう</span
+              >
+              <span class="en"
+                >deleting a multi-line comment in front of a trailing <code>prettier-ignore</code> moves the suppression
+                onto a line of its own, where it applies to the statement below</span
+              >
+            </div>
+            <div class="fix">
+              <span class="ja"
+                >Prettier・oxfmt・Biome の抑制コメントが行頭にあるか行末にあるかを変えてしまうコメントは残す</span
+              >
+              <span class="en"
+                >a comment stays where its removal would change whether a Prettier, oxfmt or Biome suppression opens or
+                ends its line</span
+              >
+            </div>
+          </div>
+          <div class="guard">
+            <div class="danger">
+              <span class="ja"
                 ><code>.js</code> の <code>/** @type {…} */</code> や <code>@typedef</code> を消すと、tsc
                 の型チェック(<code>checkJs</code>)の結果が変わる</span
               >
@@ -508,11 +530,11 @@
         </div>
         <p class="proof-line">
           <span class="ja"
-            >// この挙動は <strong>1377 本のテスト</strong>と <strong>100% カバレッジ</strong>(statements / branches /
+            >// この挙動は <strong>1402 本のテスト</strong>と <strong>100% カバレッジ</strong>(statements / branches /
             functions / lines)で固定しています</span
           >
           <span class="en"
-            >// pinned by <strong>1377 tests</strong> at <strong>100% coverage</strong> — statements, branches,
+            >// pinned by <strong>1402 tests</strong> at <strong>100% coverage</strong> — statements, branches,
             functions and lines</span
           >
         </p>

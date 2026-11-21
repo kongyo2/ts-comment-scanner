@@ -1636,6 +1636,19 @@ describe("removeComments between the imports and the code after them", () => {
     expect(result.kept).toEqual([]);
   });
 
+  it("leaves an empty line below the comments trailing the imports, which eslint-plugin-import-x measures from", () => {
+    // Checked against eslint-plugin-import-x 4.18.1: the directive trailing
+    // the import ends on the second line, so the code has to start on the
+    // fourth. Over 14,487 generated sources 1.22.0's removal added a report
+    // in 114, and this one adds none.
+    const source = `${a} /* eslint-disable no-undef\n */\n// note\nf(a);\n`;
+
+    expect(removeComments(source).code).toBe(`${a} /* eslint-disable no-undef\n */\n\nf(a);\n`);
+    expect(removeComments(`const x = require("x"); /*! legal\n */\n// note\nf(x);\n`).code).toBe(
+      `const x = require("x"); /*! legal\n */\n\nf(x);\n`,
+    );
+  });
+
   it("adds no empty line where a blank line stays", () => {
     expect(removeComments(`${a}\n\n// note\nf(a);\n`).code).toBe(`${a}\n\nf(a);\n`);
     expect(removeComments(`${a}\n// note\n\nf(a);\n`).code).toBe(`${a}\n\nf(a);\n`);

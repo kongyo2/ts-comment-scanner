@@ -113,13 +113,31 @@ describe("import group gaps", () => {
 
 // Checked against the real eslint-plugin-import 2.32.0, eslint-plugin-import-x
 // 4.17.1 and eslint-plugin-import-lite 0.6.0 on ESLint 9.39.5 with
-// typescript-eslint 8.72.1, and oxlint 1.91.0, with their default options.
+// typescript-eslint 8.72.1, and oxlint 1.91.0, with their default options;
+// eslint-plugin-import-x 4.18.1, which measures from the comments trailing
+// the import, on ESLint 9.39.5 with typescript-eslint 8.73.0.
 describe("the gaps the newline-after-import rules read", () => {
   it("finds the empty line where the next statement starts two lines or more below the import", () => {
-    expect(gaps(`${a}\n// note\nf();\n`)).toEqual([["\n// note\n", ["eslint", "oxlint"]]]);
-    expect(gaps(`${a}\n\nf();\n`)).toEqual([["\n\n", ["eslint", "oxlint"]]]);
-    expect(gaps(`${a}\n/* note\n */ f();\n`)).toEqual([["\n/* note\n */ ", ["eslint", "oxlint"]]]);
+    expect(gaps(`${a}\n// note\nf();\n`)).toEqual([["\n// note\n", ["eslint", "import-x", "oxlint"]]]);
+    expect(gaps(`${a}\n\nf();\n`)).toEqual([["\n\n", ["eslint", "import-x", "oxlint"]]]);
+    expect(gaps(`${a}\n/* note\n */ f();\n`)).toEqual([["\n/* note\n */ ", ["eslint", "import-x", "oxlint"]]]);
     expect(gaps(`${a} /* note\n */\nf();\n`)).toEqual([[" /* note\n */\n", ["eslint", "oxlint"]]]);
+  });
+
+  it("measures from the end of the comments trailing the import for eslint-plugin-import-x", () => {
+    // Each comment that starts on the line the import, or the comment before
+    // it, ends on trails the import, and the lines count from the last one.
+    expect(gaps(`${a} /* one\n */ // two\n\nf();\n`)).toEqual([
+      [" /* one\n */ // two\n\n", ["eslint", "import-x", "oxlint"]],
+    ]);
+    expect(gaps(`${a} /* one\n */ /* two\n */\nf();\n`)).toEqual([
+      [" /* one\n */ /* two\n */\n", ["eslint", "oxlint"]],
+    ]);
+    // A comment that starts on a line of its own trails nothing.
+    expect(gaps(`${a} // one\n/* two\n */\nf();\n`)).toEqual([
+      [" // one\n/* two\n */\n", ["eslint", "import-x", "oxlint"]],
+    ]);
+    expect(gaps(`const x = require("x"); /* one\n */\nf(x);\n`)).toEqual([[" /* one\n */\n", ["eslint", "oxlint"]]]);
   });
 
   it("finds none where a comment shares a line with the import or the statement", () => {
@@ -129,29 +147,33 @@ describe("the gaps the newline-after-import rules read", () => {
   });
 
   it("reads `import x = …` as an import unless it is exported, and no gap between imports or after the last statement", () => {
-    expect(gaps("import n = N.m;\n// note\nf();\n")).toEqual([["\n// note\n", ["eslint", "oxlint"]]]);
+    expect(gaps("import n = N.m;\n// note\nf();\n")).toEqual([["\n// note\n", ["eslint", "import-x", "oxlint"]]]);
     expect(gaps(`${a}\nimport n = require("n");\nf();\n`)).toEqual([["\n", []]]);
-    expect(gaps(`${a}\n// note\nexport import n = N.m;\n`)).toEqual([["\n// note\n", ["eslint", "oxlint"]]]);
+    expect(gaps(`${a}\n// note\nexport import n = N.m;\n`)).toEqual([
+      ["\n// note\n", ["eslint", "import-x", "oxlint"]],
+    ]);
     expect(gaps("export import n = N.m;\n// note\nf();\n")).toEqual([]);
     expect(gaps(`${a}\n// note\n`)).toEqual([]);
   });
 
   it("reads the gap in front of an `export … from` after an import, which no sorter reads", () => {
-    expect(gaps(`${a}\n// note\nexport * from "./b";\n`)).toEqual([["\n// note\n", ["eslint", "oxlint"]]]);
+    expect(gaps(`${a}\n// note\nexport * from "./b";\n`)).toEqual([["\n// note\n", ["eslint", "import-x", "oxlint"]]]);
   });
 
   it("measures a class from its first decorator, past an `export` in front of it", () => {
-    expect(gaps(`${a}\n// note\n@d\nclass C {}\n`)).toEqual([["\n// note\n", ["eslint", "oxlint"]]]);
-    expect(gaps(`${a}\nexport\n// note\n@d class C {}\n`)).toEqual([["\nexport\n// note\n", ["eslint", "oxlint"]]]);
+    expect(gaps(`${a}\n// note\n@d\nclass C {}\n`)).toEqual([["\n// note\n", ["eslint", "import-x", "oxlint"]]]);
+    expect(gaps(`${a}\nexport\n// note\n@d class C {}\n`)).toEqual([
+      ["\nexport\n// note\n", ["eslint", "import-x", "oxlint"]],
+    ]);
     expect(gaps(`${a}\nexport default @d class {}\n`)).toEqual([["\nexport default ", []]]);
     expect(gaps(`${a}\n@d export class C {}\n`)).toEqual([["\n", []]]);
     expect(gaps(`${a}\nexport class C {}\n`)).toEqual([["\n", []]]);
   });
 
   it("counts every line break for eslint-plugin-import, and line feeds alone for oxlint", () => {
-    expect(gaps(`${a}\r\n// note\r\nf();\r\n`)).toEqual([["\r\n// note\r\n", ["eslint", "oxlint"]]]);
-    expect(gaps(`${a}\r// note\rf();\r`)).toEqual([["\r// note\r", ["eslint"]]]);
-    expect(gaps(`${a}\u2028// note\u2029f();\n`)).toEqual([["\u2028// note\u2029", ["eslint"]]]);
+    expect(gaps(`${a}\r\n// note\r\nf();\r\n`)).toEqual([["\r\n// note\r\n", ["eslint", "import-x", "oxlint"]]]);
+    expect(gaps(`${a}\r// note\rf();\r`)).toEqual([["\r// note\r", ["eslint", "import-x"]]]);
+    expect(gaps(`${a}\u2028// note\u2029f();\n`)).toEqual([["\u2028// note\u2029", ["eslint", "import-x"]]]);
   });
 
   it("reads the imports of modules and namespaces, nested ones included, for eslint-plugin-import alone", () => {
@@ -171,23 +193,27 @@ describe("the gaps the newline-after-import rules read", () => {
     ].join("\n");
 
     expect(gaps(source)).toEqual([
-      ["\n  // note\n  ", ["eslint"]],
-      ["\n    // note\n    ", ["eslint"]],
+      ["\n  // note\n  ", ["eslint", "import-x"]],
+      ["\n    // note\n    ", ["eslint", "import-x"]],
     ]);
   });
 
   it("reads a module body with more statements than a function takes arguments", () => {
     const source = `namespace N {\n  import n = M.n;\n  // note\n  ${";".repeat(200_000)}\n}\n`;
 
-    expect(gaps(source)).toEqual([["\n  // note\n  ", ["eslint"]]]);
+    expect(gaps(source)).toEqual([["\n  // note\n  ", ["eslint", "import-x"]]]);
   });
 });
 
 describe("the requires the newline-after-import rules read", () => {
   it("reads the gap after a top-level statement holding a require, unless the next one holds one too", () => {
-    expect(gaps('const x = require("x");\n// note\nf(x);\n')).toEqual([["\n// note\n", ["eslint", "oxlint"]]]);
+    expect(gaps('const x = require("x");\n// note\nf(x);\n')).toEqual([
+      ["\n// note\n", ["eslint", "import-x", "oxlint"]],
+    ]);
     expect(gaps('const x = require("x");\nconst y = require("y");\nf(x, y);\n')).toEqual([["\n", []]]);
-    expect(gaps(`const x = require("x");\n// note\n${a}\n`)).toEqual([["\n// note\n", ["eslint", "oxlint"]]]);
+    expect(gaps(`const x = require("x");\n// note\n${a}\n`)).toEqual([
+      ["\n// note\n", ["eslint", "import-x", "oxlint"]],
+    ]);
   });
 
   it("finds a require wherever no function, block, object literal or decorator holds it", () => {
@@ -211,7 +237,7 @@ describe("the requires the newline-after-import rules read", () => {
       'require?.("x");',
     ];
     for (const statement of outside) {
-      expect(gaps(`${statement}\n// note\nf();\n`)).toEqual([["\n// note\n", ["eslint", "oxlint"]]]);
+      expect(gaps(`${statement}\n// note\nf();\n`)).toEqual([["\n// note\n", ["eslint", "import-x", "oxlint"]]]);
     }
   });
 
@@ -225,7 +251,7 @@ describe("the requires the newline-after-import rules read", () => {
       'require(("x"));',
     ];
     for (const statement of eslintOnly) {
-      expect(gaps(`${statement}\n// note\nf();\n`)).toEqual([["\n// note\n", ["eslint", "oxlint"]]]);
+      expect(gaps(`${statement}\n// note\nf();\n`)).toEqual([["\n// note\n", ["eslint", "import-x", "oxlint"]]]);
     }
   });
 
