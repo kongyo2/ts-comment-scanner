@@ -1,6 +1,6 @@
 import ts from "typescript";
 import { LINE_BREAK } from "./lines.js";
-import { byStart, firstIndexAtOrAfter, type Range } from "./ranges.js";
+import { byStart, rangesWithin, type Range } from "./ranges.js";
 
 type ImportSorter = "typescript" | "dprint";
 
@@ -149,12 +149,7 @@ const FINDS_EMPTY_LINE: Readonly<
  */
 function trailingCommentsEnd(source: string, gap: Range, comments: readonly Range[]): number {
   let end = gap.start;
-  for (
-    let index = firstIndexAtOrAfter(comments, gap.start, (comment) => comment.start);
-    (comments[index]?.start ?? gap.end) < gap.end;
-    index += 1
-  ) {
-    const comment = comments[index] as Range;
+  for (const comment of rangesWithin(comments, gap)) {
     if (LINE_BREAK.test(source.slice(end, comment.start))) break;
     end = comment.end;
   }
@@ -382,12 +377,7 @@ function dprintKind(statement: ts.Statement): "imports" | "exports" | undefined 
 function newLineTrivia(source: string, gap: Range, comments: readonly Range[]): number {
   let count = 0;
   let from = gap.start;
-  for (
-    let index = firstIndexAtOrAfter(comments, gap.start, (comment) => comment.start);
-    (comments[index]?.start ?? gap.end) < gap.end;
-    index += 1
-  ) {
-    const comment = comments[index] as Range;
+  for (const comment of rangesWithin(comments, gap)) {
     count += lineBreaks(source.slice(from, comment.start));
     from = comment.end;
   }

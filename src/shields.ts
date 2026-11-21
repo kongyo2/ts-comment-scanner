@@ -152,6 +152,14 @@ export function shieldDirectives(
   const rowOffsets = (): number[] => (rows ??= rowStartOffsets(source));
   /** The (1-based) line holding the offset. */
   const lineOf = (offset: number): number => lineIndexAt(lineOffsets, offset) + 1;
+  /** Where the comment stands among the source's. */
+  const indexOf = (comment: Comment): number =>
+    firstIndexAtOrAfter(context.comments, comment.start, (other) => other.start);
+  /** The comment holding the offset, where it is still to be removed. */
+  const removalAt = (offset: number): Comment | undefined => {
+    const holder = rangeAt(context.comments, offset);
+    return holder !== undefined && removing.has(holder) ? holder : undefined;
+  };
   /** The given (1-based) line, which the shields only name when the source has it, and the units on it. */
   const unitsOnLine = (line: number): LineUnits => {
     const start = lineOffsets[line - 1] as number;
@@ -318,8 +326,7 @@ export function shieldDirectives(
     // runner ignores the rows below it wherever it stands. A hint in a
     // comment that goes, goes with it.
     pendingHints = pendingHints.filter((hint) => {
-      const holder = rangeAt(context.comments, hint.offset);
-      if (holder !== undefined && removing.has(holder)) return true;
+      if (removalAt(hint.offset) !== undefined) return true;
       const offsets = rowOffsets();
       const row = lineIndexAt(offsets, hint.offset);
       shieldRows(row, row);
@@ -418,8 +425,8 @@ export function shieldDirectives(
       index >= 0 && index < source.length && !LINE_TERMINATOR.test(source[index] as string);
       index += step
     ) {
-      const holder = rangeAt(context.comments, index);
-      if (holder !== undefined && removing.has(holder)) {
+      const holder = removalAt(index);
+      if (holder !== undefined) {
         if (holder.kind === "line" || LINE_TERMINATOR.test(holder.text)) return false;
         index = step === 1 ? holder.end - 1 : holder.start;
       } else if (!isBlank(source[index] as string)) {
@@ -440,7 +447,7 @@ export function shieldDirectives(
       SAME_LINE_GAP.test(
         source.slice((context.comments[index] as Comment).end, (context.comments[index + 1] as Comment).start),
       );
-    const at = firstIndexAtOrAfter(context.comments, comment.start, (other) => other.start);
+    const at = indexOf(comment);
     let first = at;
     while (first > 0 && glued(first - 1)) first -= 1;
     let last = at;
@@ -462,7 +469,7 @@ export function shieldDirectives(
    * or the last, where it is not.
    */
   const edgeMakers = (comment: Comment): Comment[] => {
-    const at = firstIndexAtOrAfter(context.comments, comment.start, (other) => other.start);
+    const at = indexOf(comment);
     return [-1 as const, 1 as const].flatMap((step) => {
       const neighbour = context.comments[at + step];
       if (neighbour === undefined || !removing.has(neighbour)) return [];
