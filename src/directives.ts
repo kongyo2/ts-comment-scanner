@@ -82,6 +82,28 @@ function stylelintDirective(token: string): string | undefined {
   return STYLELINT_COMMANDS.has(command) ? `${STYLELINT_MARKER}${command}` : undefined;
 }
 
+// The comment texts dprint's TypeScript plugin takes for its node pragma: its
+// own default, and the one `deno fmt` configures it with.
+const DPRINT_IGNORE_MARKERS = ["dprint-ignore", "deno-fmt-ignore"] as const;
+
+/**
+ * Whether dprint leaves the node after a comment with this value as it is
+ * (`text_has_dprint_ignore` in dprint-core): it looks at the first place the
+ * marker stands in the text alone, and wants no letter or digit right after
+ * it, and none in the byte right before it — which a character outside ASCII
+ * never ends in. So `édprint-ignore` is a pragma, `xdprint-ignore` and
+ * `dprint-ignoreé` are none, and neither is a second marker behind one of
+ * those. Checked against dprint 0.65.0 with its TypeScript plugin 0.101.0.
+ */
+function ignoresForDprint(value: string, marker: string): boolean {
+  const at = value.indexOf(marker);
+  return (
+    at !== -1 &&
+    !/[A-Za-z0-9]/.test(value.charAt(at - 1)) &&
+    !/^[\p{Alphabetic}\p{N}]/u.test(value.slice(at + marker.length))
+  );
+}
+
 // Prettier's FORMAT_PRAGMAS and FORMAT_IGNORE_PRAGMAS (its
 // `src/utilities/pragma/pragma.evaluate.js`): the docblock keys that
 // --require-pragma looks for and --check-ignore-pragma stops on.
@@ -235,7 +257,7 @@ const RULES: DirectiveRule[] = [
   // marker or a different case leave the comment inert — as does a JSDoc star
   // after `/**`, which postcss keeps as comment text (hence keepStars). `//`
   // comments count too: postcss-scss and postcss-less hand stylelint the same
-  // trimmed text. Verified against stylelint 17.16. A project-specific
+  // trimmed text. Verified against stylelint 17.16 and 18.1. A project-specific
   // `configurationComment` prefix cannot be known here, so only the default
   // marker is matched.
   { pattern: /^\S+/, keepStars: true, name: (match) => stylelintDirective(match[0]) },
@@ -255,17 +277,18 @@ const RULES: DirectiveRule[] = [
   // pragma is a starts-with check on the file's leading comments, after only
   // spaces in a `//` comment and any whitespace in a block one, so a tab or a
   // `/**` docblock star defeats it. The node pragma is a substring bounded by
-  // non-alphanumerics anywhere in the comment, so a reason may follow — and
-  // below the header a stray file pragma still counts as one.
+  // non-alphanumerics anywhere in the comment (see ignoresForDprint), so a
+  // reason may follow — and below the header a stray file pragma still counts
+  // as one.
   {
     pattern: /^\/(?:\/ *|\*\s*)(dprint|deno-fmt)-ignore-file/,
     rawText: true,
     name: (match) => `${match[1] as string}-ignore-file`,
   },
   {
-    pattern: /(?:^|[^\p{L}\p{N}])(dprint|deno-fmt)-ignore(?![\p{L}\p{N}])/u,
-    name: (match) => `${match[1] as string}-ignore`,
-    anyLine: true,
+    pattern: /(?:dprint|deno-fmt)-ignore/,
+    value: true,
+    name: (match) => DPRINT_IGNORE_MARKERS.filter((marker) => ignoresForDprint(match.input, marker)),
   },
   // Prettier pragma mode (--require-pragma / --check-ignore-pragma). Prettier
   // reads the pragmas through jest-docblock (its `src/language-js/pragma.js`):

@@ -462,6 +462,25 @@ describe("detectDirective", () => {
     expect(detectDirective("line", "// dprint-ignored")).toBeUndefined();
   });
 
+  it("bounds dprint's node pragma by the byte in front of it and the character behind, at its first mention", () => {
+    // Checked against dprint 0.65.0 with its TypeScript plugin 0.101.0: the
+    // byte before the marker is no letter or digit when it ends a character
+    // outside ASCII, and only the first place the marker stands counts.
+    expect(detectDirective("line", "// \u00e9dprint-ignore")).toBe("dprint-ignore");
+    expect(detectDirective("line", "// \u4e2ddprint-ignore")).toBe("dprint-ignore");
+    expect(detectDirective("line", "// _dprint-ignore")).toBe("dprint-ignore");
+    expect(detectDirective("line", "//dprint-ignore")).toBe("dprint-ignore");
+    expect(detectDirective("block", "/* \u00e9deno-fmt-ignore */")).toBe("deno-fmt-ignore");
+    expect(detectDirective("line", "// xdprint-ignore")).toBeUndefined();
+    expect(detectDirective("line", "// 1dprint-ignore")).toBeUndefined();
+    expect(detectDirective("line", "// dprint-ignore\u00e9")).toBeUndefined();
+    expect(detectDirective("line", "// xdprint-ignore, then dprint-ignore")).toBeUndefined();
+    expect(detectDirective("line", "// dprint-ignores nothing, dprint-ignore does")).toBeUndefined();
+    // Each tool looks for its own marker.
+    expect(detectDirective("line", "// xdprint-ignore deno-fmt-ignore")).toBe("deno-fmt-ignore");
+    expect(directiveNames("line", "// deno-fmt-ignore dprint-ignore")).toEqual(["dprint-ignore", "deno-fmt-ignore"]);
+  });
+
   it("detects the organize-imports opt-out only in its literal form", () => {
     expect(detectDirective("line", "// organize-imports-ignore")).toBe("organize-imports-ignore");
     expect(detectDirective("line", "// note // organize-imports-ignore")).toBe("organize-imports-ignore");
@@ -1512,7 +1531,8 @@ describe("detectDirective for Vitest and the coverage tools", () => {
 // Re-derived from Rspack 2.3.1 (its magic_comment.rs), webpack 5.112.2 and
 // Turbopack's parse_directives, and checked against the real Rspack 1.0.0,
 // 1.7.12, 2.0.8, 2.1.0 and 2.3.1, webpack 5.112.2 and Next.js 16.4.4's
-// Turbopack (November 2026).
+// Turbopack (November 2026). The sources of Rspack 2.3.3, webpack 5.113.0
+// and Next.js 16.4.6 read the comments the same way.
 describe("detectDirective for the bundlers' magic comments", () => {
   it("reads the rspack prefix, quoted keys and keys after prose or a JSDoc star, as Rspack 2.1 does", () => {
     expect(detectDirective("block", "/* rspackIgnore: true */")).toBe("rspack-magic-comment");
