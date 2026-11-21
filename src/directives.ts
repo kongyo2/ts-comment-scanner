@@ -91,9 +91,9 @@ const DPRINT_IGNORE_MARKERS = ["dprint-ignore", "deno-fmt-ignore"] as const;
  * (`text_has_dprint_ignore` in dprint-core): it looks at the first place the
  * marker stands in the text alone, and wants no letter or digit right after
  * it, and none in the byte right before it — which a character outside ASCII
- * never ends in. So `édprint-ignore` is a pragma, `xdprint-ignore` and
- * `dprint-ignoreé` are none, and neither is a second marker behind one of
- * those. Checked against dprint 0.65.0 with its TypeScript plugin 0.101.0.
+ * never ends in. So `xdprint-ignore` and `dprint-ignoreé` are no pragmas, and
+ * neither is a second marker behind one of them, while `édprint-ignore` is
+ * one. Checked against dprint 0.65.0 with its TypeScript plugin 0.101.0.
  */
 function ignoresForDprint(value: string, marker: string): boolean {
   const at = value.indexOf(marker);
