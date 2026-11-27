@@ -3,7 +3,7 @@ import { attachContainers, emptiedBy, mergeContainers, type Container } from "./
 import { activePositionalDirectives, bunMarkerOffset, isLegalComment, type DirectivePlacement } from "./directives.js";
 import type { ImportGroupGap } from "./imports.js";
 import { LINE_TERMINATOR, isBlank, lineIndexAt, lineStartOffsets } from "./lines.js";
-import { byStart, type Range } from "./ranges.js";
+import { byStart, rangesWithin, type Range } from "./ranges.js";
 import { analyzeSource, type EmptyCaseGap, type ScanOptions, type SourceAnalysis } from "./scanner.js";
 import { shieldDirectives, type ShieldContext } from "./shields.js";
 import { applyEdits, blankLineEdits, heldLines, type Edit, type ShieldedLines } from "./splice.js";
@@ -187,7 +187,7 @@ export function removeComments(source: string, options: RemoveOptions = {}): Rem
           linesBelowCases.add(lineAbove);
           continue;
         }
-        const inGap = new Set(removed.filter((comment) => comment.start >= gap.start && comment.end <= gap.end));
+        const inGap = new Set(rangesWithin(removed, gap));
         if (inGap.size === 0) throw unexpectedResult();
         removed = removed.filter((comment) => !inGap.has(comment));
         kept.push(...inGap);
@@ -328,7 +328,7 @@ function gapHolders(
     const intact =
       gap.splits.every((sorter) => splits.includes(sorter)) && gap.spaced.every((linter) => spaced.includes(linter));
     if (intact) continue;
-    const inGap = removals.filter((comment) => comment.start >= gap.start && comment.end <= gap.end);
+    const inGap = rangesWithin(removals, gap);
     // An empty line in the gap already starts a group for both sorters and
     // is the empty line both linters want.
     if (inGap.some((comment) => holders.has(comment))) throw unexpectedResult();

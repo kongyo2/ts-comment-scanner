@@ -7,10 +7,12 @@ import {
   LINE_TERMINATOR,
   closesItsLine,
   isBlank,
+  isBlankWithinLine,
   lineIndexAt,
   lineStartOffsets,
   occupiesWholeLines,
   opensItsLine,
+  touchesLineEdge,
 } from "./lines.js";
 import { byStart, firstIndexAtOrAfter, rangeAt, rangesWithin, type Range } from "./ranges.js";
 import type { Comment } from "./types.js";
@@ -540,7 +542,7 @@ export function shieldDirectives(
    */
   const settleTie = (behind: readonly Comment[]): void => {
     protect(behind.filter(leavesLineBreak));
-    const breakers = behind.filter((comment) => opensItsLine(source, comment) || closesItsLine(source, comment));
+    const breakers = behind.filter((comment) => touchesLineEdge(source, comment));
     // A comment that stays opens its line, or ends it, once the removals next to it are gone.
     const served = behind.some(
       (comment) =>
@@ -560,8 +562,7 @@ export function shieldDirectives(
       const neighbour = context.comments[at + step];
       if (neighbour === undefined || !removing.has(neighbour)) return [];
       const gap = step === 1 ? source.slice(comment.end, neighbour.start) : source.slice(neighbour.end, comment.start);
-      const onItsLine = isBlank(gap) && !LINE_TERMINATOR.test(gap);
-      return onItsLine && !sharesLineWithWhatStays(comment, step) ? [neighbour] : [];
+      return isBlankWithinLine(gap) && !sharesLineWithWhatStays(comment, step) ? [neighbour] : [];
     });
   };
 

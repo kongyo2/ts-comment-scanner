@@ -17,6 +17,11 @@ export function isBlank(text: string): boolean {
   return /^\s*$/.test(text);
 }
 
+/** True when the text holds nothing but whitespace, and no line break. */
+export function isBlankWithinLine(text: string): boolean {
+  return isBlank(text) && !LINE_TERMINATOR.test(text);
+}
+
 /** True for a space or a tab, the blanks that hold the tokens on a line apart. */
 export function isHorizontalSpace(char: string | undefined): boolean {
   return char === " " || char === "\t";
@@ -66,6 +71,11 @@ export function lineIndexAt(lineStarts: readonly number[], offset: number): numb
  */
 export function occupiesWholeLines(source: string, range: Range): boolean {
   return opensItsLine(source, range) && closesItsLine(source, range);
+}
+
+/** True when nothing but whitespace precedes the range on its first line, or follows it on its last. */
+export function touchesLineEdge(source: string, range: Range): boolean {
+  return opensItsLine(source, range) || closesItsLine(source, range);
 }
 
 /** True when nothing but whitespace follows the range on its last line. */

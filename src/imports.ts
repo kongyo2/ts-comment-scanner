@@ -1,6 +1,6 @@
 import ts from "typescript";
 import { LINE_BREAK, holdsTwoBreaks, isBlank } from "./lines.js";
-import { byStart, rangesWithin, type Range } from "./ranges.js";
+import { byStart, gapsWithin, rangesWithin, type Range } from "./ranges.js";
 
 type ImportSorter = "typescript" | "dprint";
 
@@ -369,13 +369,7 @@ function dprintKind(statement: ts.Statement): "imports" | "exports" | undefined 
 
 /** The line breaks TypeScript's scanner reads as NewLineTrivia in the gap, past its (sorted) comments. */
 function newLineTrivia(source: string, gap: Range, comments: readonly Range[]): number {
-  let count = 0;
-  let from = gap.start;
-  for (const comment of rangesWithin(comments, gap)) {
-    count += lineBreaks(source.slice(from, comment.start));
-    from = comment.end;
-  }
-  return count + lineBreaks(source.slice(from, gap.end));
+  return gapsWithin(comments, gap).reduce((count, { start, end }) => count + lineBreaks(source.slice(start, end)), 0);
 }
 
 function lineBreaks(text: string): number {

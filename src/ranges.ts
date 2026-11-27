@@ -38,3 +38,19 @@ export function rangesWithin<T extends Range>(ranges: readonly T[], span: Range)
     firstIndexAtOrAfter(ranges, span.end + 1, (range) => range.end),
   );
 }
+
+/**
+ * The stretches of the span that lie outside the sorted, non-overlapping
+ * ranges within it, in order: one in front of each range, and one behind
+ * the last.
+ */
+export function gapsWithin(ranges: readonly Range[], span: Range): Range[] {
+  const gaps: Range[] = [];
+  let start = span.start;
+  for (const range of rangesWithin(ranges, span)) {
+    gaps.push({ start, end: range.start });
+    start = range.end;
+  }
+  gaps.push({ start, end: span.end });
+  return gaps;
+}

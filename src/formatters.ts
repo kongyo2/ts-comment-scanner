@@ -1,6 +1,6 @@
 import ts from "typescript";
-import { LINE_TERMINATOR, closesItsLine, isBlank, opensItsLine } from "./lines.js";
-import { firstIndexAtOrAfter, rangesWithin, type Range } from "./ranges.js";
+import { LINE_TERMINATOR, closesItsLine, isBlank, isBlankWithinLine, opensItsLine, touchesLineEdge } from "./lines.js";
+import { firstIndexAtOrAfter, gapsWithin, rangesWithin, type Range } from "./ranges.js";
 import type { Comment } from "./types.js";
 
 /**
@@ -146,12 +146,18 @@ function edgesNode(token: ts.Node, sourceFile: ts.SourceFile): boolean {
   if (isNode(token) || delimits(token)) return true;
   // The `)` that oxfmt drops closes around a node that ended in front of it.
   if (token.kind === ts.SyntaxKind.CloseParenToken && TRANSPARENT.has(token.parent.kind)) return false;
-  for (
-    let node = token.parent;
-    !ts.isSourceFile(node) && (node.end === token.end || node.getStart(sourceFile) === start);
-    node = node.parent
-  ) {
-    if (!TRANSPARENT.has(node.kind)) return true;
+  return bounds(token, sourceFile, TRANSPARENT, true);
+}
+
+/**
+ * Whether a node around the token starts with it — or, with `ends`, ends
+ * with it — that is none of the kinds the formatter's tree has no node for.
+ */
+function bounds(token: ts.Node, sourceFile: ts.SourceFile, none: ReadonlySet<ts.SyntaxKind>, ends: boolean): boolean {
+  const start = token.getStart(sourceFile);
+  const shares = (node: ts.Node): boolean => node.getStart(sourceFile) === start || (ends && node.end === token.end);
+  for (let node = token.parent; !ts.isSourceFile(node) && shares(node); node = node.parent) {
+    if (!none.has(node.kind)) return true;
   }
   return false;
 }
@@ -175,16 +181,32 @@ export function stretchBetweenNodes(sourceFile: ts.SourceFile, tokens: readonly 
       break;
     }
   }
-  let end = sourceFile.text.length;
-  for (let index = firstIndexAtOrAfter(tokens, comment.end, (token) => token.end); index < tokens.length; index += 1) {
-    const token = tokens[index] as ts.Node;
-    if (token.kind === ts.SyntaxKind.SemicolonToken || edgesNode(token, sourceFile)) {
-      end = token.getStart(sourceFile);
-      break;
-    }
-  }
-  return { start, end };
+  const behind = tokenBehind(
+    sourceFile,
+    tokens,
+    comment.end,
+    (token) => token.kind === ts.SyntaxKind.SemicolonToken || edgesNode(token, sourceFile),
+  );
+  return { start, end: behind?.getStart(sourceFile) ?? sourceFile.text.length };
 }
+
+/** The first token at or behind the offset that holds text and that the test accepts, if any. */
+function tokenBehind(
+  sourceFile: ts.SourceFile,
+  tokens: readonly ts.Node[],
+  offset: number,
+  accepts: (token: ts.Node) => boolean,
+): ts.Node | undefined {
+  for (let index = firstIndexAtOrAfter(tokens, offset, (token) => token.end); index < tokens.length; index += 1) {
+    const token = tokens[index] as ts.Node;
+    // An empty list and a missing token hold no text, and no formatter reads one there.
+    if (token.getStart(sourceFile) < token.end && accepts(token)) return token;
+  }
+  return undefined;
+}
+
+// The braces of a switch are tokens of the statement to Biome.
+const TOKENS_TO_BIOME: ReadonlySet<ts.SyntaxKind> = new Set([ts.SyntaxKind.CaseBlock]);
 
 /**
  * Whether a node of Biome's tree starts with the token for certain: the
@@ -193,12 +215,7 @@ export function stretchBetweenNodes(sourceFile: ts.SourceFile, tokens: readonly 
  * Biome, and so are the braces of a switch.
  */
 function startsNode(token: ts.Node, sourceFile: ts.SourceFile): boolean {
-  if (isNode(token)) return !ts.isMetaProperty(token.parent);
-  const start = token.getStart(sourceFile);
-  for (let node = token.parent; !ts.isSourceFile(node) && node.getStart(sourceFile) === start; node = node.parent) {
-    if (!ts.isCaseBlock(node)) return true;
-  }
-  return false;
+  return isNode(token) ? !ts.isMetaProperty(token.parent) : bounds(token, sourceFile, TOKENS_TO_BIOME, false);
 }
 
 /**
@@ -212,16 +229,10 @@ function startsNode(token: ts.Node, sourceFile: ts.SourceFile): boolean {
  * which only takes more comments in.
  */
 export function stretchHeldBack(sourceFile: ts.SourceFile, tokens: readonly ts.Node[], comment: Range): Range {
-  let start: number | undefined;
-  for (let index = firstIndexAtOrAfter(tokens, comment.end, (token) => token.end); index < tokens.length; index += 1) {
-    const token = tokens[index] as ts.Node;
-    const tokenStart = token.getStart(sourceFile);
-    // An empty list and a missing token hold no text, and Biome reads none there.
-    if (tokenStart >= token.end) continue;
-    if (startsNode(token, sourceFile)) return { start: start ?? tokenStart, end: tokenStart };
-    start ??= token.end;
-  }
-  return { start: start ?? sourceFile.text.length, end: sourceFile.text.length };
+  const first = tokenBehind(sourceFile, tokens, comment.end, () => true);
+  if (first === undefined || startsNode(first, sourceFile)) return { start: comment.end, end: comment.end };
+  const next = tokenBehind(sourceFile, tokens, first.end + 1, (token) => startsNode(token, sourceFile));
+  return { start: first.end, end: next?.getStart(sourceFile) ?? sourceFile.text.length };
 }
 
 /** The comments within the span, in the runs that the tokens between them divide them into. */
@@ -277,10 +288,9 @@ export function commentsAround(
 ): { before: Comment[][]; after: Comment[][]; target: Comment[] } {
   const front = { start: stretch.start, end: suppression.start };
   const back = { start: suppression.end, end: stretch.end };
-  let first = firstIndexAtOrAfter(comments, suppression.start, (comment) => comment.start);
-  while (first > 0 && sharesLine(source, comments[first - 1] as Comment, comments[first] as Comment)) first -= 1;
+  const [first] = runOnLine(source, comments, suppression);
   const leads =
-    opensItsLine(source, comments[first] as Comment) ||
+    opensItsLine(source, first) ||
     (source[stretch.end] !== ";" &&
       !LINE_TERMINATOR.test(source.slice(back.start, back.end)) &&
       /^\(*$/.test(codeWithin(source, comments, back)));
@@ -303,14 +313,14 @@ export function commentsAround(
  * where the stretch is no such place.
  */
 function behindTarget(source: string, comments: readonly Comment[], stretch: Range): Comment[] {
-  const within = rangesWithin(comments, stretch);
   let closed = false;
-  for (const [index, comment] of [...within, { start: stretch.end }].entries()) {
-    const from = index === 0 ? stretch.start : (within[index - 1] as Comment).end;
-    const code = source.slice(from, comment.start).replace(/\s+/g, "");
+  for (const [index, { start, end }] of gapsWithin(comments, stretch).entries()) {
+    const code = source.slice(start, end).replace(/\s+/g, "");
     const rest = code.replace(/^\)+/, "");
     closed ||= rest !== code;
-    if (rest !== "") return closed && ASSIGNMENT_OPERATOR.test(rest) ? within.slice(0, index) : [];
+    if (rest !== "") {
+      return closed && ASSIGNMENT_OPERATOR.test(rest) ? rangesWithin(comments, stretch).slice(0, index) : [];
+    }
   }
   return [];
 }
@@ -345,15 +355,10 @@ const TIE_GAP = /^[\s(]*$/;
  * opens that line or ends it: both place it by that alone then.
  */
 export function tiedBehind(source: string, comments: readonly Comment[], suppression: Comment): Comment[] {
-  const at = firstIndexAtOrAfter(comments, suppression.start, (comment) => comment.start);
-  let first = at;
-  while (first > 0 && sharesLine(source, comments[first - 1] as Comment, comments[first] as Comment)) first -= 1;
-  let last = at;
-  while (last + 1 < comments.length && sharesLine(source, comments[last] as Comment, comments[last + 1] as Comment)) {
-    last += 1;
-  }
-  if (opensItsLine(source, comments[first] as Comment) || closesItsLine(source, comments[last] as Comment)) return [];
+  const [first, last] = runOnLine(source, comments, suppression);
+  if (opensItsLine(source, first) || closesItsLine(source, last)) return [];
   const behind: Comment[] = [];
+  const at = firstIndexAtOrAfter(comments, suppression.start, (comment) => comment.start);
   for (let index = at + 1; index < comments.length; index += 1) {
     const comment = comments[index] as Comment;
     if (!TIE_GAP.test(source.slice((comments[index - 1] as Comment).end, comment.start))) break;
@@ -364,19 +369,28 @@ export function tiedBehind(source: string, comments: readonly Comment[], suppres
 
 /** The code of the span: its text outside the comments, without the blanks. */
 function codeWithin(source: string, comments: readonly Comment[], span: Range): string {
-  let code = "";
-  let from = span.start;
-  for (const comment of rangesWithin(comments, span)) {
-    code += source.slice(from, comment.start);
-    from = comment.end;
-  }
-  return (code + source.slice(from, span.end)).replace(/\s+/g, "");
+  return gapsWithin(comments, span)
+    .map(({ start, end }) => source.slice(start, end))
+    .join("")
+    .replace(/\s+/g, "");
 }
 
-/** Whether nothing but blanks, and no line break, holds the two comments apart. */
-function sharesLine(source: string, comment: Comment, next: Comment): boolean {
-  const gap = source.slice(comment.end, next.start);
-  return isBlank(gap) && !LINE_TERMINATOR.test(gap);
+/**
+ * The first and the last comment of the run the comment stands in on its
+ * line: the comments that nothing but blanks, and no line break, holds apart.
+ */
+function runOnLine(source: string, comments: readonly Comment[], comment: Comment): [first: Comment, last: Comment] {
+  const at = firstIndexAtOrAfter(comments, comment.start, (other) => other.start);
+  /** Whether the comment at the index and the one after it stand in one run. */
+  const runsOn = (index: number): boolean => {
+    const [one, next] = [comments[index], comments[index + 1]];
+    return one !== undefined && next !== undefined && isBlankWithinLine(source.slice(one.end, next.start));
+  };
+  let first = at;
+  while (runsOn(first - 1)) first -= 1;
+  let last = at;
+  while (runsOn(last)) last += 1;
+  return [comments[first] as Comment, comments[last] as Comment];
 }
 
 /**
@@ -428,7 +442,7 @@ export function deciders(
     if (serving.length > 0 && !serving.some(stays)) found.push(last);
   }
   for (const run of after) {
-    const first = run.findIndex((comment) => opensItsLine(source, comment) || closesItsLine(source, comment));
+    const first = run.findIndex((comment) => touchesLineEdge(source, comment));
     if (first === -1) continue;
     const decider = run[first] as Comment;
     const between = codeWithin(source, comments, { start: suppression.end, end: decider.start });
