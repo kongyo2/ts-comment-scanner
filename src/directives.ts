@@ -104,6 +104,17 @@ function ignoresForDprint(value: string, marker: string): boolean {
   );
 }
 
+/**
+ * The node pragmas dprint and `deno fmt` read from a comment with this value,
+ * the one that stands first in it first: it is the one the comment opens
+ * with, where it opens with one, and names the comment.
+ */
+function dprintIgnoreMarkers(value: string): string[] {
+  return DPRINT_IGNORE_MARKERS.filter((marker) => ignoresForDprint(value, marker)).sort(
+    (marker, other) => value.indexOf(marker) - value.indexOf(other),
+  );
+}
+
 // Prettier's FORMAT_PRAGMAS and FORMAT_IGNORE_PRAGMAS (its
 // `src/utilities/pragma/pragma.evaluate.js`): the docblock keys that
 // --require-pragma looks for and --check-ignore-pragma stops on.
@@ -288,7 +299,7 @@ const RULES: DirectiveRule[] = [
   {
     pattern: /(?:dprint|deno-fmt)-ignore/,
     value: true,
-    name: (match) => DPRINT_IGNORE_MARKERS.filter((marker) => ignoresForDprint(match.input, marker)),
+    name: (match) => dprintIgnoreMarkers(match.input),
   },
   // Prettier pragma mode (--require-pragma / --check-ignore-pragma). Prettier
   // reads the pragmas through jest-docblock (its `src/language-js/pragma.js`):
