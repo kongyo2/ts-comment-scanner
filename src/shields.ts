@@ -30,6 +30,8 @@ export interface ShieldContext {
   shadows: ReadonlyMap<Comment, Comment>;
   /** The cast comments a parenthesized expression follows (see SourceAnalysis). */
   casts: ReadonlySet<Comment>;
+  /** Where the switch statements reading a `no default` comment from the comment's place end (see SourceAnalysis). */
+  switchEnds: (comment: Comment) => number[];
 }
 
 export interface Shielding {
@@ -104,6 +106,8 @@ interface Front {
  *   would leave a line break next to it (see PLACED_BY_LINE), or one right
  *   beside it that keeps it from an end of its line (see
  *   PLACED_BY_NEIGHBOURS);
+ * - behind a `no default` comment, the last comment up to the end of its
+ *   switch, which oxlint would take for that comment otherwise;
  * - a JSX comment container right after a directive in a container
  *   (`{/* prettier-ignore *​/}`, which applies to the next sibling);
  * - the last JSDoc comment of a node in JavaScript, where an earlier one
@@ -210,6 +214,14 @@ export function shieldDirectives(
         gaps.push({ start: comment.end, end: codeStart, stays: "last", line: comment.endLine });
         added = true;
       }
+    }
+    // oxlint's default-case takes the last comment from the start of the
+    // switch's last clause to its closing brace for the switch's `no default`
+    // comment, the code in between notwithstanding: the last comment behind
+    // one stays, up to the end of every switch that reads it from there.
+    for (const end of directive === "no-default" ? context.switchEnds(comment) : []) {
+      gaps.push({ start: comment.end, end, stays: "last", line: comment.endLine });
+      added = true;
     }
     const lastComment = isLastCommentDirective(comment, directive);
     const cast = CAST_DIRECTIVES.has(directive) && context.casts.has(comment);

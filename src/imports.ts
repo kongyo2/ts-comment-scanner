@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { LINE_BREAK, isBlank } from "./lines.js";
+import { LINE_BREAK, holdsTwoBreaks, isBlank } from "./lines.js";
 import { byStart, rangesWithin, type Range } from "./ranges.js";
 
 type ImportSorter = "typescript" | "dprint";
@@ -156,14 +156,6 @@ function trailingCommentsEnd(source: string, gap: Range, comments: readonly Rang
     end = comment.end;
   }
   return end;
-}
-
-/**
- * Whether a gap holds two line breaks or more, those inside comments
- * included, to a tool that counts what `lineBreak` matches as one.
- */
-function holdsTwoBreaks(lineBreak: string | RegExp): (source: string, gap: Range) => boolean {
-  return (source, gap) => source.slice(gap.start, gap.end).split(lineBreak).length > 2;
 }
 
 /**

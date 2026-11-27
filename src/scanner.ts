@@ -3,6 +3,7 @@ import { isFileWidePosition, type PrecedingNode } from "./astgrep.js";
 import { bunMarkerOffset, carriesAstGrepSuppression, directiveNames, type DirectivePlacement } from "./directives.js";
 import { importGroupGaps, type ImportGroupGap } from "./imports.js";
 import { jsxLayout, type JsxLayout } from "./jsx.js";
+import { LINE_BREAK, holdsTwoBreaks } from "./lines.js";
 import { byStart, firstIndexAtOrAfter, rangeAt, type Range } from "./ranges.js";
 import type { Comment, CommentKind } from "./types.js";
 
@@ -60,6 +61,59 @@ export interface SourceAnalysis {
    * the linters want an empty line (see importGroupGaps).
    */
   importGroups: ImportGroupGap[];
+  /**
+   * The gaps between an empty switch clause and the clause after it, where
+   * the no-fallthrough rules read from the lines whether the empty clause
+   * falls through (see EmptyCaseGap).
+   */
+  emptyCases: EmptyCaseGap[];
+  /**
+   * Where the switch statements end that oxlint's default-case could read a
+   * `no default` comment for at the comment's place (see switchEndsAround).
+   * Worked out when asked for: only a `no default` comment needs it.
+   */
+  switchEnds: (comment: Range) => number[];
+}
+
+/**
+ * The linters whose no-fallthrough rule goes by the lines below an empty
+ * `case`: ESLint, and oxlint from 1.95.0 on, which count every line break
+ * ("eslint"), and oxlint up to 1.94.0, which counted line feeds alone
+ * ("oxlint").
+ */
+type FallthroughLinter = "eslint" | "oxlint";
+
+/**
+ * The gap between a switch clause without statements and the clause after
+ * it, from the end of its `:` to the next `case` or `default`. ESLint's
+ * no-fallthrough (in eslint:recommended) lets an empty `case` share the code
+ * of the clause below only where that clause starts on the line after it at
+ * the latest. With a line in between — an empty one, or one that holds a
+ * comment — it reports the clause below like one that statements fall
+ * through to (`hasBlankLinesBetween` in its no-fallthrough.js, unless
+ * `allowEmptyCase` is set), and so does oxlint's port. Deleting the comment
+ * lines there would take the report away, and leave a directive that
+ * suppressed it unused.
+ */
+export interface EmptyCaseGap extends Range {
+  /** The linters to which the clause after the gap starts two or more lines below the empty one. */
+  apart: FallthroughLinter[];
+}
+
+// Whether the linter finds a line between the empty clause and the one after the gap.
+const FINDS_LINE_BETWEEN: Readonly<Record<FallthroughLinter, (source: string, gap: Range) => boolean>> = {
+  eslint: holdsTwoBreaks(LINE_BREAK),
+  oxlint: holdsTwoBreaks("\n"),
+};
+
+/** The gap in front of each clause of the switch that an empty clause precedes (see EmptyCaseGap). */
+function emptyCaseGaps(source: string, sourceFile: ts.SourceFile, caseBlock: ts.CaseBlock): EmptyCaseGap[] {
+  return caseBlock.clauses.flatMap((clause, index) => {
+    if (index === 0 || (caseBlock.clauses[index - 1] as ts.CaseOrDefaultClause).statements.length > 0) return [];
+    const gap = { start: clause.pos, end: clause.getStart(sourceFile) };
+    const apart = (["eslint", "oxlint"] as const).filter((linter) => FINDS_LINE_BETWEEN[linter](source, gap));
+    return [{ ...gap, apart }];
+  });
 }
 
 export function analyzeSource(source: string, options: ScanOptions = {}): SourceAnalysis {
@@ -91,6 +145,7 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
   const emptyBlocks: Range[] = [];
   /** The JSDoc comments of every node tsc attaches some to, in document order. */
   const jsDocs: ts.JSDoc[][] = [];
+  const emptyCases: EmptyCaseGap[] = [];
 
   const collect = (found: readonly ts.CommentRange[] | undefined): void => {
     if (!found) return;
@@ -108,6 +163,7 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
   while (pending.length > 0) {
     const node = pending.pop() as ts.Node;
     if (ts.isJsxElement(node) || ts.isJsxFragment(node)) jsxParents.push(node);
+    if (ts.isCaseBlock(node)) emptyCases.push(...emptyCaseGaps(source, sourceFile, node));
     if ((ts.isBlock(node) && node.statements.length === 0) || (ts.isCaseBlock(node) && node.clauses.length === 0)) {
       // A block the parser had to make up, with no opening brace, holds nothing.
       const start = node.getStart(sourceFile);
@@ -247,6 +303,8 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
     shadows,
     casts,
     importGroups: importGroupGaps(source, sourceFile, comments),
+    emptyCases: emptyCases.sort(byStart),
+    switchEnds: (comment) => switchEndsAround(sourceFile, tokenAfter(comment.end), comment),
   };
 }
 
@@ -409,6 +467,23 @@ function switchSlots(token: ts.Node): { fallthroughSlot: boolean; noDefaultSlot:
       (node !== parent || token.kind !== ts.SyntaxKind.CaseKeyword);
   }
   return { fallthroughSlot, noDefaultSlot };
+}
+
+/**
+ * The ends of the switch statements without a default clause that hold the
+ * comment from their last clause's start on, innermost first: the stretch
+ * oxlint's default-case takes the last comment of (`has_default_comment` in
+ * its default_case.rs), whatever code stands in it. `token` is the token
+ * after the comment.
+ */
+function switchEndsAround(sourceFile: ts.SourceFile, token: ts.Node, comment: Range): number[] {
+  const ends: number[] = [];
+  for (let node = token.parent; !ts.isSourceFile(node); node = node.parent) {
+    if (!ts.isCaseBlock(node) || !lacksDefaultClause(node)) continue;
+    const lastClause = node.clauses.at(-1) as ts.CaseOrDefaultClause;
+    if (comment.start >= lastClause.getStart(sourceFile)) ends.push(node.end);
+  }
+  return ends;
 }
 
 /** Whether the switch has clauses but none of them is a default clause. */

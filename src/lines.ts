@@ -34,6 +34,14 @@ export function lastLine(text: string): string {
 }
 
 /**
+ * Whether a span holds two line breaks or more, those inside comments
+ * included, to a tool that counts what `lineBreak` matches as one.
+ */
+export function holdsTwoBreaks(lineBreak: string | RegExp): (source: string, span: Range) => boolean {
+  return (source, span) => source.slice(span.start, span.end).split(lineBreak).length > 2;
+}
+
+/**
  * Start offset of every line, numbered the way the scanner numbers them
  * (line 1 starts at index 0) — or, given another `lineBreak`, the way that
  * pattern breaks lines.
