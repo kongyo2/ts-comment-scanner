@@ -124,6 +124,8 @@ export function removeComments(source: string, options: RemoveOptions = {}): Rem
     directives: analysis.directives,
     shadows: analysis.shadows,
     casts: analysis.casts,
+    stretch: analysis.stretch,
+    heldBack: analysis.heldBack,
     switchEnds: analysis.switchEnds,
   };
   const search = containerSearch(containers);

@@ -1,6 +1,7 @@
 import ts from "typescript";
 import { isFileWidePosition, type PrecedingNode } from "./astgrep.js";
 import { bunMarkerOffset, carriesAstGrepSuppression, directiveNames, type DirectivePlacement } from "./directives.js";
+import { stretchBetweenNodes, stretchHeldBack } from "./formatters.js";
 import { importGroupGaps, type ImportGroupGap } from "./imports.js";
 import { jsxLayout, type JsxLayout } from "./jsx.js";
 import { LINE_BREAK, holdsTwoBreaks } from "./lines.js";
@@ -67,6 +68,19 @@ export interface SourceAnalysis {
    * falls through (see EmptyCaseGap).
    */
   emptyCases: EmptyCaseGap[];
+  /**
+   * The stretch between the code in front of a comment and the code behind
+   * it, in which a formatter reads the comments one after another (see
+   * stretchBetweenNodes). Worked out when asked for: only the comments next
+   * to a formatter suppression need it.
+   */
+  stretch: (comment: Range) => Range;
+  /**
+   * The stretch behind a comment across which Biome holds the comment back
+   * before it places it (see stretchHeldBack). Worked out when asked for,
+   * like the stretch.
+   */
+  heldBack: (comment: Range) => Range;
   /**
    * Where the switch statements end that oxlint's default-case could read a
    * `no default` comment for at the comment's place (see switchEndsAround).
@@ -304,6 +318,8 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
     casts,
     importGroups: importGroupGaps(source, sourceFile, comments),
     emptyCases: emptyCases.sort(byStart),
+    stretch: (comment) => stretchBetweenNodes(sourceFile, tokens, comment),
+    heldBack: (comment) => stretchHeldBack(sourceFile, tokens, comment),
     switchEnds: (comment) => switchEndsAround(sourceFile, tokenAfter(comment.end), comment),
   };
 }
