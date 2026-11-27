@@ -140,6 +140,18 @@ describe("the gaps the newline-after-import rules read", () => {
     expect(gaps(`const x = require("x"); /* one\n */\nf(x);\n`)).toEqual([[" /* one\n */\n", ["eslint", "oxlint"]]]);
   });
 
+  it("ends the comments trailing the import at a token, for eslint-plugin-import-x", () => {
+    // The `export` in front of a decorated class stands between the two
+    // comments: only the first trails the import, and the lines count from
+    // its end. Checked against eslint-plugin-import-x 4.18.1.
+    expect(gaps(`${a} /* one\n */ export /* two\n */\n@d class C {}\n`)).toEqual([
+      [" /* one\n */ export /* two\n */\n", ["eslint", "import-x", "oxlint"]],
+    ]);
+    expect(gaps(`${a} /* one\n */ export /* two */\n@d class C {}\n`)).toEqual([
+      [" /* one\n */ export /* two */\n", ["eslint", "oxlint"]],
+    ]);
+  });
+
   it("finds none where a comment shares a line with the import or the statement", () => {
     expect(gaps(`${a}\nf();\n`)).toEqual([["\n", []]]);
     expect(gaps(`${a} // note\nf();\n`)).toEqual([[" // note\n", []]]);

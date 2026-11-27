@@ -1649,6 +1649,20 @@ describe("removeComments between the imports and the code after them", () => {
     );
   });
 
+  it("leaves an empty line below an `export` that ends the comments trailing the import", () => {
+    // Checked against eslint-plugin-import-x 4.18.1, which stops at the
+    // `export` in front of a decorated class: the notice ends on the second
+    // line, and the decorator has to start on the fourth. 1.23.0 read the
+    // note as trailing the import too, and brought the decorator up to the
+    // third line.
+    expect(removeComments(`${a} /*! legal\n */ export /* note\n */\n@d class C {}\n`).code).toBe(
+      `${a} /*! legal\n */ export\n\n@d class C {}\n`,
+    );
+    expect(removeComments(`${a} /*! legal\n */ export default /* note\n */\n@d class C {}\n`).code).toBe(
+      `${a} /*! legal\n */ export default\n\n@d class C {}\n`,
+    );
+  });
+
   it("adds no empty line where a blank line stays", () => {
     expect(removeComments(`${a}\n\n// note\nf(a);\n`).code).toBe(`${a}\n\nf(a);\n`);
     expect(removeComments(`${a}\n// note\n\nf(a);\n`).code).toBe(`${a}\n\nf(a);\n`);

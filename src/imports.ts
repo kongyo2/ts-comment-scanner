@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { LINE_BREAK } from "./lines.js";
+import { LINE_BREAK, isBlank } from "./lines.js";
 import { byStart, rangesWithin, type Range } from "./ranges.js";
 
 type ImportSorter = "typescript" | "dprint";
@@ -144,13 +144,15 @@ const FINDS_EMPTY_LINE: Readonly<
  * Where the comments trailing the statement in front of the gap end, as
  * eslint-plugin-import-x reads them (`getTrailingComments` in its
  * utils/trailing-comments.js): the comments after the statement that each
- * start on the line the statement, or the comment before, ends on. The gap's
- * start when none does.
+ * start on the line the statement, or the comment before, ends on, with no
+ * token in between — the `export` in front of a decorated class ends them.
+ * The gap's start when none does.
  */
 function trailingCommentsEnd(source: string, gap: Range, comments: readonly Range[]): number {
   let end = gap.start;
   for (const comment of rangesWithin(comments, gap)) {
-    if (LINE_BREAK.test(source.slice(end, comment.start))) break;
+    const between = source.slice(end, comment.start);
+    if (!isBlank(between) || LINE_BREAK.test(between)) break;
     end = comment.end;
   }
   return end;
