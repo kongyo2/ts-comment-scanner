@@ -73,8 +73,8 @@
     "@types/node": "^25.9.9",
     "@types/picomatch": "^4.0.3",
     "@vitest/coverage-v8": "^4.1.10",
-    "knip": "^6.47.0",
-    "oxlint": "^1.94.0",
+    "knip": "^6.48.0",
+    "oxlint": "^1.95.0",
     "prettier": "^3.10.1",
     "v8-to-istanbul": "^9.3.0",
     "vitest": "^4.1.9"
