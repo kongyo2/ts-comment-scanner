@@ -138,6 +138,37 @@ describe("removeComments import group verification", () => {
   });
 });
 
+describe("removeComments verification below empty switch clauses", () => {
+  const source = "switch (x) {\n  case 0:\n\n  case 1:\n    b(); // gone\n}\n";
+
+  it("throws when the output's switch clauses are laid out differently", () => {
+    vi.mocked(analyzeSource)
+      .mockImplementationOnce(realAnalyze)
+      .mockImplementationOnce(tampered((analysis) => ({ ...analysis, emptyCases: [] })));
+
+    expect(() => removeComments(source)).toThrow(/unexpected result/);
+  });
+
+  it("throws when the output loses the line below an empty case where no removal holds the gap", () => {
+    // A blank line holds the second clause apart, which no removal touches:
+    // the line above the clause stays in vain, and no comment of the gap is
+    // left to keep.
+    vi.mocked(analyzeSource)
+      .mockImplementationOnce(realAnalyze)
+      .mockImplementation(
+        tampered((analysis) => ({
+          ...analysis,
+          emptyCases: analysis.emptyCases.map((gap) => ({ ...gap, apart: [] })),
+        })),
+      );
+    try {
+      expect(() => removeComments(source)).toThrow(/unexpected result/);
+    } finally {
+      vi.mocked(analyzeSource).mockImplementation(realAnalyze);
+    }
+  });
+});
+
 describe("removeComments JSX rendering verification", () => {
   it("throws when the output's JSX children are laid out differently", () => {
     vi.mocked(analyzeSource)

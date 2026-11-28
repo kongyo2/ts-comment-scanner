@@ -478,7 +478,10 @@ describe("detectDirective", () => {
     expect(detectDirective("line", "// dprint-ignores nothing, dprint-ignore does")).toBeUndefined();
     // Each tool looks for its own marker.
     expect(detectDirective("line", "// xdprint-ignore deno-fmt-ignore")).toBe("deno-fmt-ignore");
-    expect(directiveNames("line", "// deno-fmt-ignore dprint-ignore")).toEqual(["dprint-ignore", "deno-fmt-ignore"]);
+    expect(directiveNames("line", "// dprint-ignore deno-fmt-ignore")).toEqual(["dprint-ignore", "deno-fmt-ignore"]);
+    // The marker the comment opens with names it.
+    expect(directiveNames("line", "// deno-fmt-ignore dprint-ignore")).toEqual(["deno-fmt-ignore", "dprint-ignore"]);
+    expect(detectDirective("line", "// deno-fmt-ignore dprint-ignore")).toBe("deno-fmt-ignore");
   });
 
   it("detects the organize-imports opt-out only in its literal form", () => {

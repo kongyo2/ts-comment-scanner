@@ -2,16 +2,19 @@ import { astGrepReach, rowStartOffsets, type AstGrepReach, type PrecedingNode } 
 import { commentsOf, removalUnits, type Container, type RemovalUnit } from "./containers.js";
 import { hintsNextNode, monocartLines, opensRow, textHints } from "./coverage.js";
 import { carriesAstGrepSuppression } from "./directives.js";
+import { commentsAround, deciders, opensLineWithItsRun, tiedBehind, type LineRuns } from "./formatters.js";
 import {
   LINE_TERMINATOR,
   closesItsLine,
   isBlank,
+  isBlankWithinLine,
   lineIndexAt,
   lineStartOffsets,
   occupiesWholeLines,
   opensItsLine,
+  touchesLineEdge,
 } from "./lines.js";
-import { byStart, firstIndexAtOrAfter, rangeAt, type Range } from "./ranges.js";
+import { byStart, firstIndexAtOrAfter, rangeAt, rangesWithin, type Range } from "./ranges.js";
 import type { Comment } from "./types.js";
 
 /** What the shields read of a source besides its text. */
@@ -30,6 +33,12 @@ export interface ShieldContext {
   shadows: ReadonlyMap<Comment, Comment>;
   /** The cast comments a parenthesized expression follows (see SourceAnalysis). */
   casts: ReadonlySet<Comment>;
+  /** The stretch between the code around a comment (see SourceAnalysis). */
+  stretch: (comment: Comment) => Range;
+  /** The stretch behind a comment across which Biome holds it back (see SourceAnalysis). */
+  heldBack: (comment: Comment) => Range;
+  /** Where the switch statements reading a `no default` comment from the comment's place end (see SourceAnalysis). */
+  switchEnds: (comment: Comment) => number[];
 }
 
 export interface Shielding {
@@ -104,6 +113,12 @@ interface Front {
  *   would leave a line break next to it (see PLACED_BY_LINE), or one right
  *   beside it that keeps it from an end of its line (see
  *   PLACED_BY_NEIGHBOURS);
+ * - between the two nodes such a suppression stands between, where a
+ *   formatter reads the comments there one after another, or reads on from
+ *   the suppression past the tokens behind it, a comment that decides which
+ *   of the nodes the suppression belongs to (see deciders, settleTie);
+ * - behind a `no default` comment, the last comment up to the end of its
+ *   switch, which oxlint would take for that comment otherwise;
  * - a JSX comment container right after a directive in a container
  *   (`{/* prettier-ignore *​/}`, which applies to the next sibling);
  * - the last JSDoc comment of a node in JavaScript, where an earlier one
@@ -128,10 +143,40 @@ export function shieldDirectives(
   const gaps: Gap[] = [];
   const fronts: Front[] = [];
   const siblingTargets = new Set<Container>();
-  /** The suppressions that stay which a formatter places by their line (see PLACED_BY_LINE). */
-  const placed = new Set<Comment>();
+  /**
+   * The suppressions that stay which a formatter places by their line (see
+   * PLACED_BY_LINE), each with the comments it is read with (see commentsAround).
+   */
+  const placed = new Map<Comment, ReturnType<typeof commentsAround>>();
   /** Those of them one places by what stands right next to them (see PLACED_BY_NEIGHBOURS). */
   const placedByNeighbours = new Set<Comment>();
+  /** Those of them Biome reads. */
+  const readByBiome = new Set<Comment>();
+  /**
+   * The comments spanning lines behind the others across which Biome holds a
+   * suppression back (see stretchHeldBack), and the stretches looked through.
+   */
+  const heldAcross = new Set<Comment>();
+  const heldBack = new Set<Range>();
+  /** Where the comments stand that Prettier or Biome reads a suppression with (see tiedBehind). */
+  const tied: Range[] = [];
+  /** The runs of comments on a line and the chains behind a suppression found so far (see formatters.ts). */
+  const lineRuns: LineRuns = new Map();
+  const chainEnds = new Map<number, number>();
+  /** The comments spanning lines of the runs found so far, to the formatters and to Biome (see spanningInRun). */
+  const spanningRuns = { plain: new Map<number, Comment[]>(), toBiome: new Map<number, Comment[]>() };
+  /**
+   * How many comments the suppressions of a stretch, or of a chain behind
+   * one, were read with so far (see READING_BUDGET), and the spans whose
+   * comments stay as they are for want of a reading.
+   */
+  const readings = new Map<string, number>();
+  const crowded: Range[] = [];
+  /**
+   * The comments between such a suppression on a line of its own and the `;`
+   * of its statement, where one of them shares its line with what precedes it.
+   */
+  const lineSharers: Comment[][] = [];
   const rowTails: Range[] = [];
   const shadows = new Set<Comment>();
   const astGrepReaches: AstGrepReach[] = [];
@@ -194,10 +239,68 @@ export function shieldDirectives(
     if (start !== undefined) shieldLines(lineOf(start), lineOf((offsets[to + 1] ?? source.length) - 1));
   };
 
+  /** Whether a comment that is still to be removed stands within the span. */
+  const holdsRemoval = (span: Range): boolean => {
+    const next = stillRemoved[firstIndexAtOrAfter(stillRemoved, span.start, (other) => other.start)];
+    return next !== undefined && next.end <= span.end;
+  };
+
+  /**
+   * Whether one more suppression may be read with the comments of the span,
+   * which those under the same key pay for together. The first always may.
+   * Once the suppressions read took more than READING_BUDGET comments
+   * between them, the comments of the span stay as they are instead.
+   */
+  const affords = (key: string, span: Range): boolean => {
+    const spent = readings.get(key) ?? 0;
+    if (spent > READING_BUDGET) {
+      crowded.push(span);
+      return false;
+    }
+    readings.set(key, spent + rangesWithin(context.comments, span).length);
+    return true;
+  };
+
+  /**
+   * The comments a suppression is read with between the nodes around it
+   * (see commentsAround): none where no comment of the stretch is to be
+   * removed, where the suppression leads the code behind it whatever stands
+   * around, or where the stretch cannot afford another reading.
+   */
+  const readAround = (comment: Comment, everywhere: boolean): ReturnType<typeof commentsAround> => {
+    const stretch = context.stretch(comment);
+    return holdsRemoval(stretch) &&
+      !opensLineWithItsRun(source, context.comments, comment, lineRuns) &&
+      affords(`${stretch.start}:${stretch.end}`, stretch)
+      ? commentsAround(source, context.comments, comment, stretch, everywhere)
+      : UNREAD;
+  };
+
   /** Collects what one of the directives the comment carries reaches. */
   const shieldReach = (comment: Comment, directive: string): void => {
     if (PLACED_BY_LINE.has(directive)) {
-      placed.add(comment);
+      // oxfmt, which reads the suppressions placed by their neighbours, goes
+      // through the comments between two nodes everywhere.
+      const everywhere = PLACED_BY_NEIGHBOURS.has(directive);
+      placed.set(comment, readAround(comment, everywhere));
+      // Biome holds its suppression back across the tokens behind it, where
+      // a line break left in place of a comment would make it trail the node
+      // in front of it.
+      if (!everywhere) {
+        readByBiome.add(comment);
+        const stretch = context.heldBack(comment);
+        if (!heldBack.has(stretch)) {
+          heldBack.add(stretch);
+          for (const other of rangesWithin(stillRemoved, stretch)) {
+            if (LINE_TERMINATOR.test(other.text)) heldAcross.add(other);
+          }
+        }
+      }
+      if (directive !== "oxfmt-ignore") {
+        // The suppressions of one chain, which ends where this one's does, pay together.
+        const behind = tiedBehind(source, context.comments, comment, lineRuns, chainEnds);
+        if (holdsRemoval(behind) && affords(`behind:${behind.end}`, behind)) tied.push(behind);
+      }
       added = true;
     }
     if (PLACED_BY_NEIGHBOURS.has(directive)) {
@@ -208,8 +311,24 @@ export function shieldDirectives(
       const codeStart = codeStartAfter(source, comment.end, context.skippable);
       if (codeStart > comment.end && source[codeStart] === ";") {
         gaps.push({ start: comment.end, end: codeStart, stays: "last", line: comment.endLine });
+        // A suppression on a line of its own in front of such a `;` is left
+        // for the statement after it where every comment from it to the `;`
+        // opens its line as well. One that shares its line keeps it with
+        // this statement (see settleSharers).
+        const upToSemicolon = rangesWithin(context.comments, { start: comment.end, end: codeStart });
+        if (opensItsLine(source, comment) && upToSemicolon.some((other) => !opensItsLine(source, other))) {
+          lineSharers.push(upToSemicolon);
+        }
         added = true;
       }
+    }
+    // oxlint's default-case takes the last comment from the start of the
+    // switch's last clause to its closing brace for the switch's `no default`
+    // comment, the code in between notwithstanding: the last comment behind
+    // one stays, up to the end of every switch that reads it from there.
+    for (const end of directive === "no-default" ? context.switchEnds(comment) : []) {
+      gaps.push({ start: comment.end, end, stays: "last", line: comment.endLine });
+      added = true;
     }
     const lastComment = isLastCommentDirective(comment, directive);
     const cast = CAST_DIRECTIVES.has(directive) && context.casts.has(comment);
@@ -349,9 +468,9 @@ export function shieldDirectives(
     return added;
   };
 
-  /** Takes those of the comments that are still being removed out of the removal and keeps them. */
+  /** Takes those of the comments that are still being removed out of the removal and keeps them, each once. */
   const protect = (group: readonly Comment[]): void => {
-    const staying = group.filter((comment) => removing.has(comment));
+    const staying = [...new Set(group)].filter((comment) => removing.has(comment));
     if (staying.length === 0) return;
     for (const comment of staying) removing.delete(comment);
     stillRemoved = stillRemoved.filter((comment) => removing.has(comment));
@@ -439,30 +558,74 @@ export function shieldDirectives(
   };
 
   /**
-   * The removals in the run of comments around the given one (see
-   * PLACED_BY_LINE) that would leave a line break in their place: those
-   * spanning lines, with something that stays in front of them on their
-   * first line and something behind them on their last.
+   * Keeps one of the comments (see lineSharers) sharing its line with
+   * something in front of it that stays, unless one that stays does already:
+   * the first that shares its line, and the comment in front of it.
    */
-  const lineBreakLeavers = (comment: Comment): Comment[] => {
+  const settleSharers = (comments: readonly Comment[]): void => {
+    if (comments.some((comment) => !removing.has(comment) && sharesLineWithWhatStays(comment, -1))) return;
+    const sharing = comments.findIndex((comment) => !opensItsLine(source, comment));
+    protect(comments.slice(Math.max(0, sharing - 1), sharing + 1));
+  };
+
+  /**
+   * The removals in the run of comments around the given one (see
+   * PLACED_BY_LINE), and among the comments it is read with, that would
+   * leave a line break in their place (see leavesLineBreak).
+   */
+  const lineBreakLeavers = (comment: Comment, around: ReturnType<typeof commentsAround>): Comment[] => {
+    const inRun = spanningInRun(indexOf(comment), readByBiome.has(comment) ? SAME_LINE_GAP_TO_BIOME : SAME_LINE_GAP);
+    const read = new Set([...inRun, ...around.before.flat(), ...around.after.flat()]);
+    return [...read].filter(leavesLineBreak);
+  };
+
+  /**
+   * The comments spanning lines in the run around the comment at the index,
+   * which the gaps the pattern matches hold together: the ones that can
+   * leave a line break. A run is walked once for all of its comments.
+   */
+  const spanningInRun = (at: number, gap: RegExp): Comment[] => {
+    const runs = gap === SAME_LINE_GAP ? spanningRuns.plain : spanningRuns.toBiome;
+    const known = runs.get(at);
+    if (known !== undefined) return known;
     const glued = (index: number): boolean =>
-      SAME_LINE_GAP.test(
-        source.slice((context.comments[index] as Comment).end, (context.comments[index + 1] as Comment).start),
-      );
-    const at = indexOf(comment);
+      gap.test(source.slice((context.comments[index] as Comment).end, (context.comments[index + 1] as Comment).start));
     let first = at;
     while (first > 0 && glued(first - 1)) first -= 1;
     let last = at;
     while (last + 1 < context.comments.length && glued(last)) last += 1;
-    return context.comments
-      .slice(first, last + 1)
-      .filter(
-        (other) =>
-          removing.has(other) &&
-          LINE_TERMINATOR.test(other.text) &&
-          !closesItsLine(source, other) &&
-          sharesLineWithWhatStays(other, -1),
-      );
+    const spanning = context.comments.slice(first, last + 1).filter((other) => LINE_TERMINATOR.test(other.text));
+    for (let index = first; index <= last; index += 1) runs.set(index, spanning);
+    return spanning;
+  };
+
+  /**
+   * Whether removing the comment would leave a line break in its place: it
+   * spans lines, with something that stays in front of it on its first line
+   * and something behind it on its last.
+   */
+  const leavesLineBreak = (comment: Comment): boolean =>
+    removing.has(comment) &&
+    LINE_TERMINATOR.test(comment.text) &&
+    !closesItsLine(source, comment) &&
+    sharesLineWithWhatStays(comment, -1);
+
+  /**
+   * Keeps what holds a suppression to its node among the comments behind it
+   * that Prettier or Biome reads it with (see tiedBehind): a comment whose
+   * line break would make one that stays open its line, and one that opens
+   * its line or ends it, the first, unless one that stays does then.
+   */
+  const settleTie = (span: Range): void => {
+    const behind = rangesWithin(context.comments, span);
+    protect(behind.filter(leavesLineBreak));
+    const breakers = behind.filter((comment) => touchesLineEdge(source, comment));
+    // A comment that stays opens its line, or ends it, once the removals next to it are gone.
+    const served = behind.some(
+      (comment) =>
+        !removing.has(comment) && !(sharesLineWithWhatStays(comment, -1) && sharesLineWithWhatStays(comment, 1)),
+    );
+    if (!served) protect(breakers.slice(0, 1));
   };
 
   /**
@@ -476,8 +639,7 @@ export function shieldDirectives(
       const neighbour = context.comments[at + step];
       if (neighbour === undefined || !removing.has(neighbour)) return [];
       const gap = step === 1 ? source.slice(comment.end, neighbour.start) : source.slice(neighbour.end, comment.start);
-      const onItsLine = isBlank(gap) && !LINE_TERMINATOR.test(gap);
-      return onItsLine && !sharesLineWithWhatStays(comment, step) ? [neighbour] : [];
+      return isBlankWithinLine(gap) && !sharesLineWithWhatStays(comment, step) ? [neighbour] : [];
     });
   };
 
@@ -495,6 +657,9 @@ export function shieldDirectives(
     }
     for (const line of blockingLines) protect(lineOpeningGroup(source, unitsOnLine(line)));
     for (const gap of gaps) settleGap(gap);
+    for (const sharers of lineSharers) settleSharers(sharers);
+    // Where too many suppressions would be read with the same comments, those stay.
+    for (const span of crowded) protect(rangesWithin(stillRemoved, span));
     protect([...shadows]);
     for (const target of siblingTargets) protect(target.comments);
     for (const tail of rowTails) {
@@ -506,10 +671,13 @@ export function shieldDirectives(
     let settling: number;
     do {
       settling = stillRemoved.length;
-      for (const comment of placed) {
-        protect(lineBreakLeavers(comment));
+      for (const [comment, around] of placed) {
+        protect(lineBreakLeavers(comment, around));
         if (placedByNeighbours.has(comment)) protect(edgeMakers(comment));
+        protect(deciders(source, context.comments, comment, around, (other) => !removing.has(other)));
       }
+      protect([...heldAcross].filter(leavesLineBreak));
+      for (const behind of tied) settleTie(behind);
     } while (stillRemoved.length < settling);
     return stillRemoved.length < removingBefore;
   };
@@ -700,12 +868,34 @@ const TRAILING_TARGETS_OWN_LINE = new Set([
 // suppression trails the call. Deleting the note for a line break would put
 // the suppression on a line of its own, where it applies to the statement
 // below instead, so a comment of the run that would leave a line break
-// stays. dprint goes by the comments in front of a node wherever they stand,
-// and is not among them. Checked against Prettier 3.8.4 and 3.10.1, oxfmt
-// 0.79.0 and Biome 2.6.8; Rome placed its suppressions as Biome does.
+// stays. Comments further off decide as well (see formatters.ts): oxfmt,
+// and Biome between the members of a union type, go through the comments
+// between two nodes one after another, the tokens in between
+// notwithstanding; Prettier reads a suppression with code on both sides of
+// it up to the node behind it, past opening parentheses; and Biome, which
+// drops the parentheses around an expression first, holds a suppression
+// back across the tokens behind it. dprint goes by the comments in front of
+// a node wherever they stand, and is not among them. Checked against
+// Prettier 3.8.4 and 3.10.1, oxfmt 0.79.0 and 0.80.0 and Biome 2.6.8 and
+// 2.6.9; Rome placed its suppressions as Biome does.
 const PLACED_BY_LINE = new Set(["prettier-ignore", "oxfmt-ignore", "biome-ignore", "rome-ignore"]);
+// A suppression that is read with no comment around it (see commentsAround).
+const UNREAD: ReturnType<typeof commentsAround> = { before: [], after: [], target: [] };
+// How many comments the suppressions that stand between the same two nodes,
+// or in front of the same comments, may be read with between them before the
+// comments there simply stay. Each suppression is read with every comment
+// around it, so the work grows with the product of the two: a stretch that
+// holds thousands of suppressions would take time and memory by their
+// square. Code has a handful of comments between two nodes, and one
+// suppression among them, which is always read.
+const READING_BUDGET = 4096;
 // What holds two comments of one run apart: blanks, and no line feed.
 const SAME_LINE_GAP = /^[^\S\n]*$/;
+// Biome drops the parentheses around an expression before it reads the
+// comments, so an opening parenthesis holds no run apart to it: in
+// `d ?? /* note\n*/ ( /* biome-ignore format: x */`, a line break in place
+// of the note would put the suppression on a line of its own.
+const SAME_LINE_GAP_TO_BIOME = /^(?:[^\S\n]|\()*$/;
 // oxfmt, which honours `prettier-ignore` as well, goes by what stands right
 // next to the comment instead: oxc's parser notes for every comment whether a
 // line break precedes it and whether one follows it, another comment on its

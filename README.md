@@ -169,6 +169,7 @@ npm install --save-dev @kongyo2/ts-comment-scanner
   行の数え方はツールによって違います。c8・oxlint・Semgrep は LF だけを行の区切りとし、tsc と ESLint は CR・U+2028・U+2029 も区切りとします。どちらの数え方でも行が動かないように改行を残します。
 
 - import・export のグループの間や、import・require とその次の文の間にあるコメントを消すと間の空行がなくなるときは、空行に置き換えて、organizeImports や dprint のグループと、newline-after-import が求める空行を保ちます。
+- 空の `case` と次の節の間にあるコメント行を消すと次の節がすぐ下の行に来るときは、空行を 1 行残して、ESLint や oxlint の no-fallthrough の報告が変わらないようにします。
 - トークンがつながる位置には空白を入れます(`a/* x */b` → `a b`)。コードに挟まれた、改行を含むブロックコメントは改行に置き換え、自動セミコロン挿入による文の区切りを保ちます。
 - JSX の `{/* … */}` は波かっこごと削除します。波かっこを外すと表示されるテキストが変わる位置では、`{" "}` か `{}` を残します。
 
@@ -508,6 +509,7 @@ npm install --save-dev @kongyo2/ts-comment-scanner
   Tools count lines differently: c8, oxlint and Semgrep end a line at a line feed only, while tsc and ESLint also end one at a CR, U+2028 or U+2029. The line breaks that stay keep the lines in place under both counts.
 
 - Where removing the comments between two groups of imports or exports, or between an import or require and the statement after it, would leave no empty line between them, an empty line takes their place, so organizeImports and dprint keep the groups apart and newline-after-import keeps its empty line.
+- Where removing the comment lines between an empty `case` and the next clause would bring that clause up to the line right below, one empty line stays, so the no-fallthrough rule of ESLint and oxlint reports what it did.
 - A space is inserted where tokens would otherwise join (`a/* x */b` → `a b`). A multi-line block comment with code on both sides is replaced with a line break, so automatic semicolon insertion still splits the statements the same way.
 - A JSX `{/* … */}` goes with its braces. Where dropping the braces would change the rendered text, `{" "}` or `{}` takes their place.
 

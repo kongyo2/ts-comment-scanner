@@ -17,6 +17,11 @@ export function isBlank(text: string): boolean {
   return /^\s*$/.test(text);
 }
 
+/** True when the text holds nothing but whitespace, and no line break. */
+export function isBlankWithinLine(text: string): boolean {
+  return isBlank(text) && !LINE_TERMINATOR.test(text);
+}
+
 /** True for a space or a tab, the blanks that hold the tokens on a line apart. */
 export function isHorizontalSpace(char: string | undefined): boolean {
   return char === " " || char === "\t";
@@ -31,6 +36,14 @@ export function splitLines(text: string): string[] {
 export function lastLine(text: string): string {
   const lines = splitLines(text);
   return lines[lines.length - 1] as string;
+}
+
+/**
+ * Whether a span holds two line breaks or more, those inside comments
+ * included, to a tool that counts what `lineBreak` matches as one.
+ */
+export function holdsTwoBreaks(lineBreak: string | RegExp): (source: string, span: Range) => boolean {
+  return (source, span) => source.slice(span.start, span.end).split(lineBreak).length > 2;
 }
 
 /**
@@ -58,6 +71,11 @@ export function lineIndexAt(lineStarts: readonly number[], offset: number): numb
  */
 export function occupiesWholeLines(source: string, range: Range): boolean {
   return opensItsLine(source, range) && closesItsLine(source, range);
+}
+
+/** True when nothing but whitespace precedes the range on its first line, or follows it on its last. */
+export function touchesLineEdge(source: string, range: Range): boolean {
+  return opensItsLine(source, range) || closesItsLine(source, range);
 }
 
 /** True when nothing but whitespace follows the range on its last line. */

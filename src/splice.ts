@@ -23,13 +23,15 @@ export interface Edit extends Range {
 /**
  * The lines (1-based, numbered as lineStartOffsets numbers them) that
  * deleting ranges has to leave in place, each a line of its own, because a
- * directive that stays covers them.
+ * directive that stays covers them, or a linter counts them below an empty
+ * `case`.
  */
 export interface ShieldedLines {
   /**
-   * The lines a directive covers. None is joined to another: with code on
-   * both sides of a deleted range that spans lines, one of them shielded, a
-   * line break of the range stays between them, wherever the range stands.
+   * The lines a directive covers, and the ones that hold a switch clause
+   * off the line below an empty `case`. None is joined to another: with code
+   * on both sides of a deleted range that spans lines, one of them shielded,
+   * a line break of the range stays between them, wherever the range stands.
    */
   shielded: ReadonlySet<number>;
   /**

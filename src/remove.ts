@@ -2,9 +2,9 @@ import { isFileWidePosition } from "./astgrep.js";
 import { attachContainers, emptiedBy, mergeContainers, type Container } from "./containers.js";
 import { activePositionalDirectives, bunMarkerOffset, isLegalComment, type DirectivePlacement } from "./directives.js";
 import type { ImportGroupGap } from "./imports.js";
-import { LINE_TERMINATOR, isBlank } from "./lines.js";
-import { byStart, type Range } from "./ranges.js";
-import { analyzeSource, type ScanOptions, type SourceAnalysis } from "./scanner.js";
+import { LINE_TERMINATOR, isBlank, lineIndexAt, lineStartOffsets } from "./lines.js";
+import { byStart, rangesWithin, type Range } from "./ranges.js";
+import { analyzeSource, type EmptyCaseGap, type ScanOptions, type SourceAnalysis } from "./scanner.js";
 import { shieldDirectives, type ShieldContext } from "./shields.js";
 import { applyEdits, blankLineEdits, heldLines, type Edit, type ShieldedLines } from "./splice.js";
 import type { Comment } from "./types.js";
@@ -83,6 +83,10 @@ export interface RemoveResult {
  *   does where deleting the comments after an import or a require would
  *   bring the code after it up to the line below, keeping the empty line the
  *   newline-after-import rules of eslint-plugin-import and oxlint want.
+ * - The clause below an empty `case` stays off the line after it: where
+ *   deleting the comment lines between the two would bring it up there, the
+ *   last of those lines stays, emptied, and the no-fallthrough rules of
+ *   ESLint and oxlint report the clause as they did.
  * - A leading byte-order mark is preserved. Reported positions index into the
  *   `source` string exactly as `scanComments(source)` reports them (a BOM
  *   counts as its first character).
@@ -120,6 +124,9 @@ export function removeComments(source: string, options: RemoveOptions = {}): Rem
     directives: analysis.directives,
     shadows: analysis.shadows,
     casts: analysis.casts,
+    stretch: analysis.stretch,
+    heldBack: analysis.heldBack,
+    switchEnds: analysis.switchEnds,
   };
   const search = containerSearch(containers);
   // Collapsing blank lines can only move a surviving comment to the very
@@ -131,6 +138,10 @@ export function removeComments(source: string, options: RemoveOptions = {}): Rem
   // of imports or exports apart, or the code after the imports two lines
   // below them (see gapHolders).
   const holders = new Set<Comment>();
+  // The lines (1-based) that stay, emptied, to keep the clause below an empty
+  // `case` off the line after it (see lostCaseGaps).
+  const linesBelowCases = new Set<number>();
+  let lineStarts: number[] | undefined;
 
   for (;;) {
     const shielding = shieldDirectives(source, removed, kept, skipped, context);
@@ -144,10 +155,8 @@ export function removeComments(source: string, options: RemoveOptions = {}): Rem
     search.track(new Set(containers.filter((container) => emptiedBy(container, removing))));
     const edits = removalEdits(removed, containerOf, search.droppable, holders);
     const deletions = edits.filter((edit) => edit.replacement === undefined);
-    const lines: ShieldedLines = {
-      shielded: shielding.lines,
-      held: heldLines(source, deletions, comments, shielding.lines),
-    };
+    const shielded = linesBelowCases.size === 0 ? shielding.lines : new Set([...shielding.lines, ...linesBelowCases]);
+    const lines: ShieldedLines = { shielded, held: heldLines(source, deletions, comments, shielded) };
     const blankEdits = tidyBlankLines ? blankLineEdits(source, deletions, comments, lines, analysis.jsx) : [];
     const code = editKeepingBom(source, [...edits, ...blankEdits].sort(byStart), lines);
     const output = analyzeSource(code, scan);
@@ -161,6 +170,29 @@ export function removeComments(source: string, options: RemoveOptions = {}): Rem
     const holding = gapHolders(source, analysis.importGroups, output.importGroups, removed, holders);
     if (holding.length > 0) {
       for (const holder of holding) holders.add(holder);
+      continue;
+    }
+
+    // Where the output brings a clause up to the line below the empty `case`
+    // in front of it, the line above the clause stays, emptied, and the
+    // attempt is repeated. A line that stays already and does not serve —
+    // one that a lone CR ends, to a linter that counts line feeds — leaves
+    // the comments of the gap in place instead.
+    const lost = lostCaseGaps(analysis.emptyCases, output.emptyCases);
+    if (lost.length > 0) {
+      lineStarts ??= lineStartOffsets(source);
+      for (const gap of lost) {
+        const lineAbove = lineIndexAt(lineStarts, gap.end);
+        if (!linesBelowCases.has(lineAbove)) {
+          linesBelowCases.add(lineAbove);
+          continue;
+        }
+        const inGap = new Set(rangesWithin(removed, gap));
+        if (inGap.size === 0) throw unexpectedResult();
+        removed = removed.filter((comment) => !inGap.has(comment));
+        kept.push(...inGap);
+        kept.sort(byStart);
+      }
       continue;
     }
 
@@ -296,7 +328,7 @@ function gapHolders(
     const intact =
       gap.splits.every((sorter) => splits.includes(sorter)) && gap.spaced.every((linter) => spaced.includes(linter));
     if (intact) continue;
-    const inGap = removals.filter((comment) => comment.start >= gap.start && comment.end <= gap.end);
+    const inGap = rangesWithin(removals, gap);
     // An empty line in the gap already starts a group for both sorters and
     // is the empty line both linters want.
     if (inGap.some((comment) => holders.has(comment))) throw unexpectedResult();
@@ -307,6 +339,18 @@ function gapHolders(
     found.push(holder);
   }
   return found;
+}
+
+/**
+ * The gaps below the source's empty switch clauses (see EmptyCaseGap) in
+ * which the output loses the line a linter finds between the two clauses.
+ * The gaps belong to the same clauses in both texts. A line only the output
+ * has there cannot come about: removing comments adds no line break.
+ */
+function lostCaseGaps(before: readonly EmptyCaseGap[], after: readonly EmptyCaseGap[]): EmptyCaseGap[] {
+  return corresponding(before, after).flatMap(([gap, { apart }]) =>
+    gap.apart.every((linter) => apart.includes(linter)) ? [] : [gap],
+  );
 }
 
 /**

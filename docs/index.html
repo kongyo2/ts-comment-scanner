@@ -439,6 +439,24 @@
           </div>
           <div class="guard">
             <div class="danger">
+              <span class="ja"
+                >空の <code>case</code> と次の節の間のコメント行を消すと、ESLint や oxlint の
+                <code>no-fallthrough</code> が報告していたフォールスルーが報告されなくなる</span
+              >
+              <span class="en"
+                >deleting the comment line between an empty <code>case</code> and the next clause takes away the
+                fall-through that the <code>no-fallthrough</code> rule of ESLint and oxlint reported</span
+              >
+            </div>
+            <div class="fix">
+              <span class="ja">コメントは削除し、次の節の上の行を空行として残す(空行が残るときはそのまま)</span>
+              <span class="en"
+                >the comment goes and the line above the next clause stays, empty, unless a blank line stays</span
+              >
+            </div>
+          </div>
+          <div class="guard">
+            <div class="danger">
               <span class="ja"><code>@ts-expect-error</code> 直下の行が消えると適用先がズレる</span>
               <span class="en">deleting the line under <code>@ts-expect-error</code> shifts its target</span>
             </div>
@@ -472,6 +490,29 @@
               <span class="en"
                 >a comment stays where its removal would change whether a Prettier, oxfmt or Biome suppression opens or
                 ends its line</span
+              >
+            </div>
+          </div>
+          <div class="guard">
+            <div class="danger">
+              <span class="ja"
+                ><code>,</code>
+                や演算子、開き括弧を挟んで抑制コメントの近くにあるコメントを消すと、Prettier・oxfmt・Biome
+                が抑制を前のコードに付けるか後ろのコードに付けるかが変わる</span
+              >
+              <span class="en"
+                >deleting a comment that stands near a suppression, across a <code>,</code>, an operator or an opening
+                parenthesis, changes whether Prettier, oxfmt or Biome attaches the suppression to the code in front of
+                it or to the code behind</span
+              >
+            </div>
+            <div class="fix">
+              <span class="ja"
+                >フォーマッターが抑制と併せて読むコメントのうち、どちらのコードに付くかを決めているものを残す</span
+              >
+              <span class="en"
+                >of the comments a formatter reads together with the suppression, the one that decides which code it
+                belongs to stays</span
               >
             </div>
           </div>
@@ -530,11 +571,11 @@
         </div>
         <p class="proof-line">
           <span class="ja"
-            >// この挙動は <strong>1402 本のテスト</strong>と <strong>100% カバレッジ</strong>(statements / branches /
+            >// この挙動は <strong>1491 本のテスト</strong>と <strong>100% カバレッジ</strong>(statements / branches /
             functions / lines)で固定しています</span
           >
           <span class="en"
-            >// pinned by <strong>1402 tests</strong> at <strong>100% coverage</strong> — statements, branches,
+            >// pinned by <strong>1491 tests</strong> at <strong>100% coverage</strong> — statements, branches,
             functions and lines</span
           >
         </p>
