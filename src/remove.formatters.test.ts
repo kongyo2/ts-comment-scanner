@@ -593,3 +593,35 @@ describe("removeComments behind a suppression that Prettier reads up to the node
     );
   });
 });
+
+// Every suppression is read with the comments between the nodes around it,
+// and with the ones behind it, so many suppressions among many comments in
+// one such place take work by the product of the two. A handful is read
+// one by one; past a budget the comments of the place stay as they are.
+describe("removeComments among many suppressions between the same two nodes", () => {
+  /** Suppressions and notes by turns in one run, between `y` and `z`. */
+  const byTurns = (count: number): string => `x = y ${"/* prettier-ignore */ /* note */ ".repeat(count)}+ z;\n`;
+
+  /** Suppressions in one run, and a run of notes behind the parenthesis after them. */
+  const inFront = (count: number): string =>
+    `x = y + ${"/* prettier-ignore */ ".repeat(count)}(\n${"// note\n".repeat(count)}z);\n`;
+
+  it("reads each of a handful with the comments around it", () => {
+    expect(removeComments(byTurns(3)).code).toBe(`x = y ${"/* prettier-ignore */ ".repeat(3)}+ z;\n`);
+    // One note keeps all three from leading `z`.
+    expect(removeComments(inFront(3)).code).toBe(`x = y + ${"/* prettier-ignore */ ".repeat(3)}(\n// note\nz);\n`);
+    expect(removeComments(byTurns(40)).removed).toHaveLength(40);
+  });
+
+  it("keeps the comments of a place that suppressions crowd", () => {
+    expect(removeComments(byTurns(70)).code).toBe(byTurns(70));
+    expect(removeComments(inFront(70)).code).toBe(inFront(70));
+  });
+
+  it("looks once through the tokens that Biome holds two suppressions back across", () => {
+    const source =
+      "for (i = [ 1,2 ] /* biome-ignore format: x */ /* biome-ignore format: y */ ; /* note\n*/ ; i += a( 3,4 )) {}\n";
+
+    expect(removeComments(source).code).toBe(source);
+  });
+});

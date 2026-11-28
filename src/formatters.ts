@@ -259,14 +259,14 @@ const IN_FRONT_OF_BAR = /^\|\(*$/;
  * The comments of the suppression's stretch, in front of it and behind it,
  * as far as a formatter's reading of the suppression depends on them:
  *
- * - None where the comments the suppression shares its line with open that
- *   line: the first of them that stays, or the suppression itself, leads the
- *   code after it then, whatever else stands around.
  * - None where the suppression stands right in front of the node behind it,
  *   on its line, past comments and opening parentheses at most: it leads
  *   that node whatever stands before. In front of a `;` it leads none.
  * - Else those in front, and those behind where no line break follows the
  *   suppression.
+ *
+ * A suppression whose run opens its line is read with none of them, and is
+ * not to be asked about (see opensLineWithItsRun).
  *
  * That is oxfmt's reading (`everywhere`). Biome reads the comments one
  * after another between the members of a union type alone — behind the bar
@@ -288,15 +288,13 @@ export function commentsAround(
 ): { before: Comment[][]; after: Comment[][]; target: Comment[] } {
   const front = { start: stretch.start, end: suppression.start };
   const back = { start: suppression.end, end: stretch.end };
-  const [first] = runOnLine(source, comments, suppression);
+  const codeInFront = codeWithin(source, comments, front);
+  const codeBehind = codeWithin(source, comments, back);
   const leads =
-    opensItsLine(source, first) ||
-    (source[stretch.end] !== ";" &&
-      !LINE_TERMINATOR.test(source.slice(back.start, back.end)) &&
-      /^\(*$/.test(codeWithin(source, comments, back)));
-  const inUnion =
-    BEHIND_BAR.test(codeWithin(source, comments, front)) ||
-    (/^\)+$/.test(codeWithin(source, comments, front)) && IN_FRONT_OF_BAR.test(codeWithin(source, comments, back)));
+    source[stretch.end] !== ";" &&
+    !LINE_TERMINATOR.test(source.slice(back.start, back.end)) &&
+    /^\(*$/.test(codeBehind);
+  const inUnion = BEHIND_BAR.test(codeInFront) || (/^\)+$/.test(codeInFront) && IN_FRONT_OF_BAR.test(codeBehind));
   if (leads || !(everywhere || inUnion)) return { before: [], after: [], target: [] };
   const target = everywhere ? behindTarget(source, comments, stretch) : [];
   return {
@@ -351,20 +349,40 @@ const TIE_GAP = /^[\s(]*$/;
  *   `(` ends its line, and trails the node in front of it; without, it leads
  *   the expression.
  *
- * None where the suppression, with the comments it shares its line with,
- * opens that line or ends it: both place it by that alone then.
+ * Given as the span they stand in, from the end of the suppression on. Empty
+ * where the suppression, with the comments it shares its line with, opens
+ * that line or ends it: both place it by that alone then.
  */
-export function tiedBehind(source: string, comments: readonly Comment[], suppression: Comment): Comment[] {
-  const [first, last] = runOnLine(source, comments, suppression);
-  if (opensItsLine(source, first) || closesItsLine(source, last)) return [];
-  const behind: Comment[] = [];
+export function tiedBehind(
+  source: string,
+  comments: readonly Comment[],
+  suppression: Comment,
+  runs: LineRuns,
+  ends: Map<number, number>,
+): Range {
+  const [first, last] = runOnLine(source, comments, suppression, runs);
+  if (opensItsLine(source, first) || closesItsLine(source, last))
+    return { start: suppression.end, end: suppression.end };
   const at = firstIndexAtOrAfter(comments, suppression.start, (comment) => comment.start);
-  for (let index = at + 1; index < comments.length; index += 1) {
-    const comment = comments[index] as Comment;
-    if (!TIE_GAP.test(source.slice((comments[index - 1] as Comment).end, comment.start))) break;
-    behind.push(comment);
+  return { start: suppression.end, end: (comments[chainEnd(source, comments, at, ends) - 1] as Comment).end };
+}
+
+/**
+ * The index behind the last comment that nothing but blanks and opening
+ * parentheses hold apart from the one at the index, and from one another.
+ * `ends` keeps it for every comment walked over, so that each such chain is
+ * walked once, however many suppressions stand in it.
+ */
+function chainEnd(source: string, comments: readonly Comment[], index: number, ends: Map<number, number>): number {
+  let last = index;
+  while (!ends.has(last)) {
+    const next = comments[last + 1];
+    if (next === undefined || !TIE_GAP.test(source.slice((comments[last] as Comment).end, next.start))) break;
+    last += 1;
   }
-  return behind;
+  const end = ends.get(last) ?? last + 1;
+  for (let walked = index; walked <= last; walked += 1) ends.set(walked, end);
+  return end;
 }
 
 /** The code of the span: its text outside the comments, without the blanks. */
@@ -375,12 +393,20 @@ function codeWithin(source: string, comments: readonly Comment[], span: Range): 
     .replace(/\s+/g, "");
 }
 
+/** The first and the last comment of a run of comments on a line. */
+type LineRun = [first: Comment, last: Comment];
+
+/** The runs found so far, by the index of each of their comments: a run is walked once, however many ask for it. */
+export type LineRuns = Map<number, LineRun>;
+
 /**
  * The first and the last comment of the run the comment stands in on its
  * line: the comments that nothing but blanks, and no line break, holds apart.
  */
-function runOnLine(source: string, comments: readonly Comment[], comment: Comment): [first: Comment, last: Comment] {
+function runOnLine(source: string, comments: readonly Comment[], comment: Comment, runs: LineRuns): LineRun {
   const at = firstIndexAtOrAfter(comments, comment.start, (other) => other.start);
+  const known = runs.get(at);
+  if (known !== undefined) return known;
   /** Whether the comment at the index and the one after it stand in one run. */
   const runsOn = (index: number): boolean => {
     const [one, next] = [comments[index], comments[index + 1]];
@@ -390,7 +416,23 @@ function runOnLine(source: string, comments: readonly Comment[], comment: Commen
   while (runsOn(first - 1)) first -= 1;
   let last = at;
   while (runsOn(last)) last += 1;
-  return [comments[first] as Comment, comments[last] as Comment];
+  const run: LineRun = [comments[first] as Comment, comments[last] as Comment];
+  for (let index = first; index <= last; index += 1) runs.set(index, run);
+  return run;
+}
+
+/**
+ * Whether the run the comment stands in on its line opens that line (see
+ * runOnLine). The first comment of the run that stays, or a suppression in
+ * it itself, leads the code after it then, whatever else stands around.
+ */
+export function opensLineWithItsRun(
+  source: string,
+  comments: readonly Comment[],
+  comment: Comment,
+  runs: LineRuns,
+): boolean {
+  return opensItsLine(source, runOnLine(source, comments, comment, runs)[0]);
 }
 
 /**

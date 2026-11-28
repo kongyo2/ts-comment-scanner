@@ -308,6 +308,24 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
     }
   }
 
+  /**
+   * The stretch of a comment, worked out once for the gap between two tokens
+   * the comment stands in: the comments of a gap share their stretches, and
+   * a gap may hold thousands of them.
+   */
+  const perGap = (find: (comment: Range) => Range): ((comment: Range) => Range) => {
+    const found = new Map<number, Range>();
+    return (comment) => {
+      const gap = firstIndexAtOrAfter(tokens, comment.end, (token) => token.end);
+      let stretch = found.get(gap);
+      if (stretch === undefined) {
+        stretch = find(comment);
+        found.set(gap, stretch);
+      }
+      return stretch;
+    };
+  };
+
   return {
     comments,
     directives,
@@ -318,8 +336,8 @@ export function analyzeSource(source: string, options: ScanOptions = {}): Source
     casts,
     importGroups: importGroupGaps(source, sourceFile, comments),
     emptyCases: emptyCases.sort(byStart),
-    stretch: (comment) => stretchBetweenNodes(sourceFile, tokens, comment),
-    heldBack: (comment) => stretchHeldBack(sourceFile, tokens, comment),
+    stretch: perGap((comment) => stretchBetweenNodes(sourceFile, tokens, comment)),
+    heldBack: perGap((comment) => stretchHeldBack(sourceFile, tokens, comment)),
     switchEnds: (comment) => switchEndsAround(sourceFile, tokenAfter(comment.end), comment),
   };
 }

@@ -96,6 +96,14 @@ describe("the stretch between the nodes around a comment", () => {
     expect(stretch("a() /* here */")).toBe(" /* here */");
   });
 
+  it("is worked out once for all the comments of a gap between two tokens", () => {
+    const analysis = analyzeSource("f(a /* one */ /* two */ , /* three */ b);");
+    const [one, two, three] = analysis.comments.map((comment) => analysis.stretch(comment));
+
+    expect(two).toBe(one);
+    expect(three).toEqual(one);
+  });
+
   it("reads JSX and JavaScript the same way", () => {
     expect(stretch("const e = <a b={1} /* here */ c />;", { jsx: true })).toBe(" /* here */ ");
     expect(stretch("f(a, /* here */ b);", { javascript: true })).toBe(", /* here */ ");
